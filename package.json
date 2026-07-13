@@ -1,0 +1,41 @@
+{
+  "name": "pikorua-hrm",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pikorua HRM — internal HR management system (attendance, payroll, task tracking, requests, recognition, events).",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "bun run --filter=@pikorua-hrm/web dev",
+    "build": "bun run --filter=@pikorua-hrm/web build",
+    "start": "bun run --filter=@pikorua-hrm/web start",
+    "lint": "bun run --filter=@pikorua-hrm/web lint",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy",
+    "prisma:studio": "prisma studio",
+    "db:seed": "prisma db seed",
+    "depgraph:validate": "depcruise apps/web/app apps/web/lib apps/web/components",
+    "depgraph:text": "depcruise apps/web/app apps/web/lib apps/web/components --output-type text",
+    "depgraph:svg": "depcruise apps/web/app apps/web/lib apps/web/components --output-type dot | dot -T svg -o dependency-graph.svg",
+    "depgraph:json": "depcruise apps/web/app apps/web/lib apps/web/components --output-type json --output-to dependency-graph.json"
+  },
+  "prisma": {
+    "schema": "prisma/schema.prisma",
+    "seed": "bun prisma/seed.ts"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "dependency-cruiser": "^16.4.2",
+    "prisma": "^5.22.0",
+    "typescript": "^5.6.3"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.22.0",
+    "bcryptjs": "^2.4.3"
+  },
+  "engines": {
+    "node": ">=18.18.0"
+  }
+}

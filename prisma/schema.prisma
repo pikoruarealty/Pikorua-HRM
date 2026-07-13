@@ -1,0 +1,499 @@
+// Pikorua HRM — Prisma schema.
+// Authoritative source: docs/SCHEMA.md. This is a SHARED Phase 0 file.
+// Migration ownership rules apply (see docs/IMPLEMENTATION_PLAN.md §6):
+// after the initial full migration, each dev only edits models in their own
+// track; changes to shared tables (users, employees, departments, teams) must
+// be flagged to the other dev before merge.
+//
+// Track tags below mark which dev primarily owns each model. All models are
+// created up front in Phase 0 so the two tracks never race to add tables.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ===========================================================================
+// ENUMS
+// ===========================================================================
+
+// 7 confirmed roles. `bde_lead` is intentionally NOT included yet — unconfirmed
+// (see docs/PRD.md §7 open questions). Add here + in lib/rbac if confirmed.
+enum Role {
+  admin
+  hr
+  tech_lead
+  sales_lead
+  tech_employee
+  sales_employee
+  bde
+}
+
+enum EmployeeStatus {
+  active
+  inactive
+}
+
+enum WorkItemMode {
+  atomic
+  metric
+}
+
+enum WorkUnitStatus {
+  active
+  completed
+  archived
+}
+
+enum WorkItemStatus {
+  pending
+  wip
+  completed
+}
+
+enum AttendanceApprovalStatus {
+  pending
+  approved
+}
+
+// `manual` is the v1 default. device_sync / manual_import reserved for the
+// deferred biometric LAN-sync phase (PRD §5.1.1) — kept so adding the phase
+// later needs no reshape of attendance_records.
+enum AttendanceSource {
+  manual
+  device_sync
+  manual_import
+}
+
+enum RequestType {
+  leave_paid
+  leave_unpaid
+  reimbursement
+  wfh
+  other
+}
+
+enum RequestStatus {
+  pending
+  approved
+  rejected
+}
+
+enum PayslipStatus {
+  draft
+  finalized
+}
+
+enum RecognitionPeriodType {
+  weekly
+  monthly
+}
+
+enum AnnouncementScope {
+  team
+  all
+  specific_teams
+}
+
+enum EventType {
+  birthday
+  anniversary
+  meeting
+}
+
+// ===========================================================================
+// 1. CORE IDENTITY & ORG STRUCTURE  (shared foundation — Phase 0)
+// ===========================================================================
+
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  role         Role
+  employeeId   String?  @unique @map("employee_id") @db.Uuid
+  employee     Employee? @relation(fields: [employeeId], references: [id])
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Back-relations for audit "actor" columns.
+  approvedAttendance AttendanceRecord[] @relation("AttendanceApprover")
+  approvedRequests   Request[]          @relation("RequestApprover")
+  generatedPayslips  Payslip[]          @relation("PayslipGenerator")
+  notifications      Notification[]
+  createdAnnouncements Announcement[]   @relation("AnnouncementCreator")
+  createdEvents        Event[]          @relation("EventCreator")
+
+  @@map("users")
+}
+
+model Department {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  typeKey   String   @map("type_key") // machine key: tech / sales / bd
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  teams     Team[]
+  employees Employee[]
+  workUnits WorkUnit[]
+  recognitionSnapshots RecognitionSnapshot[]
+
+  @@map("departments")
+}
+
+// Generic label mapping (PRD §4.1). Keyed by department type, not a strict FK,
+// so a new department type's labels can be configured before a department row
+// exists.
+model DepartmentLabel {
+  id                String       @id @default(uuid()) @db.Uuid
+  departmentTypeKey String       @unique @map("department_type_key")
+  workUnitLabel     String       @map("work_unit_label")   // "Project" / "Campaign"
+  subUnitLabel      String       @map("sub_unit_label")    // "Feature" / "Target Segment"
+  workItemLabel     String       @map("work_item_label")   // "Task" / "Call"
+  workItemMode      WorkItemMode @map("work_item_mode")    // default progress model
+
+  @@map("department_labels")
+}
+
+model Team {
+  id           String   @id @default(uuid()) @db.Uuid
+  departmentId String   @map("department_id") @db.Uuid
+  department   Department @relation(fields: [departmentId], references: [id])
+  name         String
+  teamLeadId   String?  @map("team_lead_id") @db.Uuid
+  teamLead     Employee? @relation("TeamLead", fields: [teamLeadId], references: [id])
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  members       Employee[]     @relation("TeamMembers")
+  eventInvitees EventInvitee[]
+
+  @@map("teams")
+}
+
+model Employee {
+  id            String   @id @default(uuid()) @db.Uuid
+  fullName      String   @map("full_name")
+  email         String   @unique
+  phone         String?
+  departmentId  String?  @map("department_id") @db.Uuid
+  department    Department? @relation(fields: [departmentId], references: [id])
+  teamId        String?  @map("team_id") @db.Uuid
+  team          Team?    @relation("TeamMembers", fields: [teamId], references: [id])
+  role          Role
+  dateOfBirth   DateTime? @map("date_of_birth") @db.Date
+  dateOfJoining DateTime  @map("date_of_joining") @db.Date
+  baseSalary    Decimal   @map("base_salary") @db.Decimal(12, 2)
+  deviceUid     Int?     @map("device_uid") // reserved for future device-sync phase
+  status        EmployeeStatus @default(active)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user               User?
+  ledTeams           Team[]               @relation("TeamLead")
+  ledWorkUnits       WorkUnit[]           @relation("WorkUnitLead")
+  assignedWorkItems  WorkItem[]           @relation("WorkItemAssignee")
+  dailySelections    DailyTaskSelection[]
+  pointLedger        EmployeePointLedger[]
+  attendanceRecords  AttendanceRecord[]
+  payslips           Payslip[]
+  requests           Request[]
+  recognitionSnapshots RecognitionSnapshot[]
+  documents          EmployeeDocument[]
+  assets             Asset[]
+  eventsAbout        Event[]              @relation("EventSubject")
+  eventInvitees      EventInvitee[]
+
+  @@map("employees")
+}
+
+// ===========================================================================
+// 2. HIERARCHY / PROJECT-TASK TRACKING  (generic tree — Track B)
+// ===========================================================================
+
+model WorkUnit {
+  id           String   @id @default(uuid()) @db.Uuid
+  departmentId String   @map("department_id") @db.Uuid
+  department   Department @relation(fields: [departmentId], references: [id])
+  name         String
+  teamLeadId   String   @map("team_lead_id") @db.Uuid
+  teamLead     Employee @relation("WorkUnitLead", fields: [teamLeadId], references: [id])
+  status       WorkUnitStatus @default(active)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  subUnits SubUnit[]
+
+  @@map("work_units")
+}
+
+model SubUnit {
+  id         String   @id @default(uuid()) @db.Uuid
+  workUnitId String   @map("work_unit_id") @db.Uuid
+  workUnit   WorkUnit @relation(fields: [workUnitId], references: [id])
+  name       String
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  workItems WorkItem[]
+
+  @@map("sub_units")
+}
+
+// Supports both Atomic (Tech) and Metric (Sales/BD) modes. See SCHEMA.md note:
+// metric targets reset monthly, tracked per period_month/period_year.
+model WorkItem {
+  id          String   @id @default(uuid()) @db.Uuid
+  subUnitId   String   @map("sub_unit_id") @db.Uuid
+  subUnit     SubUnit  @relation(fields: [subUnitId], references: [id])
+  assignedTo  String   @map("assigned_to") @db.Uuid
+  assignee    Employee @relation("WorkItemAssignee", fields: [assignedTo], references: [id])
+  title       String
+  mode        WorkItemMode
+  taskPoints  Int?     @map("task_points")     // required if atomic
+  targetValue Decimal? @map("target_value") @db.Decimal(12, 2) // required if metric; editable anytime
+  currentValue Decimal? @map("current_value") @db.Decimal(12, 2) // required if metric
+  periodMonth Int?     @map("period_month")    // required if metric (monthly reset)
+  periodYear  Int?     @map("period_year")     // required if metric
+  status      WorkItemStatus @default(pending)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  completedAt DateTime? @map("completed_at") @db.Timestamptz(6)
+
+  dailySelections DailyTaskSelection[]
+  pointLedger     EmployeePointLedger[]
+
+  @@index([assignedTo])
+  @@index([mode, periodYear, periodMonth])
+  @@map("work_items")
+}
+
+model DailyTaskSelection {
+  id         String   @id @default(uuid()) @db.Uuid
+  employeeId String   @map("employee_id") @db.Uuid
+  employee   Employee @relation(fields: [employeeId], references: [id])
+  workItemId String   @map("work_item_id") @db.Uuid
+  workItem   WorkItem @relation(fields: [workItemId], references: [id])
+  date       DateTime @db.Date
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@unique([employeeId, workItemId, date])
+  @@index([employeeId, date])
+  @@map("daily_task_selections")
+}
+
+// Append-only ledger crediting task points on completion (Atomic/Tech only).
+model EmployeePointLedger {
+  id         String   @id @default(uuid()) @db.Uuid
+  employeeId String   @map("employee_id") @db.Uuid
+  employee   Employee @relation(fields: [employeeId], references: [id])
+  workItemId String   @map("work_item_id") @db.Uuid
+  workItem   WorkItem @relation(fields: [workItemId], references: [id])
+  points     Int
+  creditedAt DateTime @default(now()) @map("credited_at") @db.Timestamptz(6)
+
+  @@index([employeeId])
+  @@map("employee_point_ledger")
+}
+
+// ===========================================================================
+// 3. ATTENDANCE  (Track A) — v1 manual clock-in/out + HR/Admin approval
+// ===========================================================================
+
+model AttendanceRecord {
+  id               String   @id @default(uuid()) @db.Uuid
+  employeeId       String   @map("employee_id") @db.Uuid
+  employee         Employee @relation(fields: [employeeId], references: [id])
+  date             DateTime @db.Date
+  clockInRaw       DateTime? @map("clock_in_raw") @db.Timestamptz(6)
+  clockOutRaw      DateTime? @map("clock_out_raw") @db.Timestamptz(6)
+  clockInApproved  DateTime? @map("clock_in_approved") @db.Timestamptz(6)
+  clockOutApproved DateTime? @map("clock_out_approved") @db.Timestamptz(6)
+  totalHours       Decimal? @map("total_hours") @db.Decimal(4, 2)
+  isHalfDay        Boolean  @default(false) @map("is_half_day")
+  approvalStatus   AttendanceApprovalStatus @default(pending) @map("approval_status")
+  approvedById     String?  @map("approved_by") @db.Uuid // must be admin/hr
+  approvedBy       User?    @relation("AttendanceApprover", fields: [approvedById], references: [id])
+  approvedAt       DateTime? @map("approved_at") @db.Timestamptz(6)
+  source           AttendanceSource @default(manual)
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@unique([employeeId, date])
+  @@index([approvalStatus])
+  @@map("attendance_records")
+}
+
+// NOTE: `device_punch_raw` from SCHEMA.md §3 is intentionally NOT modeled —
+// deferred biometric LAN-sync phase (PRD §5.1.1). Do not add in v1.
+
+// ===========================================================================
+// 4. PAYROLL  (Track A)
+// ===========================================================================
+
+model PayrollConfig {
+  id                        String   @id @default(uuid()) @db.Uuid
+  lateDeductionFlat         Decimal  @map("late_deduction_flat") @db.Decimal(10, 2)
+  unpaidLeaveDeductionFlat  Decimal  @map("unpaid_leave_deduction_flat") @db.Decimal(10, 2)
+  halfDayDeductionFlat      Decimal  @map("half_day_deduction_flat") @db.Decimal(10, 2)
+  effectiveFrom             DateTime @map("effective_from") @db.Date
+
+  @@map("payroll_config")
+}
+
+model Payslip {
+  id                    String   @id @default(uuid()) @db.Uuid
+  employeeId            String   @map("employee_id") @db.Uuid
+  employee              Employee @relation(fields: [employeeId], references: [id])
+  periodMonth           Int      @map("period_month")
+  periodYear            Int      @map("period_year")
+  baseSalary            Decimal  @map("base_salary") @db.Decimal(12, 2)
+  incentiveAmount       Decimal  @default(0) @map("incentive_amount") @db.Decimal(12, 2)
+  bonusAmount           Decimal  @default(0) @map("bonus_amount") @db.Decimal(12, 2)
+  bonusReason           String?  @map("bonus_reason")
+  otherAdditionAmount   Decimal? @map("other_addition_amount") @db.Decimal(12, 2)
+  otherAdditionReason   String?  @map("other_addition_reason")
+  otherDeductionAmount  Decimal? @map("other_deduction_amount") @db.Decimal(12, 2)
+  otherDeductionReason  String?  @map("other_deduction_reason")
+  lateCount             Int      @default(0) @map("late_count")       // from approved attendance only
+  unpaidLeaveCount      Int      @default(0) @map("unpaid_leave_count")
+  halfDayCount          Int      @default(0) @map("half_day_count")
+  standardDeductionTotal Decimal @default(0) @map("standard_deduction_total") @db.Decimal(12, 2)
+  reimbursementTotal    Decimal  @default(0) @map("reimbursement_total") @db.Decimal(12, 2)
+  employeeOfMonthRef    Boolean  @default(false) @map("employee_of_month_ref") // reference only
+  netPay                Decimal  @map("net_pay") @db.Decimal(12, 2)
+  generatedById         String   @map("generated_by") @db.Uuid // must be admin/hr
+  generatedBy           User     @relation("PayslipGenerator", fields: [generatedById], references: [id])
+  generatedAt           DateTime @default(now()) @map("generated_at") @db.Timestamptz(6)
+  status                PayslipStatus @default(draft)
+
+  @@unique([employeeId, periodYear, periodMonth])
+  @@map("payslips")
+}
+
+// ===========================================================================
+// 5. REQUESTS  (generic — Track B)
+// ===========================================================================
+
+model Request {
+  id            String   @id @default(uuid()) @db.Uuid
+  employeeId    String   @map("employee_id") @db.Uuid
+  employee      Employee @relation(fields: [employeeId], references: [id])
+  type          RequestType
+  status        RequestStatus @default(pending)
+  dateFrom      DateTime? @map("date_from") @db.Date
+  dateTo        DateTime? @map("date_to") @db.Date
+  amount        Decimal? @db.Decimal(12, 2) // for reimbursement
+  description   String?
+  attachmentUrl String?  @map("attachment_url")
+  approverId    String?  @map("approver_id") @db.Uuid // MUST be admin/hr (enforce in app logic)
+  approver      User?    @relation("RequestApprover", fields: [approverId], references: [id])
+  approvedAt    DateTime? @map("approved_at") @db.Timestamptz(6)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([employeeId])
+  @@index([type, status])
+  @@map("requests")
+}
+
+// ===========================================================================
+// 6. RECOGNITION, NOTIFICATIONS, ANNOUNCEMENTS, DOCS, EVENTS, ASSETS (Track B)
+// ===========================================================================
+
+model RecognitionSnapshot {
+  id               String   @id @default(uuid()) @db.Uuid
+  periodType       RecognitionPeriodType @map("period_type")
+  periodStart      DateTime @map("period_start") @db.Date
+  departmentId     String   @map("department_id") @db.Uuid
+  department       Department @relation(fields: [departmentId], references: [id])
+  employeeId       String   @map("employee_id") @db.Uuid
+  employee         Employee @relation(fields: [employeeId], references: [id])
+  score            Decimal  @db.Decimal(14, 2)
+  rank             Int
+  isEmployeeOfMonth Boolean @default(false) @map("is_employee_of_month")
+
+  @@index([periodType, periodStart, departmentId])
+  @@map("recognition_snapshots")
+}
+
+model Notification {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  user      User     @relation(fields: [userId], references: [id])
+  type      String   // e.g. leave_approved, task_assigned, birthday
+  message   String
+  readAt    DateTime? @map("read_at") @db.Timestamptz(6)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([userId, readAt])
+  @@map("notifications")
+}
+
+model Announcement {
+  id         String   @id @default(uuid()) @db.Uuid
+  title      String
+  body       String
+  scopeType  AnnouncementScope @map("scope_type")
+  teamIds    String[] @map("team_ids") @db.Uuid // set for specific_teams; single value for team
+  createdById String  @map("created_by") @db.Uuid
+  createdBy   User    @relation("AnnouncementCreator", fields: [createdById], references: [id])
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("announcements")
+}
+
+// Covers system-generated (birthday/anniversary) and manual (meeting) events.
+// Birthday/anniversary may be handled as a derived query instead of persisted
+// rows (see SCHEMA.md note) — table kept for optional historical logging.
+model Event {
+  id                  String   @id @default(uuid()) @db.Uuid
+  type                EventType
+  title               String?
+  createdById         String?  @map("created_by") @db.Uuid // meetings: admin/hr/lead; null for system
+  createdBy           User?    @relation("EventCreator", fields: [createdById], references: [id])
+  scheduledAt         DateTime? @map("scheduled_at") @db.Timestamptz(6)
+  reminderLeadMinutes Int?     @map("reminder_lead_minutes")
+  employeeId          String?  @map("employee_id") @db.Uuid // birthday/anniversary subject
+  employee            Employee? @relation("EventSubject", fields: [employeeId], references: [id])
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  invitees EventInvitee[]
+
+  @@map("events")
+}
+
+model EventInvitee {
+  id         String   @id @default(uuid()) @db.Uuid
+  eventId    String   @map("event_id") @db.Uuid
+  event      Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  employeeId String?  @map("employee_id") @db.Uuid // individual invitee
+  employee   Employee? @relation(fields: [employeeId], references: [id])
+  teamId     String?  @map("team_id") @db.Uuid    // whole-team invite, expanded at send-time
+  team       Team?    @relation(fields: [teamId], references: [id])
+
+  @@index([eventId])
+  @@map("event_invitees")
+}
+
+model EmployeeDocument {
+  id         String   @id @default(uuid()) @db.Uuid
+  employeeId String   @map("employee_id") @db.Uuid
+  employee   Employee @relation(fields: [employeeId], references: [id])
+  docType    String   @map("doc_type") // "ID Proof", "Offer Letter", ...
+  fileUrl    String   @map("file_url")
+  uploadedAt DateTime @default(now()) @map("uploaded_at") @db.Timestamptz(6)
+
+  @@index([employeeId])
+  @@map("employee_documents")
+}
+
+// Stub only — not built out in v1 (PRD §5.12).
+model Asset {
+  id         String   @id @default(uuid()) @db.Uuid
+  name       String
+  assignedTo String?  @map("assigned_to") @db.Uuid
+  employee   Employee? @relation(fields: [assignedTo], references: [id])
+  status     String?
+
+  @@map("assets")
+}
