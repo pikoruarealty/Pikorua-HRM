@@ -1,0 +1,306 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+
+type Team = {
+  id: string;
+  name: string;
+  departmentId: string;
+  department: { id: string; name: string; typeKey: string };
+  teamLeadId: string | null;
+  teamLead: { id: string; fullName: string } | null;
+};
+
+type Department = { id: string; name: string; typeKey: string };
+
+async function getJson(res: Response) {
+  const json = await res.json();
+  if (json.error) throw new Error(json.error.message);
+  return json.data;
+}
+
+export function TeamsScreen({ canManage }: { canManage: boolean }) {
+  const [teams, setTeams] = useState<Team[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const [teamsData, deptData] = await Promise.all([
+        getJson(await fetch("/api/v1/teams")),
+        canManage ? getJson(await fetch("/api/v1/departments")) : Promise.resolve([]),
+      ]);
+      setTeams(teamsData);
+      setDepartments(deptData);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load teams.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function onDelete(team: Team) {
+    if (!window.confirm(`Delete team "${team.name}"? This cannot be undone.`)) {
+      return;
+    }
+    setDeletingId(team.id);
+    setError(null);
+    try {
+      await getJson(await fetch(`/api/v1/teams/${team.id}`, { method: "DELETE" }));
+      if (editingId === team.id) setEditingId(null);
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to delete team.");
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-6">
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">Teams</h1>
+        <p className="text-sm text-muted-foreground">
+          {canManage
+            ? "Create and manage teams across all departments."
+            : "Teams in your department."}
+        </p>
+      </div>
+
+      {error && <p className="text-sm text-destructive">{error}</p>}
+
+      {canManage && <CreateTeamForm departments={departments} onCreated={load} />}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>All teams</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {loading ? (
+            <p className="text-sm text-muted-foreground">Loading…</p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Department</TableHead>
+                  <TableHead>Team lead</TableHead>
+                  {canManage && <TableHead />}
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {teams.map((t) => (
+                  <TableRow key={t.id}>
+                    <TableCell>{t.name}</TableCell>
+                    <TableCell>{t.department.name}</TableCell>
+                    <TableCell>{t.teamLead?.fullName ?? "— unassigned —"}</TableCell>
+                    {canManage && (
+                      <TableCell>
+                        <div className="flex gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setEditingId(editingId === t.id ? null : t.id)}
+                          >
+                            {editingId === t.id ? "Close" : "Edit"}
+                          </Button>
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            disabled={deletingId === t.id}
+                            onClick={() => onDelete(t)}
+                          >
+                            {deletingId === t.id ? "Deleting…" : "Delete"}
+                          </Button>
+                        </div>
+                      </TableCell>
+                    )}
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      {canManage && editingId && (
+        <EditTeamForm
+          team={teams.find((t) => t.id === editingId)!}
+          onSaved={() => {
+            setEditingId(null);
+            load();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function CreateTeamForm({
+  departments,
+  onCreated,
+}: {
+  departments: Department[];
+  onCreated: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [departmentId, setDepartmentId] = useState("");
+  const [teamLeadId, setTeamLeadId] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    try {
+      await getJson(
+        await fetch("/api/v1/teams", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name,
+            department_id: departmentId,
+            team_lead_id: teamLeadId,
+          }),
+        }),
+      );
+      setName("");
+      setDepartmentId("");
+      setTeamLeadId("");
+      onCreated();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to create team.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>New team</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={onSubmit} className="flex flex-wrap items-end gap-4">
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="team_name">Name</Label>
+            <Input id="team_name" value={name} onChange={(e) => setName(e.target.value)} required />
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="department_id">Department</Label>
+            <select
+              id="department_id"
+              className="flex h-10 w-56 rounded-md border border-input bg-background px-3 py-2 text-sm"
+              value={departmentId}
+              onChange={(e) => setDepartmentId(e.target.value)}
+              required
+            >
+              <option value="" disabled>
+                Select department
+              </option>
+              {departments.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="team_lead_id">Team lead employee ID</Label>
+            <Input
+              id="team_lead_id"
+              placeholder="employee UUID with a lead role"
+              value={teamLeadId}
+              onChange={(e) => setTeamLeadId(e.target.value)}
+              required
+            />
+          </div>
+          {error && <p className="text-sm text-destructive">{error}</p>}
+          <Button type="submit" disabled={submitting}>
+            {submitting ? "Creating…" : "Create team"}
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
+  );
+}
+
+function EditTeamForm({ team, onSaved }: { team: Team; onSaved: () => void }) {
+  const [name, setName] = useState(team.name);
+  const [teamLeadId, setTeamLeadId] = useState(team.teamLeadId ?? "");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    try {
+      await getJson(
+        await fetch(`/api/v1/teams/${team.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name,
+            ...(teamLeadId ? { team_lead_id: teamLeadId } : {}),
+          }),
+        }),
+      );
+      onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to update team.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Edit &quot;{team.name}&quot;</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={onSubmit} className="flex flex-wrap items-end gap-4">
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="edit_name">Name</Label>
+            <Input id="edit_name" value={name} onChange={(e) => setName(e.target.value)} required />
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="edit_lead">Team lead employee ID</Label>
+            <Input
+              id="edit_lead"
+              value={teamLeadId}
+              onChange={(e) => setTeamLeadId(e.target.value)}
+            />
+          </div>
+          {error && <p className="text-sm text-destructive">{error}</p>}
+          <Button type="submit" disabled={submitting}>
+            {submitting ? "Saving…" : "Save"}
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
+  );
+}

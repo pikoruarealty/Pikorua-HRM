@@ -3,7 +3,7 @@
 > Living status doc. Update after every meaningful change (standing project rule).
 > Source of truth for scope = [docs/](docs/) (PRD, SCHEMA, IMPLEMENTATION_PLAN, API_SPEC).
 
-**Last updated:** 2026-07-13 (Phase 0 verification completed)
+**Last updated:** 2026-07-13 (Track A Milestone 1 — Org Structure Foundations — completed)
 
 ---
 
@@ -53,10 +53,19 @@ Employees · Departments/Teams/Hierarchy config · Attendance (manual) · Payrol
 
 | Milestone | Status |
 |---|---|
-| Employee CRUD + department/team management | ⬜ |
-| `department_labels` config UI | ⬜ |
+| Employee CRUD + department/team management | ✅ |
+| `department_labels` config UI | ✅ |
 | Manual Clock In/Out + HR/Admin approval & edit screen | ⬜ |
 | Payroll config + payslip generation (manual fields + auto deductions + reimbursement pull-in + EoM ref) | ⬜ |
+
+### Milestone 1 — Org Structure Foundations ✅ (2026-07-13)
+Verified live against the seeded DB (login → API → role-scoped response for every endpoint below), not just build-checked.
+
+- **Departments**: `GET/POST /api/v1/departments`, `GET/PUT /api/v1/departments/:type_key/labels`. Admin-only config screen at `app/(dashboard)/departments`, `components/departments/departments-screen.tsx`.
+- **Teams**: `GET/POST /api/v1/teams`, `PATCH /api/v1/teams/:id`. `team_lead_id` validated against `isLeadRole()` (read-only use of shared `lib/rbac`). Admin/HR manage; Lead/Employee get a department-scoped read view. `app/(dashboard)/teams`, `components/teams/teams-screen.tsx`.
+- **Employees**: full CRUD at `app/api/v1/employees[, /:id]` — role-scoped (Admin/HR all, Lead own team, Employee self); `base_salary` excluded from the response for non-finance roles (golden RBAC rule); `DELETE` is soft-delete only (`status → inactive`). Dashboard at `app/(dashboard)/employees[, /new, /:id]`, `components/employees/`.
+- **Open decision resolved**: `POST /employees` provisions the linked `User` login in the same call — server generates a temporary password (returned once in the response, never persisted in plaintext) unless the caller supplies one.
+- **New shared-adjacent additions** (not on the CLAUDE.md shared-file list, but touched by both tracks going forward — flag before restructuring): `app/(auth)/login` (login page — a Phase 0 gap; needed to browser-test any dashboard screen), `app/(dashboard)/layout.tsx` + `components/dashboard-nav.tsx` (auth-gated shell + top nav; Track B adds its own links here as its screens land).
 
 ## Track B — Work, Requests & Culture (owner: Bhavarth)
 Work units/tasks · Daily planning/EOD · Requests · Recognition · Notifications · Announcements · Docs · Events · Assets stub

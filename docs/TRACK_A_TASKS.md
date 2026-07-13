@@ -38,36 +38,35 @@ Per `progress.md`, Phase 0's code is mostly written but unverified against a rea
 
 ## Milestone 1 — Org Structure Foundations
 
-### 1.1 Departments
-- [ ] `GET /api/v1/departments` — Any authenticated role; returns departments joined with their `department_labels` config
-- [ ] `POST /api/v1/departments` — Admin only; `{ name, type_key }`
-- [ ] `GET /api/v1/departments/:type_key/labels` — Any role; returns `work_unit_label`/`sub_unit_label`/`work_item_label`/`work_item_mode`
-- [ ] `PUT /api/v1/departments/:type_key/labels` — Admin only; upserts the label config — this is how a new department's terminology gets configured without a code change (PRD §4.1)
-- [ ] Dashboard screen: Admin-only department list + label-config editor
-- [ ] New component folder `components/departments/` (Track A-owned, does not exist yet)
+### 1.1 Departments ✅ done 2026-07-13
+- [x] `GET /api/v1/departments` — Any authenticated role; returns departments joined with their `department_labels` config
+- [x] `POST /api/v1/departments` — Admin only; `{ name, type_key }`
+- [x] `GET /api/v1/departments/:type_key/labels` — Any role; returns `work_unit_label`/`sub_unit_label`/`work_item_label`/`work_item_mode`
+- [x] `PUT /api/v1/departments/:type_key/labels` — Admin only; upserts the label config — this is how a new department's terminology gets configured without a code change (PRD §4.1)
+- [x] Dashboard screen: Admin-only department list + label-config editor
+- [x] New component folder `components/departments/` (Track A-owned, does not exist yet)
 
-### 1.2 Teams
-- [ ] `GET /api/v1/teams` — Admin/HR (all), Lead/Employee (own department only — scope server-side)
-- [ ] `POST /api/v1/teams` — Admin/HR; `{ department_id, name, team_lead_id }`
-- [ ] `PATCH /api/v1/teams/:id` — Admin/HR; reassign lead, rename
-- [ ] Validation: `team_lead_id` must reference an employee whose `role` passes `isLeadRole()` (from shared `lib/rbac`, read-only use — no edit needed there)
-- [ ] Dashboard: team list/create/edit view
+### 1.2 Teams ✅ done 2026-07-13
+- [x] `GET /api/v1/teams` — Admin/HR (all), Lead/Employee (own department only — scope server-side)
+- [x] `POST /api/v1/teams` — Admin/HR; `{ department_id, name, team_lead_id }`
+- [x] `PATCH /api/v1/teams/:id` — Admin/HR; reassign lead, rename
+- [x] Validation: `team_lead_id` must reference an employee whose `role` passes `isLeadRole()` (from shared `lib/rbac`, read-only use — no edit needed there)
+- [x] Dashboard: team list/create/edit view
+- [x] `DELETE /api/v1/teams/:id` — Admin/HR; **added 2026-07-13**, was not in the original API_SPEC.md scope, added on request. Hard-delete (Teams have no soft-delete/status field, unlike Employees). Blocks with `409 CONFLICT` if any employee is still assigned (`Employee.teamId` match) — reassign/remove members first; also catches any other FK reference (e.g. Track B's `event_invitees`) as a fallback `409`. Dashboard: Delete button next to Edit in `teams-screen.tsx`, with a confirm prompt.
 
-### 1.3 Employees
-- [ ] `GET /api/v1/employees` — role-scoped: Admin/HR see all, Lead sees own team, Employee sees self only. Filters: `department_id`, `team_id`. **Server-side scoping is mandatory** — API_SPEC explicitly warns not to rely on frontend filtering
-- [ ] `GET /api/v1/employees/:id` — same scoping rule, Lead allowed if target employee is in their own team
-- [ ] `POST /api/v1/employees` — Admin/HR; creates employee + `base_salary` + department/team assignment
-- [ ] `PATCH /api/v1/employees/:id` — Admin/HR; editable fields: salary, department, team, status, `device_uid` mapping (field is reserved for the deferred biometric device-sync phase — just store the value, do not build anything that acts on it)
-- [ ] `DELETE /api/v1/employees/:id` — Admin only; soft-delete (`status → inactive`, never a hard delete)
-- [ ] Dashboard: employee list (searchable/filterable table), employee detail page, create/edit form
-- [ ] `components/employees/` — table, form, detail card
+### 1.3 Employees ✅ done 2026-07-13
+- [x] `GET /api/v1/employees` — role-scoped: Admin/HR see all, Lead sees own team, Employee sees self only. Filters: `department_id`, `team_id`. **Server-side scoping is mandatory** — API_SPEC explicitly warns not to rely on frontend filtering
+- [x] `GET /api/v1/employees/:id` — same scoping rule, Lead allowed if target employee is in their own team
+- [x] `POST /api/v1/employees` — Admin/HR; creates employee + `base_salary` + department/team assignment
+- [x] `PATCH /api/v1/employees/:id` — Admin/HR; editable fields: salary, department, team, status, `device_uid` mapping (field is reserved for the deferred biometric device-sync phase — just store the value, do not build anything that acts on it)
+- [x] `DELETE /api/v1/employees/:id` — Admin only; soft-delete (`status → inactive`, never a hard delete)
+- [x] Dashboard: employee list (searchable/filterable table), employee detail page, create/edit form
+- [x] `components/employees/` — table, form, detail card
 
-**🟡 Open decision — resolve before/at start of this task, not silently assumed:**
-Employee creation implies a linked login (`User.employeeId` in schema). Two options:
-1. `POST /employees` also provisions the `User` row (email + generated/temp password) in the same call.
-2. Employee record and login account are two separate creation steps (Admin creates employee first, then separately provisions a login).
+**🟢 Open decision — resolved 2026-07-13 (asked Umang directly):**
+Combined: `POST /employees` provisions the `User` row in the same call. Server generates a temporary password (returned once in the response) when the caller doesn't supply one; never stored in plaintext, only its bcrypt hash.
 
-This changes the `POST /employees` request/response contract, so it should be settled before writing that endpoint.
+**Note:** building/testing these dashboard screens required two things not listed in either track's task breakdown — a login page and a dashboard shell/nav. Both landed as `app/(auth)/login`, `app/(dashboard)/layout.tsx`, `components/dashboard-nav.tsx`. Not on the CLAUDE.md shared-file list, but both tracks will touch `dashboard-nav.tsx` to add their own links — flag before restructuring it.
 
 ---
 
