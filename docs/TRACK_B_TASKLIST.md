@@ -43,14 +43,14 @@
 
 ## Milestone 2 — Metric tasks (Sales/BD) + Daily Planning/EOD + Reimbursements
 
-### 2.1 Resolve the monthly-reset approach (do this first, before coding)
+### 2.1 Resolve the monthly-reset approach (do this first, before coding) ✅ done (2026-07-13)
 
 **What:** SCHEMA.md's `work_items` note flags an open implementation choice: (a) a new metric `work_item` row each month, or (b) one recurring row with `current_value` reset in place while `period_month`/`period_year` advance. Pick one and record the decision.
 **Why:** PRD §7 open question #4; affects how `period_month`/`period_year` filtering works in every downstream query (recognition snapshots, EoM).
 **Files:** none yet — this is a decision, not code.
 **Definition of done:** Decision written to `progress.md`'s open-decisions section and to the `open-questions` memory (mark resolved, note the choice + reasoning) before writing any metric-mode code.
 
-### 2.2 Metric mode for WorkItems (Sales/BD)
+### 2.2 Metric mode for WorkItems (Sales/BD) ✅ done (2026-07-13)
 
 **What:** Extend WorkItem create/update to support `mode = metric`: `target_value` (editable any time by the Lead), `current_value` (running count, updated by the assigned Employee), `period_month`/`period_year`. No fixed "done" state required — default completion = current ≥ target, per PRD §5.6.
 **Why:** PRD §4.2, §5.7. API_SPEC §4, §5.
@@ -58,7 +58,9 @@
 **RBAC:** same as 1.2 — Lead sets/edits `target_value` any time; assigned Employee updates `current_value` only.
 **Definition of done:** A Sales Lead sets a target of 100 calls; the Sales Employee updates `current_value` via PATCH; a Lead can adjust `target_value` mid-month without resetting `current_value`.
 
-### 2.3 Daily Planning / EOD flow + point ledger
+**Extra (stakeholder request, 2026-07-13):** growth-over-time view — `GET /api/v1/employees/:id/work-items/history` (new file, physically under Track A's `app/api/v1/employees/` folder per the folder-overlap note below; flagged, not a shared-file-list item). Returns an employee's past metric-mode WorkItems ordered by `period_year`/`period_month` desc, each with `targetValue`, `currentValue`, and a derived `achievedPct`. Optional `?year=`/`?limit=` filters. RBAC: Admin/HR any employee, Lead their own team's employees (via `team.teamLeadId`), Employee self only — else 403. Placement decision: built now in 2.2 (metric-only, per-employee), to be revisited/generalized once 3.1's `recognition_snapshots` exists for both Tech and Sales/BD.
+
+### 2.3 Daily Planning / EOD flow + point ledger ✅ done (2026-07-13)
 
 **What:** At clock-in, Employee selects today's WorkItems (`daily_task_selections`). Through the day they update progress. On atomic-task completion, credit `task_points` to `employee_point_ledger` (server-side, never client-computed).
 **Why:** PRD §5.4. API_SPEC §5. SCHEMA.md `daily_task_selections`, `employee_point_ledger`.
@@ -67,13 +69,17 @@
 > ⚠️ **Folder overlap, not a shared file:** `employees/[id]/points/route.ts` is a *new file* inside `app/api/v1/employees/`, which is Track A's named folder per Implementation Plan §2. Low conflict risk (no existing file edited), but give Umang a heads-up once, since it's the first Track B file living under an "A" folder.
 **Definition of done:** Employee selects a task at (simulated) clock-in, marks it completed via `/complete`, and `GET /employees/:id/points` shows the credited points — verify the ledger entry exists, not just the response shape.
 
-### 2.4 Reimbursement request type + implement the cross-track helper
+**Implementation note:** `PATCH /work-items/:id` (from 1.2) already let the assigned Employee set `status = completed` directly, which would have bypassed `/complete`'s ledger crediting entirely — a real gap once the ledger existed. Fixed by adding the same transactional credit-on-completion logic to PATCH's atomic branch; both routes guard on `wasCompleted` (checked before the update) so completing via either path credits exactly once, and re-completing an already-completed item via the other path is a no-op (PATCH) or `409 CONFLICT` (`/complete`). Live-verified: completed one item via `/complete` (15 pts), a second via PATCH directly (8 pts, balance → 23), then re-PATCHed the second item to `completed` again and confirmed the balance stayed at 23 (no double credit).
+
+### 2.4 Reimbursement request type + implement the cross-track helper ✅ done (2026-07-13)
 
 **What:** Extend the Requests module (M1) to handle `type = reimbursement` (`amount`, `attachment_url`). Then implement `getApprovedReimbursementTotal(employeeId, month, year)` for real in `apps/web/lib/requests/reimbursements.ts` — sum `amount` for `type = reimbursement`, `status = approved`, filtered to the given period.
 **Why:** PRD §5.2, §5.13. Implementation Plan §5 (cross-track contract). API_SPEC §7.
 **Files:** extend `apps/web/app/api/v1/requests/**` from 1.3; ⚠️ **SHARED FILE** — `apps/web/lib/requests/reimbursements.ts` (implementing the stub is expected/owned by Track B per the Phase 0 contract — flag Umang once it's live, since Track A's payroll code stops throwing `NotImplementedError` and starts returning real numbers; don't change the function signature).
 **RBAC:** same approve/reject rule as 1.3 (Admin/HR only).
 **Definition of done:** An approved reimbursement request's amount is correctly summed by `getApprovedReimbursementTotal` for its period — write a quick manual check (or unit test) calling the function directly, not just eyeballing the request list UI.
+
+**Implementation note:** Reimbursement requests have no `period_month`/`period_year` field of their own (unlike leave's `dateFrom`/`dateTo` range), so `getApprovedReimbursementTotal` scopes the period off `approvedAt`, not `createdAt` — per PRD §5.2/§5.13 ("once approved, added into the payslip"), a reimbursement belongs to whichever month it's *approved* in, not submitted in. Flagged to Umang before editing (shared file); signature unchanged (`(employeeId, month, year) => Promise<number>`), so Track A's payroll call site needs no changes — it just stops throwing `NotImplementedError` and starts getting real totals. `bun run build` clean. Live-verified: reimbursement missing `amount` correctly 422'd; a Team Lead's approval attempt still 403'd (golden rule holds for reimbursement same as leave); HR approved a ₹1500 request and `getApprovedReimbursementTotal` returned 1500 for the current month and 0 for the prior month; a second ₹700 approval brought the total to 2200, while a third (₹9999) request that was *rejected* was correctly excluded from the sum.
 
 ---
 

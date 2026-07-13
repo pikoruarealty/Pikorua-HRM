@@ -5,7 +5,9 @@ import { isFinanceRole, isLeadRole } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { WorkItemMode } from "@prisma/client";
 
-// Track B. POST /api/v1/sub-units/:id/work-items — Milestone 1.2 (atomic mode only).
+// Track B. POST /api/v1/sub-units/:id/work-items — Milestone 1.2 (atomic) + 2.2 (metric).
+
+const currentYear = new Date().getFullYear();
 
 const createSchema = z.object({
   title: z.string().min(1),
@@ -13,6 +15,8 @@ const createSchema = z.object({
   mode: z.nativeEnum(WorkItemMode),
   taskPoints: z.number().int().positive().optional(),
   targetValue: z.number().positive().optional(),
+  periodMonth: z.number().int().min(1).max(12).optional(),
+  periodYear: z.number().int().min(currentYear - 1).max(currentYear + 1).optional(),
 });
 
 export async function POST(req: Request, { params }: { params: { id: string } }) {
@@ -42,18 +46,45 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   if (!parsed.success) {
     return failFor(ErrorCode.VALIDATION, "title, assignedTo, and mode are required.");
   }
-  const { title, assignedTo, mode, taskPoints } = parsed.data;
-
-  if (mode === WorkItemMode.metric) {
-    return failFor(ErrorCode.NOT_IMPLEMENTED, "Metric-mode WorkItems are not supported until Milestone 2.");
-  }
-  if (taskPoints === undefined) {
-    return failFor(ErrorCode.VALIDATION, "taskPoints is required for atomic-mode WorkItems.");
-  }
+  const { title, assignedTo, mode, taskPoints, targetValue, periodMonth, periodYear } = parsed.data;
 
   const assignee = await prisma.employee.findUnique({ where: { id: assignedTo } });
   if (!assignee) {
     return failFor(ErrorCode.VALIDATION, "assignedTo does not reference an existing employee.");
+  }
+
+  if (mode === WorkItemMode.atomic) {
+    if (taskPoints === undefined) {
+      return failFor(ErrorCode.VALIDATION, "taskPoints is required for atomic-mode WorkItems.");
+    }
+    const workItem = await prisma.workItem.create({
+      data: {
+        subUnitId: subUnit.id,
+        assignedTo,
+        title,
+        mode: WorkItemMode.atomic,
+        taskPoints,
+      },
+    });
+    return ok(workItem, 201);
+  }
+
+  // Metric mode: new row per period (2.1 decision — no in-place reset), so
+  // periodMonth/periodYear are required at creation, not defaulted.
+  if (targetValue === undefined || periodMonth === undefined || periodYear === undefined) {
+    return failFor(
+      ErrorCode.VALIDATION,
+      "targetValue, periodMonth, and periodYear are required for metric-mode WorkItems.",
+    );
+  }
+  const existingPeriod = await prisma.workItem.findFirst({
+    where: { subUnitId: subUnit.id, assignedTo, mode: WorkItemMode.metric, periodMonth, periodYear },
+  });
+  if (existingPeriod) {
+    return failFor(
+      ErrorCode.CONFLICT,
+      "A metric-mode WorkItem already exists for this employee in this period. Update it instead of creating a duplicate.",
+    );
   }
 
   const workItem = await prisma.workItem.create({
@@ -61,8 +92,11 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       subUnitId: subUnit.id,
       assignedTo,
       title,
-      mode: WorkItemMode.atomic,
-      taskPoints,
+      mode: WorkItemMode.metric,
+      targetValue,
+      currentValue: 0,
+      periodMonth,
+      periodYear,
     },
   });
 

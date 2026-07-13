@@ -19,7 +19,7 @@ const CAN_SUBMIT_ROLES: readonly Role[] = [
   Role.hr,
 ];
 
-// Track B. GET/POST /api/v1/requests — Milestone 1.3 (leave type only).
+// Track B. GET/POST /api/v1/requests — Milestone 1.3 (leave) + 2.4 (reimbursement).
 
 const LEAVE_TYPES: RequestType[] = [RequestType.leave_paid, RequestType.leave_unpaid];
 
@@ -27,6 +27,8 @@ const createSchema = z.object({
   type: z.nativeEnum(RequestType),
   dateFrom: z.coerce.date().optional(),
   dateTo: z.coerce.date().optional(),
+  amount: z.number().positive().optional(),
+  attachmentUrl: z.string().url().optional(),
   description: z.string().optional(),
 });
 
@@ -46,24 +48,31 @@ export async function POST(req: Request) {
   if (!parsed.success) {
     return failFor(ErrorCode.VALIDATION, "Invalid request body.");
   }
-  const { type, dateFrom, dateTo, description } = parsed.data;
+  const { type, dateFrom, dateTo, amount, attachmentUrl, description } = parsed.data;
 
-  if (!LEAVE_TYPES.includes(type)) {
-    return failFor(ErrorCode.NOT_IMPLEMENTED, "Only leave_paid and leave_unpaid requests are supported until Milestone 2.");
-  }
-  if (!dateFrom || !dateTo) {
-    return failFor(ErrorCode.VALIDATION, "dateFrom and dateTo are required for leave requests.");
-  }
-  if (dateTo < dateFrom) {
-    return failFor(ErrorCode.VALIDATION, "dateTo must be on or after dateFrom.");
+  if (LEAVE_TYPES.includes(type)) {
+    if (!dateFrom || !dateTo) {
+      return failFor(ErrorCode.VALIDATION, "dateFrom and dateTo are required for leave requests.");
+    }
+    if (dateTo < dateFrom) {
+      return failFor(ErrorCode.VALIDATION, "dateTo must be on or after dateFrom.");
+    }
+  } else if (type === RequestType.reimbursement) {
+    if (amount === undefined) {
+      return failFor(ErrorCode.VALIDATION, "amount is required for reimbursement requests.");
+    }
+  } else {
+    return failFor(ErrorCode.NOT_IMPLEMENTED, "Only leave and reimbursement requests are supported until Milestone 3.");
   }
 
   const request = await prisma.request.create({
     data: {
       employeeId: session.employeeId,
       type,
-      dateFrom,
-      dateTo,
+      dateFrom: LEAVE_TYPES.includes(type) ? dateFrom : undefined,
+      dateTo: LEAVE_TYPES.includes(type) ? dateTo : undefined,
+      amount: type === RequestType.reimbursement ? amount : undefined,
+      attachmentUrl: type === RequestType.reimbursement ? attachmentUrl : undefined,
       description,
       status: RequestStatus.pending,
     },
