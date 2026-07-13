@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Pikorua HRM — pre-commit shared-file warning (warn-only, never blocks).
+#
+# Warns when a commit touches files that are common ground between Track A
+# (Umang) and Track B (Bhavarth) — see the "Shared files" list in CLAUDE.md.
+# This hook is opt-in per clone: run
+#   git config core.hooksPath .githooks
+# to enable it. It always exits 0 — it never blocks a commit, it only prints
+# a warning so you remember to flag the other track before merging.
+
+staged_files=$(git diff --cached --name-only --diff-filter=ACM)
+
+SHARED_PATTERNS=(
+  '^prisma/schema\.prisma$'
+  '^prisma/seed\.ts$'
+  '^apps/web/lib/rbac/'
+  '^apps/web/lib/auth/'
+  '^apps/web/lib/api/response\.ts$'
+  '^apps/web/lib/errors\.ts$'
+  '^apps/web/components/ui/'
+  '^apps/web/lib/requests/reimbursements\.ts$'
+  '^apps/web/lib/recognition/employee-of-month\.ts$'
+)
+
+matches=()
+while IFS= read -r file; do
+  [ -z "$file" ] && continue
+  for pattern in "${SHARED_PATTERNS[@]}"; do
+    if [[ "$file" =~ $pattern ]]; then
+      matches+=("$file")
+      break
+    fi
+  done
+done <<< "$staged_files"
+
+if [ "${#matches[@]}" -eq 0 ]; then
+  exit 0
+fi
+
+echo ""
+echo "⚠️  This commit touches file(s) shared with the other track (see CLAUDE.md 'Shared files'):"
+for f in "${matches[@]}"; do
+  echo "   - $f"
+done
+echo "   Flag this to the other dev before merging (schema.prisma changes also need"
+echo "   the Migration Ownership Rules in docs/IMPLEMENTATION_PLAN.md §6)."
+echo ""
+
+exit 0

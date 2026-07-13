@@ -3,7 +3,7 @@
 > Living status doc. Update after every meaningful change (standing project rule).
 > Source of truth for scope = [docs/](docs/) (PRD, SCHEMA, IMPLEMENTATION_PLAN, API_SPEC).
 
-**Last updated:** 2026-07-13
+**Last updated:** 2026-07-13 (Phase 0 verification completed)
 
 ---
 
@@ -32,19 +32,19 @@ Built together before the two tracks branch off. Both tracks depend on these fil
 | Seed script (payroll config, 3 depts + labels, teams, 7 role users) | ✅ | `prisma/seed.ts`, default pw `Password123!` |
 | Dependency-graph tooling ("graphify") | ✅ | dependency-cruiser: `.dependency-cruiser.cjs` + `depgraph:*` npm scripts; enforces no-circular + track boundaries. SVG output needs GraphViz `dot`. |
 | `bun install` + dev server running | ✅ | Confirmed by user 2026-07-13: `bun install` succeeded, `bun run dev` starts (a stale `.next/cache/webpack` pack file warning appeared — benign, cache-only, Next rebuilds it). |
-| First Prisma migration + `bun run build` verified | ⬜ | Not yet confirmed — still need `bun run prisma:migrate` (requires a reachable Postgres `DATABASE_URL`) and a full `bun run build`. |
+| First Prisma migration + `bun run build` verified | ✅ | Confirmed 2026-07-13: local Postgres 16 running, `pikorua_hrm` DB created, `.env` populated (real `AUTH_SECRET` via `openssl rand -base64 48`). `bun run prisma:migrate --name init` applied cleanly (`migrations/20260713100632_init`). `bun run db:seed` succeeded (7 users). `POST /api/v1/auth/login` and `GET /api/v1/auth/me` verified end-to-end against a running `bun run dev` server (200 OK, valid session cookie, correct role/employee payload). `bun run build` compiles clean (0 errors, all 3 auth routes + `/` built). |
 
 ### Package manager / runtime: **Bun** (1.3.14)
 Bun is the package manager and runtime for this project. Bun runs the TypeScript seed directly (`bun prisma/seed.ts`), so `tsx` was dropped. Root scripts use `bun run --filter=@pikorua-hrm/web <script>` for the workspace app.
 
-### To finish Phase 0 (next actions)
+### Phase 0 — all verification steps complete ✅
 1. ~~`bun install`~~ ✅ done.
-2. Set up a Postgres DB, copy `.env.example` → `.env`, set `DATABASE_URL` + `AUTH_SECRET`.
-3. `bun run prisma:migrate` (creates the initial migration from the full schema).
-4. `bun run db:seed`.
-5. Confirm login works end-to-end (`POST /api/v1/auth/login`).
-6. `bun run build` to confirm the scaffold compiles.
-7. Then branch: `track-a/*` and `track-b/*`.
+2. ~~Set up a Postgres DB, copy `.env.example` → `.env`, set `DATABASE_URL` + `AUTH_SECRET`~~ ✅ done (local Postgres 16, `pikorua_hrm` db).
+3. ~~`bun run prisma:migrate`~~ ✅ done — `migrations/20260713100632_init`.
+4. ~~`bun run db:seed`~~ ✅ done.
+5. ~~Confirm login works end-to-end~~ ✅ done — `/auth/login` + `/auth/me` both verified.
+6. ~~`bun run build`~~ ✅ done — compiles clean.
+7. Next: branch `track-a/*` and `track-b/*`, then start Track A Milestone 1 (see [docs/TRACK_A_TASKS.md](docs/TRACK_A_TASKS.md)).
 
 ---
 

@@ -54,3 +54,15 @@ Seeded logins (default password `Password123!`): `admin@pikorua.test`, `hr@pikor
 - **Track B — Work, Requests & Culture** (Bhavarth): tasks, daily planning, requests, recognition, notifications, announcements, docs, events.
 
 Shared files (`prisma/schema.prisma`, `lib/auth`, `lib/rbac`, `lib/db`, `components/ui`) require flagging the other dev before changing — see IMPLEMENTATION_PLAN §6.
+
+## Contributing
+
+### Shared-file warning hook (opt-in)
+
+`.githooks/pre-commit` warns (never blocks) when a commit touches a file on the shared-files list in [CLAUDE.md](CLAUDE.md). It's opt-in per clone — enable it once with:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+This only points git at the tracked `.githooks/` directory instead of `.git/hooks/`; it doesn't install anything or touch shared config. Each dev runs this locally if they want the reminder.

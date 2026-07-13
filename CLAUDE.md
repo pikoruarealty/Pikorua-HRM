@@ -13,8 +13,20 @@ Internal HR system (Next.js App Router + TypeScript + PostgreSQL + Prisma + Tail
 - **Track A** (Umang): employees, departments/teams, attendance, payroll. Routes under `app/api/v1/{employees,attendance,payroll,...}` + matching dashboard/components folders.
 - **Track B** (Bhavarth): work-units/tasks, daily planning, requests, recognition, notifications, announcements, docs, events, assets stub.
 
-## Shared foundation (flag the other dev before changing)
-`prisma/schema.prisma`, `apps/web/lib/{db,auth,rbac,api}`, `apps/web/components/ui`, and the cross-track helper stubs `lib/requests/reimbursements.ts` + `lib/recognition/employee-of-month.ts` (Track A imports these; Track B implements them — keep signatures stable).
+## Shared files (canonical list — flag the other dev before changing)
+These are common ground between Track A and Track B. A local `.githooks/pre-commit` warns when a commit touches any of them (opt-in — see README "Contributing"); treat that warning as a reminder, not a substitute for actually flagging the change.
+
+- `prisma/schema.prisma` — single shared migration file (Migration Ownership Rules, IMPLEMENTATION_PLAN.md §6)
+- `prisma/seed.ts` — shared seed data
+- `apps/web/lib/rbac/` — role guards used by every route in both tracks
+- `apps/web/lib/auth/` — session/login/password hashing
+- `apps/web/lib/api/response.ts`, `apps/web/lib/errors.ts` — shared `{ data, error }` envelope + error types
+- `apps/web/lib/db/` — Prisma client singleton
+- `apps/web/components/ui/` — shared shadcn primitives
+- `apps/web/lib/requests/reimbursements.ts` — cross-track contract; **Track B implements, Track A only calls** `getApprovedReimbursementTotal()`
+- `apps/web/lib/recognition/employee-of-month.ts` — cross-track contract; **Track B implements, Track A only calls** `getEmployeeOfMonthStatus()`
+
+**AI rule:** before editing any file on this list — whether it's the file you were asked to change or one you'd touch as a side effect of a plan already in progress — stop and flag it to the user first. This overrides an in-progress plan; re-confirm even if the file wasn't called out when the plan was approved.
 
 ## Conventions
 - API responses use `ok()` / `fail()` / `failFor()` from `@/lib/api/response` → `{ data, error }`.
