@@ -15,7 +15,7 @@
 
 ## Milestone 1 — WorkUnit/Task CRUD (Atomic/Tech only) + basic Requests (leave only)
 
-### 1.1 WorkUnit CRUD
+### 1.1 WorkUnit CRUD ✅ done (2026-07-13)
 
 **What:** Create/list/view/update WorkUnits (Projects/Campaigns). Tech-department scope only this milestone (Sales/BD metric mode comes in M2).
 **Why:** PRD §5.6, §4.2. API_SPEC §4.
@@ -23,7 +23,7 @@
 **RBAC:** POST = Lead or Admin/HR (`team_lead_id` defaults to creator if Lead). GET = Any, scoped: Admin/HR see all, Lead sees own department, Employee sees assigned-or-own-department status-only. PATCH = owning Lead or Admin/HR.
 **Definition of done:** A Tech Lead can create a WorkUnit via API and see it listed; an Employee in a different department cannot see it.
 
-### 1.2 SubUnit + WorkItem CRUD (atomic mode only)
+### 1.2 SubUnit + WorkItem CRUD (atomic mode only) ✅ done (2026-07-13)
 
 **What:** Nest SubUnits (Features) under a WorkUnit, and WorkItems (Tasks) under a SubUnit. `mode = atomic` only this milestone — `task_points` required, `status` cycles `pending → wip → completed`. Reject `mode = metric` for now (M2 adds it).
 **Why:** PRD §4.2, §5.6. API_SPEC §4. SCHEMA.md `work_items`.

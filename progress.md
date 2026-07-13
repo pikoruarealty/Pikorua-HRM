@@ -3,7 +3,7 @@
 > Living status doc. Update after every meaningful change (standing project rule).
 > Source of truth for scope = [docs/](docs/) (PRD, SCHEMA, IMPLEMENTATION_PLAN, API_SPEC).
 
-**Last updated:** 2026-07-13
+**Last updated:** 2026-07-13 (Track B M1.2 complete)
 
 ---
 
@@ -32,7 +32,7 @@ Built together before the two tracks branch off. Both tracks depend on these fil
 | Seed script (payroll config, 3 depts + labels, teams, 7 role users) | ✅ | `prisma/seed.ts`, default pw `Password123!` |
 | Dependency-graph tooling ("graphify") | ✅ | dependency-cruiser: `.dependency-cruiser.cjs` + `depgraph:*` npm scripts; enforces no-circular + track boundaries. SVG output needs GraphViz `dot`. |
 | `bun install` + dev server running | ✅ | Confirmed by user 2026-07-13: `bun install` succeeded, `bun run dev` starts (a stale `.next/cache/webpack` pack file warning appeared — benign, cache-only, Next rebuilds it). |
-| First Prisma migration + `bun run build` verified | ⬜ | Not yet confirmed — still need `bun run prisma:migrate` (requires a reachable Postgres `DATABASE_URL`) and a full `bun run build`. |
+| First Prisma migration + `bun run build` verified | ✅ | Confirmed 2026-07-13: local Postgres 18 running on **port 5433** (not 5432 — WSL's `wslrelay.exe` squats on 127.0.0.1:5432/::1:5432, shadowing native Postgres; moved native instance to 5433 to avoid the conflict, see `postgresql.conf`). `.env` created from `.env.example` with real `DATABASE_URL`/`AUTH_SECRET`. `prisma migrate dev --name init` and `bun run db:seed` both succeeded. `bun run build` compiles clean. |
 | Shared-file warning mechanism | ✅ | Canonical list now in `CLAUDE.md` (Shared foundation section). Two enforcement layers: (1) AI rule — Claude stops and flags before editing a listed file; (2) `.githooks/pre-commit` — warns (never blocks) at commit time if staged files match the list. Hook is opt-in: run `git config core.hooksPath .githooks` once per clone (not run automatically — see README "Contributing"). |
 
 ### Package manager / runtime: **Bun** (1.3.14)
@@ -66,7 +66,7 @@ Work units/tasks · Daily planning/EOD · Requests · Recognition · Notificatio
 
 | Milestone | Status |
 |---|---|
-| M1: WorkUnit/SubUnit/WorkItem CRUD (atomic only) | ⬜ |
+| M1: WorkUnit/SubUnit/WorkItem CRUD (atomic only) | ✅ (1.1 WorkUnit CRUD ✅, 1.2 SubUnit/WorkItem CRUD ✅) |
 | M1: Requests — leave type only, HR/Admin-only approval | ⬜ |
 | M2: Metric task mode (Sales/BD) + monthly reset | ⬜ |
 | M2: Daily task selection + EOD point ledger | ⬜ |
@@ -78,6 +78,9 @@ Work units/tasks · Daily planning/EOD · Requests · Recognition · Notificatio
 | M3: Events — birthday banner + Meetings + reminders | ⬜ |
 | M4: Cross-track integration testing (joint w/ Track A) | ⬜ |
 | Assets stub | ⬜ |
+
+### 1.2 detail (2026-07-13)
+Built `POST /work-units/:id/sub-units`, `POST /sub-units/:id/work-items` (atomic only — `mode = metric` rejected with `NOT_IMPLEMENTED`/501), `PATCH /work-items/:id`, `GET /work-items/mine`. Also extended `GET /work-units/:id` to nest `subUnits` + `workItems` per API_SPEC §4 (Employee's status-only view filters `workItems` down to their own assignments). `bun run build` clean. Verified live against the seeded DB with curl: Tech Lead creates sub-unit/work-item; Sales Lead gets 404 (not 403) on another department's WorkUnit; Tech Employee gets 403 creating sub-units; atomic WorkItem requires `taskPoints`; assigned Employee can cycle `pending → wip → completed` (server sets `completedAt`) but 403s on editing `taskPoints`; owning Lead can edit all fields including `taskPoints`; `GET /work-items/mine` returns the assignee's own tasks and 403s for non-Employee roles (tech_lead) per spec's strict role list.
 
 ---
 
