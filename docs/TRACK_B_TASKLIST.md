@@ -13,7 +13,7 @@
 
 ---
 
-## Milestone 1 — WorkUnit/Task CRUD (Atomic/Tech only) + basic Requests (leave only)
+## Milestone 1 — WorkUnit/Task CRUD (Atomic/Tech only) + basic Requests (leave only) ✅ done (2026-07-13)
 
 ### 1.1 WorkUnit CRUD ✅ done (2026-07-13)
 
@@ -31,7 +31,7 @@
 **RBAC:** Create sub-unit/work-item = owning Lead or Admin/HR (Lead sets `task_points`). PATCH work-item = assigned Employee (status only) or Lead (all fields, can reassign/edit points).
 **Definition of done:** A Lead creates a task with `task_points`, assigns it to an Employee; the Employee can flip status pending → wip → completed via PATCH but cannot edit `task_points`.
 
-### 1.3 Requests module — leave type only
+### 1.3 Requests module — leave type only ✅ done (2026-07-13)
 
 **What:** Generic Request entity; this milestone only exercises `leave_paid` / `leave_unpaid`. Reimbursement/WFH/other come in M2+.
 **Why:** PRD §5.9. API_SPEC §7. SCHEMA.md `requests`.
@@ -150,3 +150,4 @@ Keep this in sync with `progress.md`'s open-decisions section as you resolve or 
 - [ ] Meeting reminder channel — building in-app only (3.5).
 - [ ] Employee of the Month ties — building single-winner (`rank = 1`) only (3.1).
 - [ ] Monthly metric-target reset approach — record your 2.1 decision here once made.
+- [x] `POST /requests` scope — **resolved 2026-07-13** (stakeholder direction): requests work in hierarchy. Employees, Team Leads, and HR may all file their own leave requests; approval stays Admin/HR only (golden rule, unchanged). Leads' requests are approved by HR/Admin; HR's requests must go up to Admin (self-approval blocked in `approve`/`reject` by comparing the requester's linked `User.id` to the approving session's `userId`). Admin is intentionally excluded from `POST /requests` — there's no one above Admin to approve it, so an Admin-filed request would be permanently stuck pending.

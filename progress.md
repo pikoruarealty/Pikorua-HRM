@@ -3,7 +3,7 @@
 > Living status doc. Update after every meaningful change (standing project rule).
 > Source of truth for scope = [docs/](docs/) (PRD, SCHEMA, IMPLEMENTATION_PLAN, API_SPEC).
 
-**Last updated:** 2026-07-13 (Track B M1.2 complete)
+**Last updated:** 2026-07-13 (Track B Milestone 1 complete: 1.1, 1.2, 1.3; 1.3 hierarchy-submission follow-up)
 
 ---
 
@@ -67,7 +67,7 @@ Work units/tasks · Daily planning/EOD · Requests · Recognition · Notificatio
 | Milestone | Status |
 |---|---|
 | M1: WorkUnit/SubUnit/WorkItem CRUD (atomic only) | ✅ (1.1 WorkUnit CRUD ✅, 1.2 SubUnit/WorkItem CRUD ✅) |
-| M1: Requests — leave type only, HR/Admin-only approval | ⬜ |
+| M1: Requests — leave type only, HR/Admin-only approval | ✅ |
 | M2: Metric task mode (Sales/BD) + monthly reset | ⬜ |
 | M2: Daily task selection + EOD point ledger | ⬜ |
 | M2: Reimbursement requests + implement `getApprovedReimbursementTotal` | ⬜ |
@@ -81,6 +81,11 @@ Work units/tasks · Daily planning/EOD · Requests · Recognition · Notificatio
 
 ### 1.2 detail (2026-07-13)
 Built `POST /work-units/:id/sub-units`, `POST /sub-units/:id/work-items` (atomic only — `mode = metric` rejected with `NOT_IMPLEMENTED`/501), `PATCH /work-items/:id`, `GET /work-items/mine`. Also extended `GET /work-units/:id` to nest `subUnits` + `workItems` per API_SPEC §4 (Employee's status-only view filters `workItems` down to their own assignments). `bun run build` clean. Verified live against the seeded DB with curl: Tech Lead creates sub-unit/work-item; Sales Lead gets 404 (not 403) on another department's WorkUnit; Tech Employee gets 403 creating sub-units; atomic WorkItem requires `taskPoints`; assigned Employee can cycle `pending → wip → completed` (server sets `completedAt`) but 403s on editing `taskPoints`; owning Lead can edit all fields including `taskPoints`; `GET /work-items/mine` returns the assignee's own tasks and 403s for non-Employee roles (tech_lead) per spec's strict role list.
+
+### 1.3 detail (2026-07-13)
+Built `POST /requests`, `GET /requests`, `GET /requests/:id`, `PATCH /requests/:id/approve`, `PATCH /requests/:id/reject` — leave types only this milestone (`leave_paid`/`leave_unpaid`); other types (`reimbursement`/`wfh`/`other`) rejected with `NOT_IMPLEMENTED`/501, mirroring the 1.2 metric-mode pattern. Golden rule enforced: approve/reject check `FINANCE_ROLES` before anything else, so a Team Lead gets 403 on their own team's request every time, and re-approving/rejecting a non-pending request returns 409. GET scoping matches WorkUnit's pattern: Admin/HR see all (with `type`/`status`/`employee_id` filters), Lead sees own team only (resolved via `Team.teamLeadId`, filters ignore attempts to escape team scope), Employee sees self only, and cross-scope `GET /requests/:id` 404s instead of 403 to avoid leaking existence. `bun run build` clean. Verified live against the seeded DB with curl across Tech Lead, Tech Employee, Sales Lead, Sales Employee, HR, and Admin — including catching and fixing a real bug during verification (reimbursement type was failing zod validation on missing dates before ever reaching the leave-type-only rejection check; fixed by making `dateFrom`/`dateTo` optional at the schema level and validating their presence only after confirming the type is a leave type).
+
+**2026-07-13 update — hierarchy submission resolved.** Stakeholder direction: leave requests work in hierarchy — Team Leads can file their own leave (approved by HR/Admin) and HR can file their own leave (approved by Admin only). `POST /requests` now allows Employees, Team Leads, and HR (`CAN_SUBMIT_ROLES` in `requests/route.ts`); Admin is intentionally excluded (no one above Admin to approve it). Approval stays Admin/HR only per the golden rule — unchanged — but `approve`/`reject` now block self-approval by comparing the requester's linked `User.id` to the approving session's `userId`, so an HR request can't be approved by that same HR user and must go up to Admin. Lead's team-scoped `GET /requests` was extended to also include the Lead's own filed requests (previously only team *members*, which excluded the Lead). `bun run build` clean; live-verified with curl: Tech Lead and HR each filed their own leave, HR self-approve attempt got 403, Admin approved HR's request, HR approved the Lead's request, and a Tech Employee still got 403 attempting to reject (golden rule intact).
 
 ---
 
