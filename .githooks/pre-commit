@@ -1,0 +1,56 @@
+#!/bin/sh
+# Pikorua HRM — shared-file warning hook.
+#
+# WARN-ONLY, never blocks a commit (always exits 0). Its job is to catch
+# accidental edits to shared-foundation files before they cause a merge
+# conflict between Track A and Track B, even when the commit isn't made
+# through Claude Code.
+#
+# The file list below MUST match the "Canonical shared-file list" in
+# CLAUDE.md — update both together if the list changes.
+#
+# Enable this hook once per clone (not on by default, since .git/hooks/ isn't
+# version-controlled):
+#   git config core.hooksPath .githooks
+
+STAGED=$(git diff --cached --name-only --diff-filter=ACM)
+[ -z "$STAGED" ] && exit 0
+
+MATCHED=""
+while IFS= read -r f; do
+  case "$f" in
+    prisma/schema.prisma|\
+    prisma/seed.ts|\
+    apps/web/lib/db/*|\
+    apps/web/lib/auth/*|\
+    apps/web/lib/rbac/*|\
+    apps/web/lib/api/*|\
+    apps/web/components/ui/*|\
+    apps/web/lib/requests/reimbursements.ts|\
+    apps/web/lib/recognition/employee-of-month.ts|\
+    package.json|\
+    apps/web/package.json|\
+    CLAUDE.md)
+      MATCHED="$MATCHED  - $f
+"
+      ;;
+  esac
+done <<EOF
+$STAGED
+EOF
+
+if [ -n "$MATCHED" ]; then
+  echo ""
+  echo "=================================================================="
+  echo " WARNING: this commit touches SHARED FOUNDATION file(s):"
+  echo ""
+  printf '%s' "$MATCHED"
+  echo ""
+  echo " These are relied on by both Track A and Track B. Please flag the"
+  echo " other dev before merging to avoid stepping on their work."
+  echo " (This is a warning only — the commit is NOT blocked.)"
+  echo "=================================================================="
+  echo ""
+fi
+
+exit 0

@@ -50,7 +50,17 @@ Seeded logins (default password `Password123!`): `admin@pikorua.test`, `hr@pikor
 
 ## Track ownership
 
-- **Track A — People, Time & Money** (Umang): employees, departments/teams, attendance, payroll.
-- **Track B — Work, Requests & Culture** (Bhavarth): tasks, daily planning, requests, recognition, notifications, announcements, docs, events.
+- **Track A — People, Time & Money** (Umang): employees, departments/teams, attendance, payroll. Detailed tasklist: (Track A owner to add one, mirroring `TRACK_B_TASKLIST.md`).
+- **Track B — Work, Requests & Culture** (Bhavarth): tasks, daily planning, requests, recognition, notifications, announcements, docs, events. Detailed tasklist: [TRACK_B_TASKLIST.md](TRACK_B_TASKLIST.md).
 
-Shared files (`prisma/schema.prisma`, `lib/auth`, `lib/rbac`, `lib/db`, `components/ui`) require flagging the other dev before changing — see IMPLEMENTATION_PLAN §6.
+Shared files (`prisma/schema.prisma`, `lib/auth`, `lib/rbac`, `lib/db`, `components/ui`, root/`apps/web` `package.json`, `CLAUDE.md`) require flagging the other dev before changing — full list in [CLAUDE.md](CLAUDE.md#shared-foundation-flag-the-other-dev-before-changing), see IMPLEMENTATION_PLAN §6.
+
+## Contributing — shared-file warning hook
+
+This repo ships a git hook that warns (never blocks) when a commit touches a shared-foundation file, to catch accidental cross-track edits before they cause a merge conflict. It's **opt-in per clone** — enable it once:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+The hook script lives at [.githooks/pre-commit](.githooks/pre-commit); its file list is kept in sync with the one in `CLAUDE.md`.

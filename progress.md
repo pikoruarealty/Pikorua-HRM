@@ -33,6 +33,7 @@ Built together before the two tracks branch off. Both tracks depend on these fil
 | Dependency-graph tooling ("graphify") | ✅ | dependency-cruiser: `.dependency-cruiser.cjs` + `depgraph:*` npm scripts; enforces no-circular + track boundaries. SVG output needs GraphViz `dot`. |
 | `bun install` + dev server running | ✅ | Confirmed by user 2026-07-13: `bun install` succeeded, `bun run dev` starts (a stale `.next/cache/webpack` pack file warning appeared — benign, cache-only, Next rebuilds it). |
 | First Prisma migration + `bun run build` verified | ⬜ | Not yet confirmed — still need `bun run prisma:migrate` (requires a reachable Postgres `DATABASE_URL`) and a full `bun run build`. |
+| Shared-file warning mechanism | ✅ | Canonical list now in `CLAUDE.md` (Shared foundation section). Two enforcement layers: (1) AI rule — Claude stops and flags before editing a listed file; (2) `.githooks/pre-commit` — warns (never blocks) at commit time if staged files match the list. Hook is opt-in: run `git config core.hooksPath .githooks` once per clone (not run automatically — see README "Contributing"). |
 
 ### Package manager / runtime: **Bun** (1.3.14)
 Bun is the package manager and runtime for this project. Bun runs the TypeScript seed directly (`bun prisma/seed.ts`), so `tsx` was dropped. Root scripts use `bun run --filter=@pikorua-hrm/web <script>` for the workspace app.
@@ -61,17 +62,21 @@ Employees · Departments/Teams/Hierarchy config · Attendance (manual) · Payrol
 ## Track B — Work, Requests & Culture (owner: Bhavarth)
 Work units/tasks · Daily planning/EOD · Requests · Recognition · Notifications · Announcements · Docs · Events · Assets stub
 
+**Full detailed tasklist with context, files, RBAC, and definitions of done: [TRACK_B_TASKLIST.md](TRACK_B_TASKLIST.md).** Table below mirrors it at milestone granularity — update both when a milestone's status changes.
+
 | Milestone | Status |
 |---|---|
-| WorkUnit/SubUnit/WorkItem CRUD (atomic + metric) | ⬜ |
-| Daily task selection + EOD point ledger | ⬜ |
-| Generic Requests + HR/Admin-only approval | ⬜ |
-| Recognition leaderboard + Employee of the Month | ⬜ |
-| Notifications infra | ⬜ |
-| Announcements (team/all/specific-team scoping) | ⬜ |
-| Employee documents upload | ⬜ |
-| Events: birthday banner + Meetings + reminders | ⬜ |
-| Implement the two cross-track helper stubs | ⬜ |
+| M1: WorkUnit/SubUnit/WorkItem CRUD (atomic only) | ⬜ |
+| M1: Requests — leave type only, HR/Admin-only approval | ⬜ |
+| M2: Metric task mode (Sales/BD) + monthly reset | ⬜ |
+| M2: Daily task selection + EOD point ledger | ⬜ |
+| M2: Reimbursement requests + implement `getApprovedReimbursementTotal` | ⬜ |
+| M3: Recognition leaderboard + Employee of the Month + implement `getEmployeeOfMonthStatus` | ⬜ |
+| M3: Notifications infra | ⬜ |
+| M3: Announcements (team/all/specific-team scoping) | ⬜ |
+| M3: Employee documents upload | ⬜ |
+| M3: Events — birthday banner + Meetings + reminders | ⬜ |
+| M4: Cross-track integration testing (joint w/ Track A) | ⬜ |
 | Assets stub | ⬜ |
 
 ---
