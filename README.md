@@ -50,19 +50,17 @@ Seeded logins (default password `Password123!`): `admin@pikorua.test`, `hr@pikor
 
 ## Track ownership
 
-- **Track A — People, Time & Money** (Umang): employees, departments/teams, attendance, payroll.
-- **Track B — Work, Requests & Culture** (Bhavarth): tasks, daily planning, requests, recognition, notifications, announcements, docs, events.
+- **Track A — People, Time & Money** (Umang): employees, departments/teams, attendance, payroll. Detailed tasklist: (Track A owner to add one, mirroring `TRACK_B_TASKLIST.md`).
+- **Track B — Work, Requests & Culture** (Bhavarth): tasks, daily planning, requests, recognition, notifications, announcements, docs, events. Detailed tasklist: [TRACK_B_TASKLIST.md](TRACK_B_TASKLIST.md).
 
-Shared files (`prisma/schema.prisma`, `lib/auth`, `lib/rbac`, `lib/db`, `components/ui`) require flagging the other dev before changing — see IMPLEMENTATION_PLAN §6.
+Shared files (`prisma/schema.prisma`, `lib/auth`, `lib/rbac`, `lib/db`, `components/ui`, root/`apps/web` `package.json`, `CLAUDE.md`) require flagging the other dev before changing — full list in [CLAUDE.md](CLAUDE.md#shared-foundation-flag-the-other-dev-before-changing), see IMPLEMENTATION_PLAN §6.
 
-## Contributing
+## Contributing — shared-file warning hook
 
-### Shared-file warning hook (opt-in)
-
-`.githooks/pre-commit` warns (never blocks) when a commit touches a file on the shared-files list in [CLAUDE.md](CLAUDE.md). It's opt-in per clone — enable it once with:
+This repo ships a git hook that warns (never blocks) when a commit touches a shared-foundation file, to catch accidental cross-track edits before they cause a merge conflict. It's **opt-in per clone** — enable it once:
 
 ```bash
 git config core.hooksPath .githooks
 ```
 
-This only points git at the tracked `.githooks/` directory instead of `.git/hooks/`; it doesn't install anything or touch shared config. Each dev runs this locally if they want the reminder.
+This only points git at the tracked `.githooks/` directory instead of `.git/hooks/`; it doesn't install anything or touch shared config. Each dev runs this locally if they want the reminder. The hook script lives at [.githooks/pre-commit](.githooks/pre-commit); its file list is kept in sync with the one in `CLAUDE.md`.
