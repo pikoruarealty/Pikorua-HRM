@@ -97,24 +97,25 @@ The attendance summary also needs "unpaid leave days," which lives in Track B's 
 
 ---
 
-## Milestone 3 — Payroll
+## Milestone 3 — Payroll ✅ code complete 2026-07-14 (blocked on Track B for one live end-to-end check)
 
-- [ ] `GET /api/v1/payroll/config` — Admin/HR; current flat deduction rates
-- [ ] `PUT /api/v1/payroll/config` — Admin only; update flat rates, versioned by `effective_from` (never overwrite a historical rate row — insert a new one so past payslips remain reproducible)
-- [ ] `GET /api/v1/payslips/:employee_id/employee-of-month-status` — Admin/HR; calls Track B's `getEmployeeOfMonthStatus(employeeId, month, year)` stub — **reference-only display**, does not affect any calculation
-- [ ] `POST /api/v1/payslips/generate` — Admin/HR; `{ employee_id, month, year, incentive_amount, bonus_amount, bonus_reason?, other_addition_amount?, other_addition_reason?, other_deduction_amount?, other_deduction_reason? }`. Server-side, this must:
-  - Pull `late_count`/`unpaid_leave_count`/`half_day_count` from **approved-only** attendance (via the Milestone 2.2 summary logic)
-  - Compute `standard_deduction_total` from those counts × current `payroll_config` flat rates
-  - Call Track B's `getApprovedReimbursementTotal(employeeId, month, year)` for `reimbursement_total`
-  - Call `getEmployeeOfMonthStatus(...)` to set `employee_of_month_ref` (denormalized, informational only)
-  - Compute `net_pay = base + incentive + bonus + other_addition − standard_deduction_total − other_deduction + reimbursement_total`
-- [ ] `GET /api/v1/payslips` — Admin/HR (all), Employee (self only, **finalized only** — drafts must never be visible to the employee)
-- [ ] `GET /api/v1/payslips/:id` — Admin/HR (any), Employee (self only)
-- [ ] `PATCH /api/v1/payslips/:id/finalize` — Admin/HR; `draft → finalized`
-- [ ] Dashboard: payroll config screen; payslip generation form (manual incentive/bonus/other-addition/other-deduction inputs + read-only auto-computed deduction/reimbursement breakdown + Employee-of-Month reference badge); payslip list/detail view; employee's own finalized-payslip view
-- [ ] `components/payroll/` — config form, payslip generation form, payslip detail/list views
+- [x] `GET /api/v1/payroll/config` — Admin/HR; current flat deduction rates
+- [x] `PUT /api/v1/payroll/config` — Admin only; update flat rates, versioned by `effective_from` (never overwrite a historical rate row — insert a new one so past payslips remain reproducible). Verified live: a new row effective `2026-08-01` doesn't change what a `2026-07` period resolves to.
+- [x] `GET /api/v1/payslips/:employee_id/employee-of-month-status` — Admin/HR; calls Track B's `getEmployeeOfMonthStatus(employeeId, month, year)` stub — **reference-only display**, does not affect any calculation. Folder is `[id]` (see attendance/[id] precedent — one dynamic-segment name per path level; this level also serves payslip *id* for the two routes below).
+- [x] `POST /api/v1/payslips/generate` — Admin/HR; `{ employee_id, month, year, incentive_amount, bonus_amount, bonus_reason?, other_addition_amount?, other_addition_reason?, other_deduction_amount?, other_deduction_reason? }`. Server-side:
+  - Pulls `late_count`/`unpaid_leave_count`/`half_day_count` from **approved-only** attendance via a new shared `lib/attendance/summary.ts` (extracted out of the Milestone 2.2 summary route so both stay in sync; the summary route now calls it too — re-verified live after the refactor, unchanged behavior)
+  - Computes `standard_deduction_total` from those counts × the period's *effective* `payroll_config` row (not just the latest — respects `effective_from` versioning)
+  - Calls Track B's `getApprovedReimbursementTotal(employeeId, month, year)` for `reimbursement_total`
+  - Calls `getEmployeeOfMonthStatus(...)` to set `employee_of_month_ref` (denormalized, informational only)
+  - Computes `net_pay = base + incentive + bonus + other_addition − standard_deduction_total − other_deduction + reimbursement_total`
+  - Enforces one payslip per employee per period (`409` on duplicate `generate` call), 422 if no payroll config is effective yet for the period
+- [x] `GET /api/v1/payslips` — Admin/HR (all), Employee (self only, **finalized only** — drafts must never be visible to the employee). Verified live for both roles.
+- [x] `GET /api/v1/payslips/:id` — Admin/HR (any), Employee (self only, finalized only)
+- [x] `PATCH /api/v1/payslips/:id/finalize` — Admin/HR; `draft → finalized`, `409` if already finalized (no `finalized_at`/`finalized_by` columns exist on the actual `Payslip` model — only `status`; the original handoff note describing those fields was stale, see progress.md)
+- [x] Dashboard: payroll config screen (`app/(dashboard)/payroll/config`); payslip generation form with manual incentive/bonus/other-addition/other-deduction inputs + live EoM badge lookup + post-generate breakdown preview; payslip list (`app/(dashboard)/payslips`) + detail view (`app/(dashboard)/payslips/[id]`) with Finalize button; employee's own view is the same list/detail screens, naturally scoped by the API's RBAC (finalized-only)
+- [x] `components/payroll/` — `payroll-config-screen.tsx`, `payslips-screen.tsx` (list + generate form), `payslip-detail.tsx`
 
-**Note on cross-track dependency:** until Track B implements the real logic behind `getApprovedReimbursementTotal` and `getEmployeeOfMonthStatus`, calling them will throw `NotImplementedError` in dev (see the stub files' current behavior) — that is expected and is **not a Track A bug**. Do not work around it by inlining a query against `requests`/`recognition_snapshots` directly; that would violate the agreed cross-track contract and the "never touch Track B's implementation" rule above.
+**Cross-track dependency status (2026-07-14):** `getApprovedReimbursementTotal` and `getEmployeeOfMonthStatus` both still throw `NotImplementedError` — Track B hasn't implemented them yet. This is **not a Track A bug**; verified live (`422`/`501` respectively). Deliberate asymmetry in how generation handles each: `getApprovedReimbursementTotal` directly changes `net_pay`, so its `NotImplementedError` **blocks payslip generation entirely** (422) rather than risk a silently-wrong net pay ("never bluff" rule). `getEmployeeOfMonthStatus` is explicitly reference-only per API_SPEC.md, so its `NotImplementedError` degrades to `employee_of_month_ref: false` + a note, the same pattern already used for `unpaid_leave_count` in the Milestone 2 summary endpoint. **Once Track B implements `getApprovedReimbursementTotal`, do one live end-to-end generate → finalize run** — everything else (config versioning, RBAC, attendance-summary reuse, duplicate-period guard) is already verified live against the seeded DB.
 
 ---
 

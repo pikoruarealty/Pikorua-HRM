@@ -13,6 +13,8 @@ const LINKS: { href: string; label: string; financeOnly?: boolean }[] = [
   { href: "/teams", label: "Teams" },
   { href: "/departments", label: "Departments", financeOnly: true },
   { href: "/attendance", label: "Attendance" },
+  { href: "/payslips", label: "Payslips" },
+  { href: "/payroll/config", label: "Payroll Config", financeOnly: true },
 ];
 
 export function DashboardNav({
