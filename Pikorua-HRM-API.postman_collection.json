@@ -1,0 +1,778 @@
+{
+  "info": {
+    "name": "Pikorua HRM — M1-M2 Routes",
+    "description": "Complete test collection for Track B Milestones 1 (WorkUnits/SubUnits/WorkItems/Requests) and 2 (Metric Mode/Daily Planning/Reimbursements)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Login — Admin",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  let data = pm.response.json().data;",
+                  "  pm.environment.set('admin_user_id', data.id);",
+                  "  pm.environment.set('admin_employee_id', data.employeeId);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"email\":\"admin@pikorua.test\",\"password\":\"Password123!\"}"
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/login",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "login"]
+            }
+          }
+        },
+        {
+          "name": "Login — HR",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  let data = pm.response.json().data;",
+                  "  pm.environment.set('hr_user_id', data.id);",
+                  "  pm.environment.set('hr_employee_id', data.employeeId);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"email\":\"hr@pikorua.test\",\"password\":\"Password123!\"}"
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/login",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "login"]
+            }
+          }
+        },
+        {
+          "name": "Login — Tech Lead",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  let data = pm.response.json().data;",
+                  "  pm.environment.set('tech_lead_user_id', data.id);",
+                  "  pm.environment.set('tech_lead_employee_id', data.employeeId);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"email\":\"tech.lead@pikorua.test\",\"password\":\"Password123!\"}"
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/login",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "login"]
+            }
+          }
+        },
+        {
+          "name": "Login — Tech Employee",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  let data = pm.response.json().data;",
+                  "  pm.environment.set('tech_emp_user_id', data.id);",
+                  "  pm.environment.set('tech_emp_employee_id', data.employeeId);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"email\":\"tech.emp@pikorua.test\",\"password\":\"Password123!\"}"
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/login",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "login"]
+            }
+          }
+        },
+        {
+          "name": "Login — Sales Lead",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  let data = pm.response.json().data;",
+                  "  pm.environment.set('sales_lead_user_id', data.id);",
+                  "  pm.environment.set('sales_lead_employee_id', data.employeeId);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"email\":\"sales.lead@pikorua.test\",\"password\":\"Password123!\"}"
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/login",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "login"]
+            }
+          }
+        },
+        {
+          "name": "Login — Sales Employee",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  let data = pm.response.json().data;",
+                  "  pm.environment.set('sales_emp_user_id', data.id);",
+                  "  pm.environment.set('sales_emp_employee_id', data.employeeId);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"email\":\"sales.emp@pikorua.test\",\"password\":\"Password123!\"}"
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/login",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "login"]
+            }
+          }
+        },
+        {
+          "name": "Get Current Session",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/auth/me",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "me"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "M1.1 — WorkUnits",
+      "item": [
+        {
+          "name": "GET /work-units (as Admin)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/work-units",
+              "host": ["{{base_url}}"],
+              "path": ["work-units"]
+            }
+          }
+        },
+        {
+          "name": "POST /work-units (Tech Lead creates)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  let data = pm.response.json().data;",
+                  "  pm.environment.set('work_unit_id', data.id);",
+                  "  pm.environment.set('tech_dept_id', data.departmentId);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"name\":\"M1-M2 Test Project\",\"departmentId\":\"15ba9511-93e7-4dab-8a59-b6b06168c874\"}"
+            },
+            "url": {
+              "raw": "{{base_url}}/work-units",
+              "host": ["{{base_url}}"],
+              "path": ["work-units"]
+            }
+          }
+        },
+        {
+          "name": "GET /work-units/:id",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/work-units/{{work_unit_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["work-units", "{{work_unit_id}}"]
+            }
+          }
+        },
+        {
+          "name": "PATCH /work-units/:id (Admin renames)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"name\":\"M1-M2 Updated Project\"}"
+            },
+            "url": {
+              "raw": "{{base_url}}/work-units/{{work_unit_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["work-units", "{{work_unit_id}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "M1.2 — SubUnits",
+      "item": [
+        {
+          "name": "POST /work-units/:id/sub-units",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  let data = pm.response.json().data;",
+                  "  pm.environment.set('sub_unit_id', data.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"name\":\"Test Feature\"}"
+            },
+            "url": {
+              "raw": "{{base_url}}/work-units/{{work_unit_id}}/sub-units",
+              "host": ["{{base_url}}"],
+              "path": ["work-units", "{{work_unit_id}}", "sub-units"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "M1.2 & M2.2 — WorkItems (Atomic + Metric)",
+      "item": [
+        {
+          "name": "POST /sub-units/:id/work-items — Atomic (15 pts)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  let data = pm.response.json().data;",
+                  "  pm.environment.set('atomic_work_item_id', data.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"title\":\"Write unit tests\",\"assignedTo\":\"{{tech_emp_employee_id}}\",\"mode\":\"atomic\",\"taskPoints\":15}"
+            },
+            "url": {
+              "raw": "{{base_url}}/sub-units/{{sub_unit_id}}/work-items",
+              "host": ["{{base_url}}"],
+              "path": ["sub-units", "{{sub_unit_id}}", "work-items"]
+            }
+          }
+        },
+        {
+          "name": "POST /sub-units/:id/work-items — Metric (100 calls, July)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  let data = pm.response.json().data;",
+                  "  pm.environment.set('metric_work_item_id', data.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"title\":\"Q3 Sales Calls\",\"assignedTo\":\"{{sales_emp_employee_id}}\",\"mode\":\"metric\",\"targetValue\":100,\"periodMonth\":7,\"periodYear\":2026}"
+            },
+            "url": {
+              "raw": "{{base_url}}/sub-units/{{sub_unit_id}}/work-items",
+              "host": ["{{base_url}}"],
+              "path": ["sub-units", "{{sub_unit_id}}", "work-items"]
+            }
+          }
+        },
+        {
+          "name": "PATCH /work-items/:id — Employee updates atomic status",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"status\":\"wip\"}"
+            },
+            "url": {
+              "raw": "{{base_url}}/work-items/{{atomic_work_item_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["work-items", "{{atomic_work_item_id}}"]
+            }
+          }
+        },
+        {
+          "name": "PATCH /work-items/:id — Employee updates metric currentValue",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"currentValue\":45}"
+            },
+            "url": {
+              "raw": "{{base_url}}/work-items/{{metric_work_item_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["work-items", "{{metric_work_item_id}}"]
+            }
+          }
+        },
+        {
+          "name": "PATCH /work-items/:id — Lead adjusts metric targetValue",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"targetValue\":80}"
+            },
+            "url": {
+              "raw": "{{base_url}}/work-items/{{metric_work_item_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["work-items", "{{metric_work_item_id}}"]
+            }
+          }
+        },
+        {
+          "name": "GET /work-items/mine (Employee's tasks)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/work-items/mine",
+              "host": ["{{base_url}}"],
+              "path": ["work-items", "mine"]
+            }
+          }
+        },
+        {
+          "name": "GET /employees/:id/work-items/history (M2.2 — Metric history)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/employees/{{sales_emp_employee_id}}/work-items/history?year=2026",
+              "host": ["{{base_url}}"],
+              "path": ["employees", "{{sales_emp_employee_id}}", "work-items", "history"],
+              "query": [
+                {
+                  "key": "year",
+                  "value": "2026"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "M1.3 & M2.4 — Requests (Leave + Reimbursement)",
+      "item": [
+        {
+          "name": "POST /requests — Leave (Paid)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  let data = pm.response.json().data;",
+                  "  pm.environment.set('leave_request_id', data.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"type\":\"leave_paid\",\"dateFrom\":\"2026-07-15\",\"dateTo\":\"2026-07-17\",\"description\":\"Summer vacation\"}"
+            },
+            "url": {
+              "raw": "{{base_url}}/requests",
+              "host": ["{{base_url}}"],
+              "path": ["requests"]
+            }
+          }
+        },
+        {
+          "name": "POST /requests — Reimbursement (M2.4)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  let data = pm.response.json().data;",
+                  "  pm.environment.set('reimb_request_id', data.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"type\":\"reimbursement\",\"amount\":1500,\"attachmentUrl\":\"https://files.example.com/receipt.pdf\",\"description\":\"Client meeting taxi\"}"
+            },
+            "url": {
+              "raw": "{{base_url}}/requests",
+              "host": ["{{base_url}}"],
+              "path": ["requests"]
+            }
+          }
+        },
+        {
+          "name": "GET /requests (Admin/HR see all)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/requests",
+              "host": ["{{base_url}}"],
+              "path": ["requests"]
+            }
+          }
+        },
+        {
+          "name": "GET /requests/:id (View specific request)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/requests/{{leave_request_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["requests", "{{leave_request_id}}"]
+            }
+          }
+        },
+        {
+          "name": "PATCH /requests/:id/approve (HR approves leave)",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/requests/{{leave_request_id}}/approve",
+              "host": ["{{base_url}}"],
+              "path": ["requests", "{{leave_request_id}}", "approve"]
+            }
+          }
+        },
+        {
+          "name": "PATCH /requests/:id/approve (Admin approves reimbursement)",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/requests/{{reimb_request_id}}/approve",
+              "host": ["{{base_url}}"],
+              "path": ["requests", "{{reimb_request_id}}", "approve"]
+            }
+          }
+        },
+        {
+          "name": "PATCH /requests/:id/reject (HR rejects request)",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/requests/{{leave_request_id}}/reject",
+              "host": ["{{base_url}}"],
+              "path": ["requests", "{{leave_request_id}}", "reject"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "M2.3 — Daily Planning + EOD + Point Ledger",
+      "item": [
+        {
+          "name": "POST /daily-selections (Employee selects tasks for today)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"workItemIds\":[\"{{atomic_work_item_id}}\"]}"
+            },
+            "url": {
+              "raw": "{{base_url}}/daily-selections",
+              "host": ["{{base_url}}"],
+              "path": ["daily-selections"]
+            }
+          }
+        },
+        {
+          "name": "GET /daily-selections/today (Employee views today's selections)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/daily-selections/today",
+              "host": ["{{base_url}}"],
+              "path": ["daily-selections", "today"]
+            }
+          }
+        },
+        {
+          "name": "POST /work-items/:id/complete (Employee completes atomic task → credits points)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/work-items/{{atomic_work_item_id}}/complete",
+              "host": ["{{base_url}}"],
+              "path": ["work-items", "{{atomic_work_item_id}}", "complete"]
+            }
+          }
+        },
+        {
+          "name": "GET /employees/:id/points (Employee views points ledger + balance)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/employees/{{tech_emp_employee_id}}/points",
+              "host": ["{{base_url}}"],
+              "path": ["employees", "{{tech_emp_employee_id}}", "points"]
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:3000/api/v1",
+      "type": "string"
+    },
+    {
+      "key": "tech_dept_id",
+      "value": "15ba9511-93e7-4dab-8a59-b6b06168c874",
+      "type": "string"
+    },
+    {
+      "key": "sales_dept_id",
+      "value": "58ed4c81-b54c-4608-834f-05ac924a0854",
+      "type": "string"
+    },
+    {
+      "key": "work_unit_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "sub_unit_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "atomic_work_item_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "metric_work_item_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "leave_request_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "reimb_request_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "tech_emp_employee_id",
+      "value": "5b3128ed-4904-4c1e-afac-33602156ca26",
+      "type": "string"
+    },
+    {
+      "key": "sales_emp_employee_id",
+      "value": "c4af4aa4-356c-4901-8e0a-2f3521fba51e",
+      "type": "string"
+    }
+  ]
+}
