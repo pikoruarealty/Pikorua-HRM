@@ -17,6 +17,8 @@ type WorkUnit = {
   teamLeadId?: string;
 };
 
+const textareaClass = "min-h-20 rounded-md border border-input bg-background px-3 py-2 text-sm";
+
 type Department = { id: string; name: string };
 type Employee = { id: string; fullName: string; role: string };
 
@@ -25,6 +27,7 @@ export default function WorkUnitsPage() {
   const [departments, setDepartments] = useState<Department[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
   const [departmentId, setDepartmentId] = useState("");
   const [teamLeadId, setTeamLeadId] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -53,6 +56,7 @@ export default function WorkUnitsPage() {
       method: "POST",
       body: JSON.stringify({
         name,
+        description: description || undefined,
         departmentId,
         teamLeadId: teamLeadId || undefined,
       }),
@@ -63,6 +67,7 @@ export default function WorkUnitsPage() {
       return;
     }
     setName("");
+    setDescription("");
     setTeamLeadId("");
     refresh();
   }
@@ -78,6 +83,15 @@ export default function WorkUnitsPage() {
             <div className="flex flex-col gap-1.5">
               <Label>Name</Label>
               <Input value={name} onChange={(e) => setName(e.target.value)} required />
+            </div>
+            <div className="flex flex-col gap-1.5 sm:col-span-2">
+              <Label>Description (optional — feeds AI task generation)</Label>
+              <textarea
+                className={textareaClass}
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="What is this project/campaign about? The more detail, the better the AI breakdown."
+              />
             </div>
             <div className="flex flex-col gap-1.5">
               <Label>Department</Label>
