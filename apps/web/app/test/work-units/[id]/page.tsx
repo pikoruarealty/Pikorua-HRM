@@ -23,7 +23,160 @@ type WorkItem = {
 };
 
 type SubUnit = { id: string; name: string; workItems: WorkItem[] };
-type WorkUnitDetail = { id: string; name: string; status: string; subUnits: SubUnit[] };
+type WorkUnitDetail = {
+  id: string;
+  name: string;
+  status: string;
+  description?: string | null;
+  departmentId: string;
+  subUnits: SubUnit[];
+};
+
+const textareaClass = "min-h-24 w-full rounded-md border border-input bg-background px-3 py-2 text-sm";
+
+type DraftWorkItem = { title: string; taskPoints?: number; targetValue?: number };
+type DraftSubUnit = { name: string; workItems: DraftWorkItem[] };
+type GenerateResult = {
+  workUnitId: string;
+  mode: "atomic" | "metric";
+  persisted: boolean;
+  labels?: { workUnit: string; subUnit: string; workItem: string };
+  subUnits: DraftSubUnit[];
+};
+
+function GenerateTasksPanel({
+  workUnit,
+  onPersisted,
+}: {
+  workUnit: WorkUnitDetail;
+  onPersisted: () => void;
+}) {
+  const [description, setDescription] = useState(workUnit.description ?? "");
+  const [draft, setDraft] = useState<GenerateResult | null>(null);
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [teams, setTeams] = useState<Team[]>([]);
+  const [me, setMe] = useState<{ role: string; employeeId: string | null } | null>(null);
+  const [defaultAssigneeId, setDefaultAssigneeId] = useState("");
+  const [loading, setLoading] = useState<"draft" | "persist" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/test/employees").then((r) => r.json()).then((json) => {
+      if (json.data) setEmployees(json.data);
+    });
+    fetch("/api/test/teams").then((r) => r.json()).then((json) => {
+      if (json.data) setTeams(json.data);
+    });
+    apiFetch<{ role: string; employee: { id: string } | null }>("/auth/me").then((res) => {
+      if (res.data) setMe({ role: res.data.role, employeeId: res.data.employee?.id ?? null });
+    });
+  }, []);
+
+  const isLead = me?.role === "tech_lead" || me?.role === "sales_lead";
+  const ownTeam = isLead && me?.employeeId ? teams.find((t) => t.teamLeadId === me.employeeId) ?? null : null;
+  const assignableEmployees = isLead ? employees.filter((emp) => emp.teamId === ownTeam?.id) : employees;
+
+  async function handleGenerate(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setDraft(null);
+    setLoading("draft");
+    const res = await apiFetch<GenerateResult>(`/work-units/${workUnit.id}/generate-tasks`, {
+      method: "POST",
+      body: JSON.stringify({ description: description || undefined }),
+    });
+    setLoading(null);
+    if (res.error) {
+      setError(`${res.error.code}: ${res.error.message}`);
+      return;
+    }
+    setDraft(res.data);
+  }
+
+  async function handlePersist() {
+    if (!defaultAssigneeId) {
+      setError("Pick a default assignee before persisting.");
+      return;
+    }
+    setError(null);
+    setLoading("persist");
+    const res = await apiFetch(`/work-units/${workUnit.id}/generate-tasks`, {
+      method: "POST",
+      body: JSON.stringify({ description: description || undefined, persist: true, defaultAssigneeId }),
+    });
+    setLoading(null);
+    if (res.error) {
+      setError(`${res.error.code}: ${res.error.message}`);
+      return;
+    }
+    setDraft(null);
+    onPersisted();
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Generate Tasks with AI (POST /work-units/:id/generate-tasks)</CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        <form onSubmit={handleGenerate} className="flex flex-col gap-2">
+          <Label>Project description (falls back to the WorkUnit&apos;s saved description)</Label>
+          <textarea
+            className={textareaClass}
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="Describe the project/campaign so the LLM can break it into sub-units and tasks…"
+          />
+          <Button type="submit" size="sm" className="w-fit" disabled={loading !== null}>
+            {loading === "draft" ? "Generating…" : "Preview draft"}
+          </Button>
+        </form>
+
+        {error && <p className="text-sm text-destructive">{error}</p>}
+
+        {draft && (
+          <div className="flex flex-col gap-3 rounded border p-3">
+            <p className="text-sm text-muted-foreground">
+              Mode: <Badge variant="outline">{draft.mode}</Badge> — {draft.subUnits.length} {draft.labels?.subUnit ?? "sub-unit"}(s) proposed. Nothing has been saved yet.
+            </p>
+            {draft.subUnits.map((su, i) => (
+              <div key={i} className="rounded border p-2">
+                <p className="font-medium text-sm">{su.name}</p>
+                <ul className="ml-4 list-disc text-sm text-muted-foreground">
+                  {su.workItems.map((wi, j) => (
+                    <li key={j}>
+                      {wi.title}
+                      {draft.mode === "atomic" ? ` — ${wi.taskPoints ?? "?"} pts` : ` — target ${wi.targetValue ?? "?"}`}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+
+            <div className="flex items-end gap-2">
+              <div className="flex flex-col gap-1.5">
+                <Label>Assign every generated WorkItem to</Label>
+                <select
+                  className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                  value={defaultAssigneeId}
+                  onChange={(e) => setDefaultAssigneeId(e.target.value)}
+                >
+                  <option value="">Select an employee…</option>
+                  {assignableEmployees.map((emp) => (
+                    <option key={emp.id} value={emp.id}>{emp.fullName} ({emp.role})</option>
+                  ))}
+                </select>
+              </div>
+              <Button type="button" size="sm" onClick={handlePersist} disabled={loading !== null}>
+                {loading === "persist" ? "Saving…" : "Persist to DB"}
+              </Button>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 function NewSubUnitForm({ workUnitId, onCreated }: { workUnitId: string; onCreated: () => void }) {
   const [name, setName] = useState("");
@@ -199,6 +352,11 @@ export default function WorkUnitDetailPage() {
         <h1 className="text-2xl font-bold">{workUnit.name}</h1>
         <Badge variant="outline">{workUnit.status}</Badge>
       </div>
+      {workUnit.description && (
+        <p className="text-sm text-muted-foreground whitespace-pre-wrap">{workUnit.description}</p>
+      )}
+
+      <GenerateTasksPanel workUnit={workUnit} onPersisted={refresh} />
 
       <NewSubUnitForm workUnitId={workUnit.id} onCreated={refresh} />
 
