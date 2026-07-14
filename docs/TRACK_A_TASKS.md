@@ -60,7 +60,9 @@ Per `progress.md`, Phase 0's code is mostly written but unverified against a rea
 - [x] `POST /api/v1/employees` — Admin/HR; creates employee + `base_salary` + department/team assignment
 - [x] `PATCH /api/v1/employees/:id` — Admin/HR; editable fields: salary, department, team, status, `device_uid` mapping (field is reserved for the deferred biometric device-sync phase — just store the value, do not build anything that acts on it)
 - [x] `DELETE /api/v1/employees/:id` — Admin only; soft-delete (`status → inactive`, never a hard delete)
+- [x] Reactivate — **added 2026-07-14**, was a UI gap (the API already supported it via `PATCH .../status: "active"`, same FINANCE_ROLES gate as the rest of the edit form — not Admin-only like deactivate). "Reactivate employee" button on the detail page, shown when `status === "inactive"`.
 - [x] Dashboard: employee list (searchable/filterable table), employee detail page, create/edit form
+- [x] Employee detail attendance panel — **added 2026-07-14**: `components/attendance/employee-attendance-panel.tsx`, month picker, Present/Half-days/Late(approved)/Unpaid-leave stats pulled from the existing `GET /attendance` + `GET /attendance/:id/summary` endpoints, plus an explicitly-labeled "Absent (est.)" figure (working days so far this month, Mon–Sat, minus present minus unpaid leave — there's no holiday calendar in the schema, so this is a visible estimate, not a payroll figure). Visible to Admin/HR and to the employee viewing their own record; not specially extended to Lead-of-team since no other part of this page differentiates Leads either (the underlying API would 403 for anyone else, surfaced as the panel's error state).
 - [x] `components/employees/` — table, form, detail card
 
 **🟢 Open decision — resolved 2026-07-13 (asked Umang directly):**

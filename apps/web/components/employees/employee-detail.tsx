@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmployeeAttendancePanel } from "@/components/attendance/employee-attendance-panel";
 
 type Employee = {
   id: string;
@@ -35,10 +36,12 @@ export function EmployeeDetail({
   employeeId,
   canManage,
   isAdmin,
+  canViewAttendance,
 }: {
   employeeId: string;
   canManage: boolean;
   isAdmin: boolean;
+  canViewAttendance: boolean;
 }) {
   const router = useRouter();
   const [employee, setEmployee] = useState<Employee | null>(null);
@@ -110,6 +113,20 @@ export function EmployeeDetail({
       return;
     }
     await getJson(await fetch(`/api/v1/employees/${employeeId}`, { method: "DELETE" }));
+    load();
+  }
+
+  async function onReactivate() {
+    if (!confirm("Reactivate this employee? Status will be set back to active.")) {
+      return;
+    }
+    await getJson(
+      await fetch(`/api/v1/employees/${employeeId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "active" }),
+      }),
+    );
     load();
   }
 
@@ -230,11 +247,23 @@ export function EmployeeDetail({
         </Card>
       )}
 
-      {isAdmin && employee.status === "active" && (
-        <Button variant="destructive" onClick={onDeactivate} className="w-fit">
-          Deactivate employee
-        </Button>
-      )}
+      {canViewAttendance && <EmployeeAttendancePanel employeeId={employeeId} />}
+
+      <div className="flex gap-3">
+        {isAdmin && employee.status === "active" && (
+          <Button variant="destructive" onClick={onDeactivate} className="w-fit">
+            Deactivate employee
+          </Button>
+        )}
+        {/* Reactivation uses PATCH (status field), which is FINANCE_ROLES-gated
+            on the API side, same as the rest of the edit form above — not
+            Admin-only like deactivation (DELETE), so canManage is the right check. */}
+        {canManage && employee.status === "inactive" && (
+          <Button onClick={onReactivate} className="w-fit">
+            Reactivate employee
+          </Button>
+        )}
+      </div>
 
       <Button variant="outline" className="w-fit" onClick={() => router.push("/employees")}>
         Back to list
