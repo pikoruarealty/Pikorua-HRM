@@ -24,6 +24,7 @@ These are common ground between Track A and Track B. A local `.githooks/pre-comm
 - `apps/web/lib/db/` — Prisma client singleton
 - `apps/web/components/ui/` — shared shadcn primitives
 - `apps/web/lib/requests/reimbursements.ts` — cross-track contract; **Track B implements, Track A only calls** `getApprovedReimbursementTotal()`
+- `apps/web/lib/requests/leave.ts` — cross-track contract added 2026-07-13 (not in the original Phase 0 agreement — flag to Bhavarth); **Track B implements, Track A only calls** `getApprovedUnpaidLeaveDays()`
 - `apps/web/lib/recognition/employee-of-month.ts` — cross-track contract; **Track B implements, Track A only calls** `getEmployeeOfMonthStatus()`
 
 **AI rule:** before editing any file on this list — whether it's the file you were asked to change or one you'd touch as a side effect of a plan already in progress — stop and flag it to the user first. This overrides an in-progress plan; re-confirm even if the file wasn't called out when the plan was approved.

@@ -12,6 +12,7 @@ const LINKS: { href: string; label: string; financeOnly?: boolean }[] = [
   { href: "/employees", label: "Employees" },
   { href: "/teams", label: "Teams" },
   { href: "/departments", label: "Departments", financeOnly: true },
+  { href: "/attendance", label: "Attendance" },
 ];
 
 export function DashboardNav({

@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { requireRole, isLeadRole, AuthzError, Role, FINANCE_ROLES } from "@/lib/rbac";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
+import { HHMM_REGEX } from "@/lib/attendance/time";
 
 // Track A. GET /api/v1/teams — Admin/HR see all, Lead/Employee scoped to own
 // department (server-side). POST — Admin/HR only.
@@ -10,6 +11,8 @@ const createSchema = z.object({
   department_id: z.string().uuid(),
   name: z.string().min(1),
   team_lead_id: z.string().uuid(),
+  // "HH:MM" 24h — used by attendance summary to compute the team's late count.
+  expected_start_time: z.string().regex(HHMM_REGEX).nullable().optional(),
 });
 
 export async function GET() {
@@ -69,7 +72,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const { department_id, name, team_lead_id } = parsed.data;
+  const { department_id, name, team_lead_id, expected_start_time } = parsed.data;
 
   const department = await prisma.department.findUnique({ where: { id: department_id } });
   if (!department) {
@@ -89,7 +92,12 @@ export async function POST(req: Request) {
   }
 
   const team = await prisma.team.create({
-    data: { departmentId: department_id, name, teamLeadId: team_lead_id },
+    data: {
+      departmentId: department_id,
+      name,
+      teamLeadId: team_lead_id,
+      expectedStartTime: expected_start_time ?? null,
+    },
     include: {
       department: { select: { id: true, name: true, typeKey: true } },
       teamLead: { select: { id: true, fullName: true } },

@@ -21,6 +21,7 @@ type Team = {
   department: { id: string; name: string; typeKey: string };
   teamLeadId: string | null;
   teamLead: { id: string; fullName: string } | null;
+  expectedStartTime: string | null;
 };
 
 type Department = { id: string; name: string; typeKey: string };
@@ -106,6 +107,7 @@ export function TeamsScreen({ canManage }: { canManage: boolean }) {
                   <TableHead>Name</TableHead>
                   <TableHead>Department</TableHead>
                   <TableHead>Team lead</TableHead>
+                  <TableHead>Expected start</TableHead>
                   {canManage && <TableHead />}
                 </TableRow>
               </TableHeader>
@@ -115,6 +117,7 @@ export function TeamsScreen({ canManage }: { canManage: boolean }) {
                     <TableCell>{t.name}</TableCell>
                     <TableCell>{t.department.name}</TableCell>
                     <TableCell>{t.teamLead?.fullName ?? "— unassigned —"}</TableCell>
+                    <TableCell>{t.expectedStartTime ?? "— not set —"}</TableCell>
                     {canManage && (
                       <TableCell>
                         <div className="flex gap-2">
@@ -167,6 +170,7 @@ function CreateTeamForm({
   const [name, setName] = useState("");
   const [departmentId, setDepartmentId] = useState("");
   const [teamLeadId, setTeamLeadId] = useState("");
+  const [expectedStartTime, setExpectedStartTime] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -183,12 +187,14 @@ function CreateTeamForm({
             name,
             department_id: departmentId,
             team_lead_id: teamLeadId,
+            expected_start_time: expectedStartTime || null,
           }),
         }),
       );
       setName("");
       setDepartmentId("");
       setTeamLeadId("");
+      setExpectedStartTime("");
       onCreated();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to create team.");
@@ -237,6 +243,15 @@ function CreateTeamForm({
               required
             />
           </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="expected_start_time">Expected start (HH:MM)</Label>
+            <Input
+              id="expected_start_time"
+              type="time"
+              value={expectedStartTime}
+              onChange={(e) => setExpectedStartTime(e.target.value)}
+            />
+          </div>
           {error && <p className="text-sm text-destructive">{error}</p>}
           <Button type="submit" disabled={submitting}>
             {submitting ? "Creating…" : "Create team"}
@@ -250,6 +265,7 @@ function CreateTeamForm({
 function EditTeamForm({ team, onSaved }: { team: Team; onSaved: () => void }) {
   const [name, setName] = useState(team.name);
   const [teamLeadId, setTeamLeadId] = useState(team.teamLeadId ?? "");
+  const [expectedStartTime, setExpectedStartTime] = useState(team.expectedStartTime ?? "");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -265,6 +281,7 @@ function EditTeamForm({ team, onSaved }: { team: Team; onSaved: () => void }) {
           body: JSON.stringify({
             name,
             ...(teamLeadId ? { team_lead_id: teamLeadId } : {}),
+            expected_start_time: expectedStartTime || null,
           }),
         }),
       );
@@ -293,6 +310,15 @@ function EditTeamForm({ team, onSaved }: { team: Team; onSaved: () => void }) {
               id="edit_lead"
               value={teamLeadId}
               onChange={(e) => setTeamLeadId(e.target.value)}
+            />
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="edit_expected_start_time">Expected start (HH:MM)</Label>
+            <Input
+              id="edit_expected_start_time"
+              type="time"
+              value={expectedStartTime}
+              onChange={(e) => setExpectedStartTime(e.target.value)}
             />
           </div>
           {error && <p className="text-sm text-destructive">{error}</p>}

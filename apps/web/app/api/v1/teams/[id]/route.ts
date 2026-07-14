@@ -4,11 +4,13 @@ import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { requireRole, isLeadRole, AuthzError, FINANCE_ROLES } from "@/lib/rbac";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
+import { HHMM_REGEX } from "@/lib/attendance/time";
 
 // Track A. PATCH /api/v1/teams/:id — Admin/HR; reassign lead and/or rename.
 const patchSchema = z.object({
   name: z.string().min(1).optional(),
   team_lead_id: z.string().uuid().optional(),
+  expected_start_time: z.string().regex(HHMM_REGEX).nullable().optional(),
 });
 
 export async function PATCH(
@@ -32,7 +34,10 @@ export async function PATCH(
 
   const parsed = patchSchema.safeParse(body);
   if (!parsed.success) {
-    return failFor(ErrorCode.VALIDATION, "name and/or team_lead_id must be valid.");
+    return failFor(
+      ErrorCode.VALIDATION,
+      "name, team_lead_id, and/or expected_start_time must be valid.",
+    );
   }
 
   const team = await prisma.team.findUnique({ where: { id: params.id } });
@@ -60,6 +65,9 @@ export async function PATCH(
       ...(parsed.data.name !== undefined ? { name: parsed.data.name } : {}),
       ...(parsed.data.team_lead_id !== undefined
         ? { teamLeadId: parsed.data.team_lead_id }
+        : {}),
+      ...(parsed.data.expected_start_time !== undefined
+        ? { expectedStartTime: parsed.data.expected_start_time }
         : {}),
     },
     include: {

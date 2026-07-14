@@ -3,7 +3,7 @@
 > Living status doc. Update after every meaningful change (standing project rule).
 > Source of truth for scope = [docs/](docs/) (PRD, SCHEMA, IMPLEMENTATION_PLAN, API_SPEC).
 
-**Last updated:** 2026-07-13 (Track A Milestone 1 — Org Structure Foundations — completed)
+**Last updated:** 2026-07-14 (Track A Milestone 2 — Attendance — completed)
 
 ---
 
@@ -55,7 +55,7 @@ Employees · Departments/Teams/Hierarchy config · Attendance (manual) · Payrol
 |---|---|
 | Employee CRUD + department/team management | ✅ |
 | `department_labels` config UI | ✅ |
-| Manual Clock In/Out + HR/Admin approval & edit screen | ⬜ |
+| Manual Clock In/Out + HR/Admin approval & edit screen | ✅ |
 | Payroll config + payslip generation (manual fields + auto deductions + reimbursement pull-in + EoM ref) | ⬜ |
 
 ### Milestone 1 — Org Structure Foundations ✅ (2026-07-13)
@@ -66,6 +66,15 @@ Verified live against the seeded DB (login → API → role-scoped response for 
 - **Employees**: full CRUD at `app/api/v1/employees[, /:id]` — role-scoped (Admin/HR all, Lead own team, Employee self); `base_salary` excluded from the response for non-finance roles (golden RBAC rule); `DELETE` is soft-delete only (`status → inactive`). Dashboard at `app/(dashboard)/employees[, /new, /:id]`, `components/employees/`.
 - **Open decision resolved**: `POST /employees` provisions the linked `User` login in the same call — server generates a temporary password (returned once in the response, never persisted in plaintext) unless the caller supplies one.
 - **New shared-adjacent additions** (not on the CLAUDE.md shared-file list, but touched by both tracks going forward — flag before restructuring): `app/(auth)/login` (login page — a Phase 0 gap; needed to browser-test any dashboard screen), `app/(dashboard)/layout.tsx` + `components/dashboard-nav.tsx` (auth-gated shell + top nav; Track B adds its own links here as its screens land).
+
+### Milestone 2 — Attendance ✅ (2026-07-14)
+Verified live against the seeded DB, not just build-checked: clocked in/out as a real seeded employee, confirmed duplicate clock-in/out both correctly return `409`, approved as Admin, and pulled the resulting summary — got `late_count: 1` (team's `expectedStartTime` was `09:00`, clock-in was `12:13` local) and `half_day_count: 1` (0 actual worked hours) for one employee, and confirmed a team with no `expectedStartTime` configured returns `late_count: 0` with an explicit `late_tracking_unavailable` note rather than a silently-wrong zero. Also verified RBAC: employee gets `403` approving their own record, a Team Lead's `GET /attendance` only returns their own team's records, and an employee gets `403` requesting another employee's summary.
+
+- **Clock in/out**: `POST /api/v1/attendance/{clock-in,clock-out}` — server-timestamped, relies on the existing `@@unique([employeeId, date])` constraint; open to any authenticated user with a linked employee record (not just `EMPLOYEE_ROLES` — Leads/Admin/HR clock in too).
+- **Review & approval**: `GET /api/v1/attendance` (role-scoped list), `GET /api/v1/attendance/:employee_id/summary` (approved-only late/half-day/unpaid-leave counts), `PATCH /api/v1/attendance/:id/edit`, `PATCH /api/v1/attendance/:id/approve`. Dashboard at `app/(dashboard)/attendance`, `components/attendance/attendance-screen.tsx`.
+- **Open decision resolved**: late threshold is **team-wise**, not global — new `Team.expectedStartTime` field ("HH:MM", nullable, editable from the Teams screen). A schema.prisma edit, flagged in CLAUDE.md's shared-file list.
+- **New cross-track contract** (not in the original Phase 0 agreement — flag to Bhavarth): `getApprovedUnpaidLeaveDays()` in `apps/web/lib/requests/leave.ts`, stubbed the same way as the two original cross-track helpers. The summary endpoint catches its `NotImplementedError` specifically and reports `unpaid_leave_count: null` with a note, rather than failing the whole endpoint.
+- Full details: [docs/TRACK_A_TASKS.md](docs/TRACK_A_TASKS.md) Milestone 2.
 
 ## Track B — Work, Requests & Culture (owner: Bhavarth)
 Work units/tasks · Daily planning/EOD · Requests · Recognition · Notifications · Announcements · Docs · Events · Assets stub

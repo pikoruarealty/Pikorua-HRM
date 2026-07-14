@@ -70,24 +70,28 @@ Combined: `POST /employees` provisions the `User` row in the same call. Server g
 
 ---
 
-## Milestone 2 — Attendance
+## Milestone 2 — Attendance ✅ done 2026-07-14
 
 ### 2.1 Employee-facing clock in/out
-- [ ] `POST /api/v1/attendance/clock-in` — Employee role; server-timestamps `clock_in_raw`; creates today's row if absent. Schema already has a `@@unique([employeeId, date])` constraint on `attendance_records`, which prevents duplicate rows for the same day — rely on that rather than re-implementing the check.
-- [ ] `POST /api/v1/attendance/clock-out` — Employee role; server-timestamps `clock_out_raw` on today's row
-- [ ] Compute `total_hours` + `is_half_day` (< 5 hrs total) inline in the clock-out handler once both timestamps exist (per Implementation Plan §7 — no separate cron/job needed for this specific computation)
-- [ ] Dashboard: Clock In / Clock Out widget on the employee's own dashboard home
+- [x] `POST /api/v1/attendance/clock-in` — server-timestamps `clock_in_raw`; creates today's row if absent, relying on the existing `@@unique([employeeId, date])` constraint. Open to **any authenticated user with a linked employee record**, not just `EMPLOYEE_ROLES` — attendance applies org-wide (Leads/Admin/HR are employees too), so the API_SPEC's "Employee" role shorthand was read as "the acting individual," not the RBAC employee-role group. Revisit if that reading turns out wrong.
+- [x] `POST /api/v1/attendance/clock-out` — server-timestamps `clock_out_raw`
+- [x] Compute `total_hours` + `is_half_day` inline at clock-out (`lib/attendance/time.ts` `computeHours()`), recomputed later from the *approved* times on edit/approve
+- [x] Dashboard: Clock In / Clock Out widget (`components/attendance/attendance-screen.tsx`)
 
 ### 2.2 HR/Admin review & approval
-- [ ] `GET /api/v1/attendance` — Admin/HR (all), Lead (own team), Employee (self); filters `employee_id`, `date_from`, `date_to`, `approval_status`
-- [ ] `GET /api/v1/attendance/:employee_id/summary` — monthly summary (late count, half-days, unpaid leave days), computed from **approved-only** records — this is the exact feed payroll (Milestone 3) will call
-- [ ] `PATCH /api/v1/attendance/:id/edit` — Admin/HR; edits `clock_in_approved`/`clock_out_approved`, defaulting from the raw values if not otherwise set. Raw values are preserved in separate columns (`clock_in_raw`/`clock_out_raw`) for audit — never overwrite them.
-- [ ] `PATCH /api/v1/attendance/:id/approve` — Admin/HR; sets `approval_status = approved`, `approved_by`, `approved_at`
-- [ ] Dashboard: HR/Admin Attendance Review screen — table of pending/approved records, inline edit, approve action
-- [ ] `components/attendance/` — clock widget, review table, edit dialog
+- [x] `GET /api/v1/attendance` — Admin/HR (all, optional `employee_id` filter), Lead (own team only, server-enforced), Employee (self only); filters `date_from`, `date_to`, `approval_status`
+- [x] `GET /api/v1/attendance/:employee_id/summary?month=&year=` — approved-only late/half-day/unpaid-leave counts (see below). Route folder is `[id]` not `[employee_id]` — Next.js requires one dynamic-segment name per path level and `.../[id]/edit` + `.../[id]/approve` use the attendance *record* id at that same level; the URL and semantics still match API_SPEC.md exactly, only the internal folder name differs.
+- [x] `PATCH /api/v1/attendance/:id/edit` — Admin/HR; edits `clock_in_approved`/`clock_out_approved`, recomputes `total_hours`/`is_half_day` from the resulting effective (approved-or-raw) times. Raw values never overwritten.
+- [x] `PATCH /api/v1/attendance/:id/approve` — Admin/HR; defaults approved times from raw if not separately edited, requires both a clock-in and clock-out to exist (422 otherwise), recomputes hours, sets `approval_status/approved_by/approved_at`
+- [x] Dashboard: HR/Admin Attendance Review screen — status filter, inline edit form, approve button (`components/attendance/attendance-screen.tsx`)
+- [x] `components/attendance/` — clock widget + review table + edit form in one screen component
+- [x] `/attendance` nav link added to `components/dashboard-nav.tsx`
 
-**🟡 Open decision — blocks part of Milestone 3, resolve here:**
-"Late" is not a stored field anywhere in the schema — it must be derived at payroll time by comparing `clock_in_approved` against an expected office start time. No such expected-start-time config currently exists in `PayrollConfig` or elsewhere. This needs a decision (e.g., add an `expectedStartTime` field to `PayrollConfig`) before the payroll deduction logic in Milestone 3 can compute `late_count`. Since `PayrollConfig` lives in the shared `prisma/schema.prisma`, adding a field there is still a schema migration and should be flagged per the shared-file rule above, even though the table itself is Track A's own.
+**🟢 Open decision — resolved 2026-07-14 (asked Umang directly):**
+"Late" threshold is **team-wise**, not a global config: added `Team.expectedStartTime` ("HH:MM" 24h, nullable, Admin/HR-editable via the Teams screen — see Milestone 1 Teams UI). A team with no `expectedStartTime` set skips late-tracking for its members' records (summary response says so explicitly via `notes.late_tracking_unavailable`, never silently reports `0`). This is a `prisma/schema.prisma` edit — flagged in `CLAUDE.md`'s shared-file list; still needs a heads-up to Bhavarth before this branch merges, since Team is part of the shared-foundation section of SCHEMA.md even though Track A owns it.
+
+**🟢 New cross-track contract — added 2026-07-14, not in the original Phase 0 agreement:**
+The attendance summary also needs "unpaid leave days," which lives in Track B's `requests` table (`type=leave_unpaid`, `status=approved`), not in `attendance_records`. Added `getApprovedUnpaidLeaveDays(employeeId, month, year)` in `apps/web/lib/requests/leave.ts`, following the exact stub pattern of `getApprovedReimbursementTotal` — throws `NotImplementedError` until Track B implements it. The summary endpoint catches that specific error and returns `unpaid_leave_count: null` with a `notes.unpaid_leave_unavailable` explanation, rather than failing the whole endpoint or silently reporting `0`. **Flag this new contract to Bhavarth** — it wasn't agreed in the original Implementation Plan §5, which only named the reimbursement-total and Employee-of-Month helpers.
 
 ---
 

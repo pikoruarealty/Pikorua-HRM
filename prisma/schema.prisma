@@ -165,6 +165,10 @@ model Team {
   name         String
   teamLeadId   String?  @map("team_lead_id") @db.Uuid
   teamLead     Employee? @relation("TeamLead", fields: [teamLeadId], references: [id])
+  // "HH:MM" 24h, server-local time. Admin/HR-set per team; null = no fixed
+  // start time configured, so late-tracking is skipped for that team's
+  // attendance records (Track A decision, 2026-07-13 — see docs/TRACK_A_TASKS.md).
+  expectedStartTime String? @map("expected_start_time")
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   members       Employee[]     @relation("TeamMembers")
