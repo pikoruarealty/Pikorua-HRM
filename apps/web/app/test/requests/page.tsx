@@ -20,6 +20,7 @@ type RequestRow = {
 
 export default function RequestsPage() {
   const [requests, setRequests] = useState<RequestRow[]>([]);
+  const [canApprove, setCanApprove] = useState(false);
   const [type, setType] = useState("leave_paid");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -35,6 +36,11 @@ export default function RequestsPage() {
 
   useEffect(() => {
     refresh();
+    // Golden rule: only Admin/HR can approve/reject — hide the buttons for
+    // everyone else instead of letting them click and hit a 403.
+    apiFetch<{ role: string }>("/auth/me").then((res) => {
+      if (res.data) setCanApprove(res.data.role === "admin" || res.data.role === "hr");
+    });
   }, []);
 
   const isLeave = type === "leave_paid" || type === "leave_unpaid";
@@ -129,7 +135,7 @@ export default function RequestsPage() {
               </span>
               <div className="flex items-center gap-2">
                 <Badge variant="outline">{r.status}</Badge>
-                {r.status === "pending" && (
+                {r.status === "pending" && canApprove && (
                   <>
                     <Button size="sm" variant="outline" onClick={() => decide(r.id, "approve")}>Approve</Button>
                     <Button size="sm" variant="destructive" onClick={() => decide(r.id, "reject")}>Reject</Button>

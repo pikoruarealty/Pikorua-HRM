@@ -17,8 +17,13 @@ type WorkUnit = {
   teamLeadId?: string;
 };
 
+type Department = { id: string; name: string };
+type Employee = { id: string; fullName: string; role: string };
+
 export default function WorkUnitsPage() {
   const [workUnits, setWorkUnits] = useState<WorkUnit[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
+  const [employees, setEmployees] = useState<Employee[]>([]);
   const [name, setName] = useState("");
   const [departmentId, setDepartmentId] = useState("");
   const [teamLeadId, setTeamLeadId] = useState("");
@@ -32,6 +37,12 @@ export default function WorkUnitsPage() {
 
   useEffect(() => {
     refresh();
+    fetch("/api/test/departments").then((r) => r.json()).then((json) => {
+      if (json.data) setDepartments(json.data);
+    });
+    fetch("/api/test/employees").then((r) => r.json()).then((json) => {
+      if (json.data) setEmployees(json.data);
+    });
   }, []);
 
   async function handleCreate(e: React.FormEvent) {
@@ -69,12 +80,31 @@ export default function WorkUnitsPage() {
               <Input value={name} onChange={(e) => setName(e.target.value)} required />
             </div>
             <div className="flex flex-col gap-1.5">
-              <Label>Department ID (UUID)</Label>
-              <Input value={departmentId} onChange={(e) => setDepartmentId(e.target.value)} required />
+              <Label>Department</Label>
+              <select
+                className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                value={departmentId}
+                onChange={(e) => setDepartmentId(e.target.value)}
+                required
+              >
+                <option value="">Select a department…</option>
+                {departments.map((d) => (
+                  <option key={d.id} value={d.id}>{d.name}</option>
+                ))}
+              </select>
             </div>
             <div className="flex flex-col gap-1.5 sm:col-span-2">
-              <Label>Team Lead ID (UUID, optional — Leads default to self)</Label>
-              <Input value={teamLeadId} onChange={(e) => setTeamLeadId(e.target.value)} />
+              <Label>Team Lead (optional — Leads default to self)</Label>
+              <select
+                className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                value={teamLeadId}
+                onChange={(e) => setTeamLeadId(e.target.value)}
+              >
+                <option value="">(default to self)</option>
+                {employees.map((e) => (
+                  <option key={e.id} value={e.id}>{e.fullName} ({e.role})</option>
+                ))}
+              </select>
             </div>
             {error && <p className="text-sm text-destructive sm:col-span-2">{error}</p>}
             <Button type="submit" disabled={loading} className="sm:col-span-2 w-fit">

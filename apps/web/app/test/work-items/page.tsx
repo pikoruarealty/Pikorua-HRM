@@ -17,6 +17,56 @@ type WorkItem = {
   currentValue?: string | null;
 };
 
+function WorkItemCard({
+  wi,
+  onComplete,
+  onUpdateProgress,
+  draft,
+  onDraftChange,
+}: {
+  wi: WorkItem;
+  onComplete: (id: string) => void;
+  onUpdateProgress: (id: string) => void;
+  draft: string;
+  onDraftChange: (v: string) => void;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center justify-between text-base">
+          <span>{wi.title} <span className="text-muted-foreground text-sm">({wi.mode})</span></span>
+          <Badge variant="outline">{wi.status}</Badge>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="flex items-center gap-3">
+        {wi.mode === "atomic" ? (
+          <>
+            <span className="text-sm text-muted-foreground">{wi.taskPoints} pts</span>
+            {wi.status !== "completed" && (
+              <Button size="sm" onClick={() => onComplete(wi.id)}>Complete</Button>
+            )}
+          </>
+        ) : (
+          <>
+            <span className="text-sm text-muted-foreground">{wi.currentValue}/{wi.targetValue}</span>
+            {wi.status !== "completed" && (
+              <>
+                <Input
+                  className="w-24"
+                  placeholder="new value"
+                  value={draft}
+                  onChange={(e) => onDraftChange(e.target.value)}
+                />
+                <Button size="sm" onClick={() => onUpdateProgress(wi.id)}>Update progress</Button>
+              </>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function MyWorkItemsPage() {
   const [items, setItems] = useState<WorkItem[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -50,42 +100,43 @@ export default function MyWorkItemsPage() {
     refresh();
   }
 
+  const active = items.filter((wi) => wi.status !== "completed");
+  const completed = items.filter((wi) => wi.status === "completed");
+
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-6">
       <h1 className="text-2xl font-bold">My Work Items (GET /work-items/mine)</h1>
       {error && <p className="text-sm text-destructive">{error}</p>}
-      {items.length === 0 && <p className="text-sm text-muted-foreground">No work items assigned.</p>}
-      {items.map((wi) => (
-        <Card key={wi.id}>
-          <CardHeader>
-            <CardTitle className="flex items-center justify-between text-base">
-              <span>{wi.title} <span className="text-muted-foreground text-sm">({wi.mode})</span></span>
-              <Badge variant="outline">{wi.status}</Badge>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="flex items-center gap-3">
-            {wi.mode === "atomic" ? (
-              <>
-                <span className="text-sm text-muted-foreground">{wi.taskPoints} pts</span>
-                <Button size="sm" disabled={wi.status === "completed"} onClick={() => complete(wi.id)}>
-                  {wi.status === "completed" ? "Completed" : "Complete"}
-                </Button>
-              </>
-            ) : (
-              <>
-                <span className="text-sm text-muted-foreground">{wi.currentValue}/{wi.targetValue}</span>
-                <Input
-                  className="w-24"
-                  placeholder="new value"
-                  value={currentValueDrafts[wi.id] ?? ""}
-                  onChange={(e) => setCurrentValueDrafts((d) => ({ ...d, [wi.id]: e.target.value }))}
-                />
-                <Button size="sm" onClick={() => updateCurrentValue(wi.id)}>Update progress</Button>
-              </>
-            )}
-          </CardContent>
-        </Card>
-      ))}
+
+      <div className="flex flex-col gap-4">
+        <h2 className="text-lg font-semibold">Active</h2>
+        {active.length === 0 && <p className="text-sm text-muted-foreground">No active work items.</p>}
+        {active.map((wi) => (
+          <WorkItemCard
+            key={wi.id}
+            wi={wi}
+            onComplete={complete}
+            onUpdateProgress={updateCurrentValue}
+            draft={currentValueDrafts[wi.id] ?? ""}
+            onDraftChange={(v) => setCurrentValueDrafts((d) => ({ ...d, [wi.id]: v }))}
+          />
+        ))}
+      </div>
+
+      <div className="flex flex-col gap-4">
+        <h2 className="text-lg font-semibold text-muted-foreground">Completed</h2>
+        {completed.length === 0 && <p className="text-sm text-muted-foreground">Nothing completed yet.</p>}
+        {completed.map((wi) => (
+          <WorkItemCard
+            key={wi.id}
+            wi={wi}
+            onComplete={complete}
+            onUpdateProgress={updateCurrentValue}
+            draft={currentValueDrafts[wi.id] ?? ""}
+            onDraftChange={(v) => setCurrentValueDrafts((d) => ({ ...d, [wi.id]: v }))}
+          />
+        ))}
+      </div>
     </div>
   );
 }

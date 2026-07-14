@@ -1,8 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -19,10 +18,19 @@ type HistoryRow = {
   status: string;
 };
 
+type Employee = { id: string; fullName: string; role: string };
+
 export default function HistoryPage() {
   const [employeeId, setEmployeeId] = useState("");
+  const [employees, setEmployees] = useState<Employee[]>([]);
   const [rows, setRows] = useState<HistoryRow[]>([]);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/test/employees").then((r) => r.json()).then((json) => {
+      if (json.data) setEmployees(json.data);
+    });
+  }, []);
 
   async function lookup(e: React.FormEvent) {
     e.preventDefault();
@@ -45,8 +53,18 @@ export default function HistoryPage() {
         <CardContent>
           <form onSubmit={lookup} className="flex items-end gap-2">
             <div className="flex flex-col gap-1.5">
-              <Label>Employee ID (UUID — Sales/BD metric performer)</Label>
-              <Input value={employeeId} onChange={(e) => setEmployeeId(e.target.value)} required />
+              <Label>Employee (Sales/BD metric performer)</Label>
+              <select
+                className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                value={employeeId}
+                onChange={(e) => setEmployeeId(e.target.value)}
+                required
+              >
+                <option value="">Select an employee…</option>
+                {employees.map((emp) => (
+                  <option key={emp.id} value={emp.id}>{emp.fullName} ({emp.role})</option>
+                ))}
+              </select>
             </div>
             <Button type="submit">Look up</Button>
           </form>

@@ -28,6 +28,9 @@ export default function DailyPlanningPage() {
     refresh();
   }, []);
 
+  const activeItems = mine.filter((wi) => wi.status !== "completed");
+  const completedItems = mine.filter((wi) => wi.status === "completed");
+
   async function submitSelection() {
     setError(null);
     const workItemIds = Object.entries(checked).filter(([, v]) => v).map(([id]) => id);
@@ -48,8 +51,8 @@ export default function DailyPlanningPage() {
           <CardTitle>Select today&apos;s tasks (POST /daily-selections)</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
-          {mine.length === 0 && <p className="text-sm text-muted-foreground">No assigned work items.</p>}
-          {mine.map((wi) => (
+          {activeItems.length === 0 && <p className="text-sm text-muted-foreground">No active work items.</p>}
+          {activeItems.map((wi) => (
             <label key={wi.id} className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
@@ -73,6 +76,20 @@ export default function DailyPlanningPage() {
           {today.map((s) => (
             <div key={s.id} className="rounded border p-2 text-sm">
               {s.workItem?.title} <span className="text-muted-foreground">({s.workItem?.status})</span>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-muted-foreground">Completed</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-2">
+          {completedItems.length === 0 && <p className="text-sm text-muted-foreground">Nothing completed yet.</p>}
+          {completedItems.map((wi) => (
+            <div key={wi.id} className="rounded border p-2 text-sm text-muted-foreground">
+              {wi.title} <span>({wi.status})</span>
             </div>
           ))}
         </CardContent>

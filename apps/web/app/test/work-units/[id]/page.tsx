@@ -56,6 +56,8 @@ function NewSubUnitForm({ workUnitId, onCreated }: { workUnitId: string; onCreat
   );
 }
 
+type Employee = { id: string; fullName: string; role: string };
+
 function NewWorkItemForm({ subUnitId, onCreated }: { subUnitId: string; onCreated: () => void }) {
   const [title, setTitle] = useState("");
   const [assignedTo, setAssignedTo] = useState("");
@@ -65,6 +67,13 @@ function NewWorkItemForm({ subUnitId, onCreated }: { subUnitId: string; onCreate
   const [periodMonth, setPeriodMonth] = useState(String(new Date().getMonth() + 1));
   const [periodYear, setPeriodYear] = useState(String(new Date().getFullYear()));
   const [error, setError] = useState<string | null>(null);
+  const [employees, setEmployees] = useState<Employee[]>([]);
+
+  useEffect(() => {
+    fetch("/api/test/employees").then((r) => r.json()).then((json) => {
+      if (json.data) setEmployees(json.data);
+    });
+  }, []);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -95,8 +104,18 @@ function NewWorkItemForm({ subUnitId, onCreated }: { subUnitId: string; onCreate
         <Input value={title} onChange={(e) => setTitle(e.target.value)} required />
       </div>
       <div className="flex flex-col gap-1.5">
-        <Label>Assigned employee ID (UUID)</Label>
-        <Input value={assignedTo} onChange={(e) => setAssignedTo(e.target.value)} required />
+        <Label>Assigned employee</Label>
+        <select
+          className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+          value={assignedTo}
+          onChange={(e) => setAssignedTo(e.target.value)}
+          required
+        >
+          <option value="">Select an employee…</option>
+          {employees.map((emp) => (
+            <option key={emp.id} value={emp.id}>{emp.fullName} ({emp.role})</option>
+          ))}
+        </select>
       </div>
       <div className="flex flex-col gap-1.5">
         <Label>Mode</Label>
