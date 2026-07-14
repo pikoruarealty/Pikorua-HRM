@@ -1,12 +1,9 @@
 import { z } from "zod";
-import { AttendanceApprovalStatus } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { FINANCE_ROLES, isLeadRole } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
-import { isLateArrival } from "@/lib/attendance/time";
-import { getApprovedUnpaidLeaveDays } from "@/lib/requests/leave";
-import { NotImplementedError } from "@/lib/errors";
+import { getAttendanceSummary } from "@/lib/attendance/summary";
 
 // Track A. GET /api/v1/attendance/:employee_id/summary?month=&year=
 // (folder is named [id], not [employee_id], only because Next.js requires
@@ -15,7 +12,7 @@ import { NotImplementedError } from "@/lib/errors";
 // semantics still match API_SPEC.md exactly: this segment is an employee id.)
 // Admin/HR (any), Lead (own team only), Employee (self only). Computed from
 // **approved-only** attendance records — this is the exact feed payroll
-// (Milestone 3) will call.
+// (Milestone 3) reads too, via lib/attendance/summary.ts.
 const querySchema = z.object({
   month: z.coerce.number().int().min(1).max(12),
   year: z.coerce.number().int().min(2000).max(2100),
@@ -57,66 +54,27 @@ export async function GET(
 
   const employee = await prisma.employee.findUnique({
     where: { id: employeeId },
-    select: { id: true, team: { select: { expectedStartTime: true } } },
+    select: { id: true },
   });
   if (!employee) {
     return failFor(ErrorCode.NOT_FOUND, "Employee not found.");
   }
 
-  const periodStart = new Date(Date.UTC(year, month - 1, 1));
-  const periodEnd = new Date(Date.UTC(year, month, 1)); // exclusive
-
-  const records = await prisma.attendanceRecord.findMany({
-    where: {
-      employeeId,
-      approvalStatus: AttendanceApprovalStatus.approved,
-      date: { gte: periodStart, lt: periodEnd },
-    },
-  });
-
-  const expectedStartTime = employee.team?.expectedStartTime ?? null;
-  let lateCount = 0;
-  let halfDayCount = 0;
-  let lateTrackingUnavailable = false;
-
-  for (const r of records) {
-    if (r.isHalfDay) halfDayCount += 1;
-    if (!expectedStartTime) {
-      lateTrackingUnavailable = true;
-      continue;
-    }
-    // Approved records always have clockInApproved populated by the time
-    // they're approved (see PATCH .../approve) — but guard defensively.
-    if (r.clockInApproved && isLateArrival(r.clockInApproved, expectedStartTime)) {
-      lateCount += 1;
-    }
-  }
-
-  let unpaidLeaveCount: number | null = null;
-  let unpaidLeaveUnavailable = false;
-  try {
-    unpaidLeaveCount = await getApprovedUnpaidLeaveDays(employeeId, month, year);
-  } catch (err) {
-    if (err instanceof NotImplementedError) {
-      unpaidLeaveUnavailable = true;
-    } else {
-      throw err;
-    }
-  }
+  const summary = await getAttendanceSummary(employeeId, month, year);
 
   return ok({
     employee_id: employeeId,
     month,
     year,
-    late_count: lateCount,
-    half_day_count: halfDayCount,
-    unpaid_leave_count: unpaidLeaveCount,
-    approved_record_count: records.length,
+    late_count: summary.lateCount,
+    half_day_count: summary.halfDayCount,
+    unpaid_leave_count: summary.unpaidLeaveCount,
+    approved_record_count: summary.approvedRecordCount,
     notes: {
-      late_tracking_unavailable: lateTrackingUnavailable
+      late_tracking_unavailable: summary.lateTrackingUnavailable
         ? "This employee's team has no expected_start_time configured — late count excludes those days."
         : undefined,
-      unpaid_leave_unavailable: unpaidLeaveUnavailable
+      unpaid_leave_unavailable: summary.unpaidLeaveUnavailable
         ? "Track B has not implemented getApprovedUnpaidLeaveDays yet."
         : undefined,
     },

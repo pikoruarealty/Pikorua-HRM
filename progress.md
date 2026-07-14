@@ -3,7 +3,7 @@
 > Living status doc. Update after every meaningful change (standing project rule).
 > Source of truth for scope = [docs/](docs/) (PRD, SCHEMA, IMPLEMENTATION_PLAN, API_SPEC).
 
-**Last updated:** 2026-07-14 (Track A Milestone 2 — Attendance — completed)
+**Last updated:** 2026-07-14 (Track A Milestone 3 — Payroll — code complete, blocked on Track B for full end-to-end)
 
 ---
 
@@ -56,7 +56,7 @@ Employees · Departments/Teams/Hierarchy config · Attendance (manual) · Payrol
 | Employee CRUD + department/team management | ✅ |
 | `department_labels` config UI | ✅ |
 | Manual Clock In/Out + HR/Admin approval & edit screen | ✅ |
-| Payroll config + payslip generation (manual fields + auto deductions + reimbursement pull-in + EoM ref) | ⬜ |
+| Payroll config + payslip generation (manual fields + auto deductions + reimbursement pull-in + EoM ref) | ⚠️ code complete, blocked on Track B stubs for a full live generation |
 
 ### Milestone 1 — Org Structure Foundations ✅ (2026-07-13)
 Verified live against the seeded DB (login → API → role-scoped response for every endpoint below), not just build-checked.
@@ -75,6 +75,18 @@ Verified live against the seeded DB, not just build-checked: clocked in/out as a
 - **Open decision resolved**: late threshold is **team-wise**, not global — new `Team.expectedStartTime` field ("HH:MM", nullable, editable from the Teams screen). A schema.prisma edit, flagged in CLAUDE.md's shared-file list.
 - **New cross-track contract** (not in the original Phase 0 agreement — flag to Bhavarth): `getApprovedUnpaidLeaveDays()` in `apps/web/lib/requests/leave.ts`, stubbed the same way as the two original cross-track helpers. The summary endpoint catches its `NotImplementedError` specifically and reports `unpaid_leave_count: null` with a note, rather than failing the whole endpoint.
 - Full details: [docs/TRACK_A_TASKS.md](docs/TRACK_A_TASKS.md) Milestone 2.
+
+### Milestone 3 — Payroll ⚠️ code complete 2026-07-14, blocked on Track B for full live verification
+
+- **Payroll config**: `GET/PUT /api/v1/payroll/config`. `GET` is Admin/HR; `PUT` is **Admin only** (tighter than the other FINANCE_ROLES-gated endpoints — matches API_SPEC.md §6 exactly) and always **inserts** a new versioned row keyed by `effective_from`, never overwrites — verified live: set a new rate row effective `2026-08-01`, confirmed a period lookup for `2026-07` still resolves to the original `2026-01-01` row and `2026-08` resolves to the new one (via `getEffectivePayrollConfig` in `lib/payroll/config.ts`). Dashboard at `app/(dashboard)/payroll/config`, `components/payroll/payroll-config-screen.tsx` (edit form only rendered for Admin).
+- **Employee-of-Month reference lookup**: `GET /api/v1/payslips/:employee_id/employee-of-month-status` — Admin/HR. Folder is `[id]` for the same Next.js one-dynamic-segment-per-level reason as `attendance/[id]` (this level also serves the payslip *id* for `GET /payslips/:id` and `PATCH /payslips/:id/finalize`).
+- **Payslip generation**: `POST /api/v1/payslips/generate` — Admin/HR. Pulls late/half-day/unpaid-leave counts from a new shared `lib/attendance/summary.ts` (extracted from the Milestone 2 summary endpoint so both routes compute identically off **approved-only** attendance — the existing summary route was refactored to call it too, confirmed unchanged behavior live after the refactor). Computes `standard_deduction_total` from those counts × the period's effective payroll config. Calls Track B's `getApprovedReimbursementTotal` and `getEmployeeOfMonthStatus` stubs.
+  - **Cross-track NotImplementedError handling — a deliberate asymmetry, not a bug**: `reimbursement_total` directly changes `net_pay`, so a `NotImplementedError` there **blocks generation entirely** (`422`, verified live) rather than silently computing a wrong number — this is the standing "never bluff" rule. `employee_of_month_ref` is explicitly reference-only per API_SPEC.md and never affects `net_pay`, so its `NotImplementedError` degrades to `false` + a note instead of blocking, matching how `unpaid_leave_count` already degrades to `0` + a note in the Milestone 2 summary endpoint. **As of this writing, full end-to-end payslip generation is blocked** until Track B implements `getApprovedReimbursementTotal` — confirmed live (`422 NOT_IMPLEMENTED`), not a Track A bug.
+  - Enforces one payslip per employee per period (`@@unique([employeeId, periodYear, periodMonth])` on the existing schema) — a second `generate` call for the same period returns `409`.
+- **Payslip list/detail/finalize**: `GET /api/v1/payslips` (Admin/HR all + filterable; Employee self + **finalized only**, drafts never visible — verified live: HR/Employee both get scoped empty lists as expected), `GET /api/v1/payslips/:id` (same scoping), `PATCH /api/v1/payslips/:id/finalize` (Admin/HR, `draft → finalized`, `409` if already finalized). Dashboard: `app/(dashboard)/payslips` (list + generation form, generation form only rendered for FINANCE_ROLES) and `app/(dashboard)/payslips/[id]` (breakdown view + Finalize button for FINANCE_ROLES). Both pages confirmed rendering (`200`, no server errors) live for Admin.
+- **RBAC verified live**: Employee gets `403` on `GET /payroll/config` and `POST /payslips/generate`; Admin-only gate confirmed on `PUT /payroll/config` (`403` for HR).
+- No `prisma/schema.prisma` changes were needed — `PayrollConfig`/`Payslip` were already fully modeled from Phase 0; **no new fields were added** (note: the original Milestone 3 handoff mentioned `finalized_at`/`finalized_by` columns and PF/TDS-percent config fields — neither exists in the actual schema, which uses flat late/half-day/unpaid-leave deduction amounts instead. Trusted `schema.prisma`/`docs/SCHEMA.md`/`docs/API_SPEC.md` over the stale handoff text).
+- **Known gap, not yet done**: full live verification of a successful (non-blocked) payslip generation + finalize, since that requires Track B's reimbursement helper. Re-verify once Track B lands it (Milestone 4 item).
 
 ## Track B — Work, Requests & Culture (owner: Bhavarth)
 Work units/tasks · Daily planning/EOD · Requests · Recognition · Notifications · Announcements · Docs · Events · Assets stub
