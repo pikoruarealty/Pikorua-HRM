@@ -85,13 +85,13 @@
 
 **Implementation note:** Reimbursement requests have no `period_month`/`period_year` field of their own (unlike leave's `dateFrom`/`dateTo` range), so `getApprovedReimbursementTotal` scopes the period off `approvedAt`, not `createdAt` — per PRD §5.2/§5.13 ("once approved, added into the payslip"), a reimbursement belongs to whichever month it's *approved* in, not submitted in. Flagged to Umang before editing (shared file); signature unchanged (`(employeeId, month, year) => Promise<number>`), so Track A's payroll call site needs no changes — it just stops throwing `NotImplementedError` and starts getting real totals. `bun run build` clean. Live-verified: reimbursement missing `amount` correctly 422'd; a Team Lead's approval attempt still 403'd (golden rule holds for reimbursement same as leave); HR approved a ₹1500 request and `getApprovedReimbursementTotal` returned 1500 for the current month and 0 for the prior month; a second ₹700 approval brought the total to 2200, while a third (₹9999) request that was *rejected* was correctly excluded from the sum.
 
-### 2.4b Cross-track stub: `getApprovedUnpaidLeaveDays` ⏳ stub added, real impl pending (2026-07-14)
+### 2.4b Cross-track helper: `getApprovedUnpaidLeaveDays` ✅ done (2026-07-14)
 
 **What:** Umang (Track A) hit a gap while building the payroll summary endpoint — unpaid leave days aren't in `attendance_records`, they're `requests.type = leave_unpaid, status = approved`, which Track B owns. Per his selected option, added a 3rd cross-track stub now (not a full implementation): `getApprovedUnpaidLeaveDays(employeeId, month, year): Promise<number>` in `apps/web/lib/requests/reimbursements.ts`, throwing `NotImplementedError("getApprovedUnpaidLeaveDays", "Track B")` — same file/pattern as `getApprovedReimbursementTotal` originally started as. Track A's summary endpoint calls it and should surface the thrown error clearly in dev, not swallow it as zero.
 **Why:** Cross-track dependency raised 2026-07-14; Implementation Plan §5 pattern extended to a 3rd helper.
 **Files:** ⚠️ **SHARED FILE** — `apps/web/lib/requests/reimbursements.ts` (flagged before editing, same as 2.4).
 **RBAC:** N/A (internal helper, no route).
-**Definition of done (real impl, not yet done):** Real day-counting logic — needs a decision on how to count a `leave_unpaid` range (`dateFrom`/`dateTo`) that spans two payroll periods (split across both, or attribute wholly to one — likely `dateFrom`'s period by analogy with attendance-based counting, but unconfirmed). Until then this is a stub only; `bun run build` verified clean with the stub in place.
+**Definition of done (real impl):** ✅ Real day-counting logic implemented in `apps/web/lib/requests/leave.ts` (Track A's import site via `lib/attendance/summary.ts`); the duplicate stub in `lib/requests/reimbursements.ts` was deleted. **Period-spanning decision (assumption, unconfirmed with stakeholder):** a leave range crossing a month boundary is **clipped to the period** — each month counts only the unpaid-leave days that actually fall within it (no double-counting, no month gets days it didn't contain). This is the only option that keeps per-month payroll deductions correct. **Flag to Umang:** Track A's attendance-summary + payslip generation previously caught the `NotImplementedError` and degraded unpaid leave to 0/"unavailable"; they now receive real day counts, so payslip standard-deduction totals change accordingly. **Live-verified** against seeded DB (throwaway script, cleaned up): within-month range (3 days) + boundary-spanning range (Jul 30–Aug 2) correctly counted 5 for July / 2 for August / 0 for June; pending and `leave_paid` requests correctly excluded. `bun run build` + `tsc --noEmit` clean.
 
 ---
 
@@ -154,17 +154,17 @@
 
 **What:** Cross-test the two shared dependencies now that both stubs are real: Track A's payslip generation actually calls `getApprovedReimbursementTotal` and `getEmployeeOfMonthStatus` and gets correct numbers, not thrown errors. Full RBAC pass across all Track B screens (verify Employee/Lead/HR/Admin visibility boundaries match PRD §3 exactly). Shared bug bash.
 **Why:** Implementation Plan §8 Milestone 4, §5.
-**Files:** none new — this is testing/verification across both tracks' existing code.
-**Definition of done:** Generate a real payslip (Track A) for an employee with an approved reimbursement and an Employee-of-the-Month flag, and confirm both values are correctly reflected — this is the actual proof the Phase 0 contract worked end-to-end.
+**Files:** none new to the API — this is testing/verification across both tracks' existing code. Test UI added to drive it manually: `apps/web/app/test/payslips/page.tsx` (generate a payslip + list payslips; surfaces reimbursement total, unpaid-leave day count, and EoM ref so all three cross-track helpers are exercised in one screen). Admin/HR-gated in the UI (golden rule).
+**Definition of done:** Generate a real payslip (Track A) for an employee with an approved reimbursement and an Employee-of-the-Month flag, and confirm both values are correctly reflected — this is the actual proof the Phase 0 contract worked end-to-end. **Status:** all three cross-track helpers are now live (`getApprovedReimbursementTotal`, `getEmployeeOfMonthStatus`, `getApprovedUnpaidLeaveDays`) and individually live-verified; the joint end-to-end payslip run is now doable manually through `/test/payslips` (left for a real manual pass rather than a throwaway script, since it spans both tracks' data).
 
 ---
 
-## Assets stub (low priority)
+## Assets stub (low priority) ✅ done (2026-07-14)
 
 **What:** `GET /assets` placeholder only — do not build real asset management (PRD §5.12, explicitly deferred).
-**Files:** `apps/web/app/api/v1/assets/route.ts` (GET — returns empty/placeholder list).
+**Files:** `apps/web/app/api/v1/assets/route.ts` (GET — returns empty/placeholder list). Test UI: `apps/web/app/test/assets/page.tsx`.
 **RBAC:** Admin/HR.
-**Definition of done:** Endpoint exists and returns a valid (if empty) `{ data, error }` response; nothing more.
+**Definition of done:** ✅ Endpoint exists, returns a valid empty `{ data: [], error: null }` envelope, and is Admin/HR-gated (401 unauthenticated, 403 non-finance). `bun run build` clean. Nothing more built here per the deferral.
 
 ---
 
@@ -176,4 +176,5 @@ Keep this in sync with `progress.md`'s open-decisions section as you resolve or 
 - [ ] Meeting reminder channel — building in-app only (3.5).
 - [ ] Employee of the Month ties — building single-winner (`rank = 1`) only (3.1).
 - [ ] Monthly metric-target reset approach — record your 2.1 decision here once made.
+- [ ] Unpaid-leave period-spanning count (2.4b) — building **clip-to-period** (each month counts only its own unpaid-leave days) unless a stakeholder wants whole-range-to-`dateFrom`'s-period instead.
 - [x] `POST /requests` scope — **resolved 2026-07-13** (stakeholder direction): requests work in hierarchy. Employees, Team Leads, and HR may all file their own leave requests; approval stays Admin/HR only (golden rule, unchanged). Leads' requests are approved by HR/Admin; HR's requests must go up to Admin (self-approval blocked in `approve`/`reject` by comparing the requester's linked `User.id` to the approving session's `userId`). Admin is intentionally excluded from `POST /requests` — there's no one above Admin to approve it, so an Admin-filed request would be permanently stuck pending.

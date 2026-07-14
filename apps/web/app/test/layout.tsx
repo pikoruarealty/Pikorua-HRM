@@ -15,6 +15,8 @@ const NAV = [
   { href: "/test/announcements", label: "Announcements" },
   { href: "/test/documents", label: "Documents" },
   { href: "/test/events", label: "Events" },
+  { href: "/test/payslips", label: "Payslips" },
+  { href: "/test/assets", label: "Assets" },
 ];
 
 // Basic test-UI shell — not the final dashboard design. Gates on a real
