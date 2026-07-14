@@ -81,6 +81,14 @@
 
 **Implementation note:** Reimbursement requests have no `period_month`/`period_year` field of their own (unlike leave's `dateFrom`/`dateTo` range), so `getApprovedReimbursementTotal` scopes the period off `approvedAt`, not `createdAt` — per PRD §5.2/§5.13 ("once approved, added into the payslip"), a reimbursement belongs to whichever month it's *approved* in, not submitted in. Flagged to Umang before editing (shared file); signature unchanged (`(employeeId, month, year) => Promise<number>`), so Track A's payroll call site needs no changes — it just stops throwing `NotImplementedError` and starts getting real totals. `bun run build` clean. Live-verified: reimbursement missing `amount` correctly 422'd; a Team Lead's approval attempt still 403'd (golden rule holds for reimbursement same as leave); HR approved a ₹1500 request and `getApprovedReimbursementTotal` returned 1500 for the current month and 0 for the prior month; a second ₹700 approval brought the total to 2200, while a third (₹9999) request that was *rejected* was correctly excluded from the sum.
 
+### 2.4b Cross-track stub: `getApprovedUnpaidLeaveDays` ⏳ stub added, real impl pending (2026-07-14)
+
+**What:** Umang (Track A) hit a gap while building the payroll summary endpoint — unpaid leave days aren't in `attendance_records`, they're `requests.type = leave_unpaid, status = approved`, which Track B owns. Per his selected option, added a 3rd cross-track stub now (not a full implementation): `getApprovedUnpaidLeaveDays(employeeId, month, year): Promise<number>` in `apps/web/lib/requests/reimbursements.ts`, throwing `NotImplementedError("getApprovedUnpaidLeaveDays", "Track B")` — same file/pattern as `getApprovedReimbursementTotal` originally started as. Track A's summary endpoint calls it and should surface the thrown error clearly in dev, not swallow it as zero.
+**Why:** Cross-track dependency raised 2026-07-14; Implementation Plan §5 pattern extended to a 3rd helper.
+**Files:** ⚠️ **SHARED FILE** — `apps/web/lib/requests/reimbursements.ts` (flagged before editing, same as 2.4).
+**RBAC:** N/A (internal helper, no route).
+**Definition of done (real impl, not yet done):** Real day-counting logic — needs a decision on how to count a `leave_unpaid` range (`dateFrom`/`dateTo`) that spans two payroll periods (split across both, or attribute wholly to one — likely `dateFrom`'s period by analogy with attendance-based counting, but unconfirmed). Until then this is a stub only; `bun run build` verified clean with the stub in place.
+
 ---
 
 ## Milestone 3 — Recognition, Notifications, Announcements, Documents, Events
