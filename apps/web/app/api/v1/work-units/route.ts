@@ -9,6 +9,7 @@ import { WorkUnitStatus } from "@prisma/client";
 
 const createSchema = z.object({
   name: z.string().min(1),
+  description: z.string().max(5000).optional(),
   departmentId: z.string().uuid(),
   teamLeadId: z.string().uuid().optional(),
   status: z.nativeEnum(WorkUnitStatus).optional(),
@@ -34,7 +35,7 @@ export async function POST(req: Request) {
   if (!parsed.success) {
     return failFor(ErrorCode.VALIDATION, "name and departmentId are required.");
   }
-  const { name, status } = parsed.data;
+  const { name, description, status } = parsed.data;
   let { departmentId, teamLeadId } = parsed.data;
 
   const role = session!.role;
@@ -75,6 +76,7 @@ export async function POST(req: Request) {
   const workUnit = await prisma.workUnit.create({
     data: {
       name,
+      description,
       departmentId,
       teamLeadId: teamLeadId!,
       status: status ?? WorkUnitStatus.active,

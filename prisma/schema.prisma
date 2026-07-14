@@ -222,6 +222,10 @@ model WorkUnit {
   departmentId String   @map("department_id") @db.Uuid
   department   Department @relation(fields: [departmentId], references: [id])
   name         String
+  // Free-text project brief. Feeds the LLM task-generator
+  // (POST /work-units/:id/generate-tasks) which proposes SubUnits + WorkItems
+  // from this description. Optional; null = no brief captured yet.
+  description  String?
   teamLeadId   String   @map("team_lead_id") @db.Uuid
   teamLead     Employee @relation("WorkUnitLead", fields: [teamLeadId], references: [id])
   status       WorkUnitStatus @default(active)

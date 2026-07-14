@@ -54,6 +54,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 
 const patchSchema = z.object({
   name: z.string().min(1).optional(),
+  description: z.string().max(5000).nullable().optional(),
   status: z.nativeEnum(WorkUnitStatus).optional(),
   teamLeadId: z.string().uuid().optional(),
   departmentId: z.string().uuid().optional(),
@@ -83,7 +84,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   if (!parsed.success) {
     return failFor(ErrorCode.VALIDATION, "Invalid request body.");
   }
-  const { name, status, teamLeadId, departmentId } = parsed.data;
+  const { name, description, status, teamLeadId, departmentId } = parsed.data;
 
   // Owning Leads can only update name/status; reassignment is Admin/HR-only.
   if (isOwningLead && !isFinanceRole(role) && (teamLeadId || departmentId)) {
@@ -101,7 +102,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
   const updated = await prisma.workUnit.update({
     where: { id: params.id },
-    data: { name, status, teamLeadId, departmentId },
+    data: { name, description, status, teamLeadId, departmentId },
   });
 
   return ok(updated);
