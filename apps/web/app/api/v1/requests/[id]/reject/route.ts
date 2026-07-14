@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { FINANCE_ROLES, requireRole, AuthzError } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
+import { pushNotification } from "@/lib/notifications/push";
 import { RequestStatus } from "@prisma/client";
 
 // Track B. PATCH /api/v1/requests/:id/reject — Milestone 1.3.
@@ -36,6 +37,14 @@ export async function PATCH(_req: Request, { params }: { params: { id: string } 
       approvedAt: new Date(),
     },
   });
+
+  if (requester) {
+    await pushNotification(
+      requester.id,
+      `${request.type}_rejected`,
+      `Your ${request.type} request has been rejected.`,
+    );
+  }
 
   return ok(updated);
 }

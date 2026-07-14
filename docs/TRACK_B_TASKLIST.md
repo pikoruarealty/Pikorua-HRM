@@ -93,7 +93,7 @@
 
 ## Milestone 3 — Recognition, Notifications, Announcements, Documents, Events
 
-### 3.1 Recognition leaderboard + Employee of the Month
+### 3.1 Recognition leaderboard + Employee of the Month ✅ done (2026-07-14)
 
 **What:** Weekly/monthly aggregation job computing `recognition_snapshots` per department: `score` (task points for Tech, target performance for Sales/BD — respect the M2.1 decision for how metric periods are read), `rank`, `is_employee_of_month` (true for department `rank = 1` in the monthly snapshot). Then implement `getEmployeeOfMonthStatus(employeeId, month, year)` for real.
 **Why:** PRD §5.8. API_SPEC §6, §8. SCHEMA.md `recognition_snapshots`. Implementation Plan §5.
@@ -102,7 +102,7 @@
 **RBAC:** GET /recognition = Any. Cron route should check a shared secret (`CRON_SECRET` from `.env.example`), not a user session.
 **Definition of done:** After running the snapshot job against seed data, `GET /recognition?period_type=monthly&department_id=...` shows a ranked list with exactly one `is_employee_of_month = true` per department (under the single-winner assumption).
 
-### 3.2 Notifications infrastructure
+### 3.2 Notifications infrastructure ✅ done (2026-07-14)
 
 **What:** A generic notification push service any module (including future Track A code) can call — e.g. `pushNotification(userId, type, message)` — plus the read/list API.
 **Why:** PRD §5.10. API_SPEC §8. SCHEMA.md `notifications`.
@@ -110,7 +110,7 @@
 **RBAC:** Both endpoints = Any (self only — scope by session user).
 **Definition of done:** Calling `pushNotification()` from the leave-approval flow (1.3) creates a row the requesting Employee can fetch via GET and mark read.
 
-### 3.3 Announcements (team / all / specific-team scoping)
+### 3.3 Announcements (team / all / specific-team scoping) ✅ done (2026-07-14)
 
 **What:** CRUD respecting the three scopes from PRD §5.10: Team Lead → own team only (`scope_type = team`, forced); Admin/HR → `all` or `specific_teams`.
 **Why:** PRD §5.10. API_SPEC §8. SCHEMA.md `announcements`.
@@ -118,7 +118,9 @@
 **RBAC:** enforce scope server-side — a Lead's POST must be rejected (or silently forced to `team`, pick one and be consistent) if they try to set `scope_type = all`/`specific_teams`; GET results filtered per user's team/role.
 **Definition of done:** A Lead's attempt to POST an all-company announcement either 403s or is forced to `team` scope (document which); an HR-created `specific_teams` announcement is visible only to members of the listed teams.
 
-### 3.4 Employee Documentation upload
+**Implementation note:** A Lead's `scope_type` is silently forced to `team` (not 403'd) — `teamIds` is set to the Lead's own led team (`Team.teamLeadId = session.employeeId`), ignoring whatever the Lead sent. An Employee/BDE role attempting POST gets a straight 403 (not a Lead/Admin/HR role at all). `bun run build` clean. Live-verified: Tech Lead POSTing with `scope_type: "all"` was correctly forced to `team`/own-team-id; HR's `all` and `specific_teams` posts worked as requested; a Tech Employee's POST attempt 403'd; GET as Tech Employee returned the `all` + own-team `team` + own-team `specific_teams` announcements; GET as Sales Lead correctly excluded the Tech-team-scoped ones.
+
+### 3.4 Employee Documentation upload ✅ done (2026-07-14)
 
 **What:** Upload/list employee documents (ID proofs, contracts, etc.) collected at hiring time.
 **Why:** PRD §5.10. API_SPEC §8. SCHEMA.md `employee_documents`. Needs S3/R2 (Implementation Plan §1) — env vars already scaffolded in `.env.example`.
@@ -127,7 +129,9 @@
 **RBAC:** Admin/HR (any employee's documents), Employee (self only).
 **Definition of done:** Upload a test document via POST, confirm it round-trips through GET for the owning employee and for Admin, and confirm a *different* Employee gets 403/404 on GET.
 
-### 3.5 Event Management — birthday/anniversary banner + Meetings
+**Implementation note:** `lib/storage/s3.ts` implements a presigned-upload helper (`getPresignedUploadUrl`/`buildFileUrl`, using `@aws-sdk/client-s3` + `@aws-sdk/s3-request-presigner`, added as new deps) for future direct-to-bucket uploads, but the `/documents` route itself takes a `fileUrl` already uploaded by the client — same convention as `Request.attachmentUrl` from Milestone 2.4 — since `.env`'s S3 credentials are placeholder-only in this environment and no file bytes should pass through the Next.js server anyway. RBAC for POST is Admin/HR (any) + Employee (self) per the tasklist's DoD text, which is broader than API_SPEC.md §8's literal "POST = Admin/HR" line — flagged as an assumption, not confirmed with a stakeholder. `bun run build` clean. Live-verified: Tech Employee self-uploaded a document, HR uploaded a second document for the same employee, both GET as owning employee and GET as Admin returned both documents, and GET as a different employee (Sales Lead) correctly 403'd.
+
+### 3.5 Event Management — birthday/anniversary banner + Meetings ✅ done (2026-07-14)
 
 **What:** (a) Derived, not persisted: nightly cron checks `employees.date_of_birth`/`date_of_joining` against today, pushes notifications (via 3.2's service). `GET /events/today` serves the login banner. (b) Meetings: full CRUD, invitees (individual + team, expanded at send-time), configurable per-meeting `reminder_lead_minutes`, cron sends reminders at `scheduled_at − reminder_lead_minutes`.
 **Why:** PRD §5.11. API_SPEC §8, §10. SCHEMA.md `events`, `event_invitees`.
@@ -135,6 +139,8 @@
 **Files:** `apps/web/app/api/v1/events/today/route.ts` (GET), `apps/web/app/api/v1/events/meetings/route.ts` (POST, GET), `apps/web/app/api/v1/events/meetings/[id]/route.ts` (PATCH, DELETE), `apps/web/app/api/v1/cron/birthday-check/route.ts`, `apps/web/app/api/v1/cron/meeting-reminders/route.ts`.
 **RBAC:** GET today = Any. POST meeting = Admin/HR/Lead. PATCH/DELETE = Creator or Admin/HR. GET meetings = scoped to invitee (direct or via team).
 **Definition of done:** Seed an employee with today's date_of_birth, confirm the cron endpoint creates a notification for all employees; create a meeting with a 15-min lead time and confirm the reminder cron only fires within that window (test with a near-future `scheduled_at`, not a live wait).
+
+**Implementation note:** `events` has no persisted "reminder sent" flag — adding one would touch the shared schema for a single cron's bookkeeping — so `meeting-reminders` derives idempotency from `notifications` itself: each reminder is tagged `type = "meeting_reminder:<eventId>"` and skipped per-user if that tag already exists for them, so re-running inside the same open window is a no-op. `GET /events/today` is a pure derived query (no `events` rows persisted for birthday/anniversary), matching the PRD's stated default. Reminder channel is in-app only, per the PRD §7 open-question-#2 default (unconfirmed with a stakeholder, per the tasklist's running-assumptions list). `bun run build` clean. Live-verified: `events/today` returned empty at baseline, then correctly surfaced a seeded employee's birthday after setting `dateOfBirth` to today; `birthday-check` cron (secret-gated, 401 without it) pushed a notification to all 7 seeded users; a meeting created with a 10-minute-out `scheduledAt` and 20-minute `reminderLeadMinutes` (window already open) had its reminder fire on the first `meeting-reminders` cron run and correctly sent zero on a second run (idempotent); meeting PATCH/DELETE RBAC verified (creator and Admin allowed, a non-creator non-admin Lead 403'd); test `dateOfBirth` mutation reverted to `null` after verification.
 
 ---
 
