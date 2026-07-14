@@ -28,6 +28,12 @@ export async function GET(req: Request) {
       select: { members: { select: { id: true } } },
     });
     const scopedEmployeeIds = teams.flatMap((t) => t.members.map((m) => m.id));
+    // The Lead's own Employee record may not be a `TeamMembers` row on the
+    // team they lead — but they can be a WorkItem assignee just like anyone
+    // else, so always include themselves in scope.
+    if (!scopedEmployeeIds.includes(session.employeeId)) {
+      scopedEmployeeIds.push(session.employeeId);
+    }
 
     if (employeeIdFilter && !scopedEmployeeIds.includes(employeeIdFilter)) {
       return failFor(ErrorCode.FORBIDDEN, "That employee is not on your team.");

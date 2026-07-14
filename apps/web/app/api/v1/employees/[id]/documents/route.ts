@@ -1,8 +1,8 @@
-import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { isFinanceRole } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
+import { saveUploadedFile } from "@/lib/storage/local";
 import type { Role } from "@prisma/client";
 
 // Track B. GET/POST /api/v1/employees/:id/documents — Milestone 3.4.
@@ -17,14 +17,14 @@ import type { Role } from "@prisma/client";
 // milestone — flagged as an assumption, not a contradiction resolved with
 // the stakeholder.
 //
-// Body takes a `fileUrl` already uploaded to S3/R2 via `lib/storage/s3.ts`'s
-// presigned-URL flow (same pattern as Request.attachmentUrl in Milestone 2.4)
-// — no file bytes pass through this route.
-
-const createSchema = z.object({
-  docType: z.string().min(1),
-  fileUrl: z.string().url(),
-});
+// Storage (revised 2026-07-14): files are saved to local disk via
+// `lib/storage/local.ts` (deployment target is a single GCP VM, not
+// serverless — no S3 dependency needed). POST takes multipart/form-data
+// (`docType` field + `file` field) so bytes go straight to this route; the
+// `fileUrl` DB column stores an opaque internal storage key, never a
+// directly-servable path — GET rewrites it to a route the caller can fetch
+// through (`.../documents/:documentId/file`), which re-checks auth on every
+// read rather than trusting a bare public URL the way the old S3 design did.
 
 async function loadEmployeeAndAuthorize(
   employeeId: string,
@@ -50,8 +50,15 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     where: { employeeId: employee.id },
     orderBy: { uploadedAt: "desc" },
   });
-  return ok(documents);
+  return ok(
+    documents.map((d) => ({
+      ...d,
+      fileUrl: `/api/v1/employees/${employee.id}/documents/${d.id}/file`,
+    })),
+  );
 }
+
+const MAX_FILE_BYTES = 10 * 1024 * 1024;
 
 export async function POST(req: Request, { params }: { params: { id: string } }) {
   const session = await getSession();
@@ -61,21 +68,37 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   if (!employee) return failFor(ErrorCode.NOT_FOUND);
   if (!authorized) return failFor(ErrorCode.FORBIDDEN);
 
-  let body: unknown;
+  let formData: FormData;
   try {
-    body = await req.json();
+    formData = await req.formData();
   } catch {
-    return failFor(ErrorCode.VALIDATION, "Request body must be valid JSON.");
+    return failFor(ErrorCode.VALIDATION, "Request body must be multipart/form-data.");
   }
-  const parsed = createSchema.safeParse(body);
-  if (!parsed.success) return failFor(ErrorCode.VALIDATION, "Invalid request body.");
+
+  const docType = formData.get("docType");
+  const file = formData.get("file");
+  if (typeof docType !== "string" || !docType.trim()) {
+    return failFor(ErrorCode.VALIDATION, "docType is required.");
+  }
+  if (!(file instanceof File)) {
+    return failFor(ErrorCode.VALIDATION, "file is required.");
+  }
+  if (file.size === 0) {
+    return failFor(ErrorCode.VALIDATION, "file is empty.");
+  }
+  if (file.size > MAX_FILE_BYTES) {
+    return failFor(ErrorCode.VALIDATION, "file exceeds the 10MB limit.");
+  }
+
+  const buffer = Buffer.from(await file.arrayBuffer());
+  const { storageKey } = await saveUploadedFile(buffer, file.name, `documents/${employee.id}`);
 
   const document = await prisma.employeeDocument.create({
     data: {
       employeeId: employee.id,
-      docType: parsed.data.docType,
-      fileUrl: parsed.data.fileUrl,
+      docType: docType.trim(),
+      fileUrl: storageKey,
     },
   });
-  return ok(document, 201);
+  return ok({ ...document, fileUrl: `/api/v1/employees/${employee.id}/documents/${document.id}/file` }, 201);
 }

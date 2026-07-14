@@ -1,13 +1,16 @@
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
-import { isEmployeeRole } from "@/lib/rbac";
+import { isEmployeeRole, isLeadRole } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 
 // Track B. POST /api/v1/daily-selections — Milestone 2.3.
 // Called at clock-in: employee selects which of their assigned WorkItems
 // they intend to work on today. Additive (skipDuplicates) rather than a
 // full replace, so re-calling later in the day to add more tasks is safe.
+// Leads are allowed here too (self-service on their own assigned items) —
+// the "Employee" role in API_SPEC.md means "self", not the strict
+// EMPLOYEE_ROLES group; see the matching note in work-items/mine/route.ts.
 
 const createSchema = z.object({
   workItemIds: z.array(z.string().uuid()).min(1),
@@ -22,7 +25,7 @@ function todayUtcDate(): Date {
 export async function POST(req: Request) {
   const session = await getSession();
   if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
-  if (!isEmployeeRole(session.role)) return failFor(ErrorCode.FORBIDDEN);
+  if (!isEmployeeRole(session.role) && !isLeadRole(session.role)) return failFor(ErrorCode.FORBIDDEN);
   if (!session.employeeId) return failFor(ErrorCode.FORBIDDEN, "Session has no linked employee record.");
 
   let body: unknown;

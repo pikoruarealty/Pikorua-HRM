@@ -56,7 +56,8 @@ function NewSubUnitForm({ workUnitId, onCreated }: { workUnitId: string; onCreat
   );
 }
 
-type Employee = { id: string; fullName: string; role: string };
+type Employee = { id: string; fullName: string; role: string; teamId: string | null };
+type Team = { id: string; name: string; teamLeadId: string | null };
 
 function NewWorkItemForm({ subUnitId, onCreated }: { subUnitId: string; onCreated: () => void }) {
   const [title, setTitle] = useState("");
@@ -68,12 +69,27 @@ function NewWorkItemForm({ subUnitId, onCreated }: { subUnitId: string; onCreate
   const [periodYear, setPeriodYear] = useState(String(new Date().getFullYear()));
   const [error, setError] = useState<string | null>(null);
   const [employees, setEmployees] = useState<Employee[]>([]);
+  const [teams, setTeams] = useState<Team[]>([]);
+  const [me, setMe] = useState<{ role: string; employeeId: string | null } | null>(null);
 
   useEffect(() => {
     fetch("/api/test/employees").then((r) => r.json()).then((json) => {
       if (json.data) setEmployees(json.data);
     });
+    fetch("/api/test/teams").then((r) => r.json()).then((json) => {
+      if (json.data) setTeams(json.data);
+    });
+    apiFetch<{ role: string; employee: { id: string } | null }>("/auth/me").then((res) => {
+      if (res.data) setMe({ role: res.data.role, employeeId: res.data.employee?.id ?? null });
+    });
   }, []);
+
+  const isLead = me?.role === "tech_lead" || me?.role === "sales_lead";
+  const ownTeam = isLead && me?.employeeId ? teams.find((t) => t.teamLeadId === me.employeeId) ?? null : null;
+  // Leads only see their own team's members here — the server enforces this
+  // too (POST /sub-units/:id/work-items rejects cross-team assignedTo for
+  // Leads), this just keeps the dropdown from offering choices that would 400.
+  const assignableEmployees = isLead ? employees.filter((emp) => emp.teamId === ownTeam?.id) : employees;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -112,10 +128,13 @@ function NewWorkItemForm({ subUnitId, onCreated }: { subUnitId: string; onCreate
           required
         >
           <option value="">Select an employee…</option>
-          {employees.map((emp) => (
+          {assignableEmployees.map((emp) => (
             <option key={emp.id} value={emp.id}>{emp.fullName} ({emp.role})</option>
           ))}
         </select>
+        {isLead && !ownTeam && (
+          <p className="text-xs text-destructive">No team found where you&apos;re the lead — assignment will fail server-side.</p>
+        )}
       </div>
       <div className="flex flex-col gap-1.5">
         <Label>Mode</Label>

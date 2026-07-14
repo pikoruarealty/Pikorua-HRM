@@ -73,6 +73,12 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     if (!assignee) {
       return failFor(ErrorCode.VALIDATION, "assignedTo does not reference an existing employee.");
     }
+    if (isOwningLead && !isFinanceRole(role)) {
+      const ownTeam = await prisma.team.findFirst({ where: { teamLeadId: session.employeeId } });
+      if (!ownTeam || assignee.teamId !== ownTeam.id) {
+        return failFor(ErrorCode.VALIDATION, "Leads can only assign WorkItems to their own team's members.");
+      }
+    }
   }
 
   if (isMetric) {

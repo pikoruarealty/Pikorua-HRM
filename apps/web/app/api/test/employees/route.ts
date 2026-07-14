@@ -12,7 +12,7 @@ export async function GET() {
   if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
 
   const employees = await prisma.employee.findMany({
-    select: { id: true, fullName: true, role: true, departmentId: true },
+    select: { id: true, fullName: true, role: true, departmentId: true, teamId: true },
     orderBy: { fullName: "asc" },
   });
   return ok(employees);

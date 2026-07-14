@@ -10,6 +10,11 @@ const NAV = [
   { href: "/test/daily-planning", label: "Daily Planning" },
   { href: "/test/points", label: "Points" },
   { href: "/test/history", label: "Growth History" },
+  { href: "/test/recognition", label: "Recognition" },
+  { href: "/test/notifications", label: "Notifications" },
+  { href: "/test/announcements", label: "Announcements" },
+  { href: "/test/documents", label: "Documents" },
+  { href: "/test/events", label: "Events" },
 ];
 
 // Basic test-UI shell — not the final dashboard design. Gates on a real
