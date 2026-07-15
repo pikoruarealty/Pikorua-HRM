@@ -23,9 +23,12 @@ type Team = { id: string; name: string };
 export function AnnouncementsScreen({
   canPost,
   isFinance,
+  isAdmin = false,
 }: {
   canPost: boolean;
   isFinance: boolean;
+  /** Admin only — delete override (audited server-side). */
+  isAdmin?: boolean;
 }) {
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
@@ -62,6 +65,18 @@ export function AnnouncementsScreen({
     setTitle("");
     setBody("");
     setTeamIds([]);
+    refresh();
+  }
+
+  // Admin-only escape hatch: remove a stale/mistaken announcement.
+  async function remove(id: string, title: string) {
+    if (!confirm(`Delete the announcement "${title}"?`)) return;
+    setError(null);
+    const res = await apiFetch(`/announcements/${id}`, { method: "DELETE" });
+    if (res.error) {
+      setError(`${res.error.code}: ${res.error.message}`);
+      return;
+    }
     refresh();
   }
 
@@ -152,7 +167,14 @@ export function AnnouncementsScreen({
             <div key={a.id} className="flex flex-col gap-1 rounded border p-3 text-sm">
               <div className="flex items-center justify-between">
                 <span className="font-medium">{a.title}</span>
-                <Badge variant="outline">{a.scopeType}</Badge>
+                <span className="flex items-center gap-2">
+                  <Badge variant="outline">{a.scopeType}</Badge>
+                  {isAdmin && (
+                    <Button size="sm" variant="ghost" onClick={() => remove(a.id, a.title)}>
+                      Delete
+                    </Button>
+                  )}
+                </span>
               </div>
               <p className="text-muted-foreground">{a.body}</p>
               <span className="text-xs text-muted-foreground">

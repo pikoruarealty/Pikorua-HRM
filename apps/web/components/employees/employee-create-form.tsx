@@ -40,6 +40,8 @@ export function EmployeeCreateForm() {
   const [teamId, setTeamId] = useState("");
   const [dateOfJoining, setDateOfJoining] = useState("");
   const [baseSalary, setBaseSalary] = useState("");
+  const [photo, setPhoto] = useState<File | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -63,21 +65,22 @@ export function EmployeeCreateForm() {
     setSubmitting(true);
     setError(null);
     try {
+      if (!photo) {
+        throw new Error("A profile photo is required.");
+      }
+      // Multipart since 2026-07-15: the profile photo is required at creation.
+      const form = new FormData();
+      form.set("full_name", fullName);
+      form.set("email", email);
+      if (phone) form.set("phone", phone);
+      form.set("role", role);
+      if (departmentId) form.set("department_id", departmentId);
+      if (teamId) form.set("team_id", teamId);
+      form.set("date_of_joining", dateOfJoining);
+      form.set("base_salary", baseSalary);
+      form.set("photo", photo);
       const data = await getJson(
-        await fetch("/api/v1/employees", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            full_name: fullName,
-            email,
-            phone: phone || undefined,
-            role,
-            department_id: departmentId || undefined,
-            team_id: teamId || undefined,
-            date_of_joining: dateOfJoining,
-            base_salary: Number(baseSalary),
-          }),
-        }),
+        await fetch("/api/v1/employees", { method: "POST", body: form }),
       );
       if (data.temporaryPassword) {
         setResult({ temporaryPassword: data.temporaryPassword });
@@ -208,6 +211,34 @@ export function EmployeeCreateForm() {
               onChange={(e) => setBaseSalary(e.target.value)}
               required
             />
+          </div>
+          <div className="flex flex-col gap-2 sm:col-span-2">
+            <Label htmlFor="photo">Profile photo (required)</Label>
+            <div className="flex items-center gap-4">
+              {photoPreview && (
+                // eslint-disable-next-line @next/next/no-img-element -- local object URL preview
+                <img
+                  src={photoPreview}
+                  alt="Selected profile photo preview"
+                  className="h-16 w-16 rounded-full object-cover border"
+                />
+              )}
+              <Input
+                id="photo"
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                required
+                onChange={(e) => {
+                  const file = e.target.files?.[0] ?? null;
+                  setPhoto(file);
+                  setPhotoPreview((prev) => {
+                    if (prev) URL.revokeObjectURL(prev);
+                    return file ? URL.createObjectURL(file) : null;
+                  });
+                }}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">JPEG, PNG, or WebP, up to 5MB.</p>
           </div>
           {error && <p className="text-sm text-destructive sm:col-span-2">{error}</p>}
           <Button type="submit" disabled={submitting} className="sm:col-span-2">

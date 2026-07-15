@@ -1,0 +1,59 @@
+# CI for every push/PR: typecheck, lint, unit tests, production build, and
+# migration validity against a real Postgres. Catches schema drift and the
+# class of "only a full next build catches it" errors (e.g. the /login
+# parallel-page collision from Phase 4) before merge.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: pikorua_hrm_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pikorua_hrm_ci?schema=public
+      AUTH_SECRET: ci-only-secret-not-used-in-production-0123456789
+      CRON_SECRET: ci-only-cron-secret
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+
+      - name: Install dependencies (runs prisma generate via postinstall)
+        run: bun install --frozen-lockfile
+
+      - name: Apply migrations against a clean database
+        run: bun run prisma:deploy
+
+      - name: Seed (validates seed script against the migrated schema)
+        run: bun run db:seed
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Unit tests
+        run: bun run test
+
+      - name: Production build
+        run: bun run build

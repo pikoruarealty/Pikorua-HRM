@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db/prisma";
 import { RequestStatus, RequestType } from "@prisma/client";
+import { periodBounds, countDaysClippedToPeriod } from "@/lib/requests/leave-math";
 
 // CROSS-TRACK CONTRACT — added 2026-07-13 (not in the original Phase 0
 // agreement, which only covered getApprovedReimbursementTotal and
@@ -25,18 +26,14 @@ import { RequestStatus, RequestType } from "@prisma/client";
 // per-month payroll deductions correct (no double-counting, no month gets
 // days it didn't contain). Both dateFrom and dateTo are inclusive and stored
 // as @db.Date (UTC midnight).
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
-
 export async function getApprovedUnpaidLeaveDays(
   employeeId: string,
   month: number,
   year: number,
 ): Promise<number> {
-  const periodStart = new Date(Date.UTC(year, month - 1, 1));
-  const periodEnd = new Date(Date.UTC(year, month, 1)); // exclusive: first day of next month
-  // Last countable calendar day of the period (dateTo is inclusive, so we
-  // compare against this rather than the exclusive periodEnd).
-  const periodLastDay = new Date(periodEnd.getTime() - MS_PER_DAY);
+  // Clipping math lives in leave-math.ts (pure, unit-tested); this function
+  // keeps only the query. Behavior and signature unchanged.
+  const { start: periodStart, lastDay: periodLastDay } = periodBounds(month, year);
 
   // Fetch approved unpaid-leave requests whose range overlaps the period.
   // Overlap condition: dateFrom <= periodLastDay AND dateTo >= periodStart.
@@ -56,14 +53,7 @@ export async function getApprovedUnpaidLeaveDays(
     // Leave requests always carry both dates (enforced at POST /requests);
     // skip defensively if somehow missing rather than throwing.
     if (!r.dateFrom || !r.dateTo) continue;
-
-    // Clip [dateFrom, dateTo] to [periodStart, periodLastDay], both inclusive.
-    const start = r.dateFrom < periodStart ? periodStart : r.dateFrom;
-    const end = r.dateTo > periodLastDay ? periodLastDay : r.dateTo;
-
-    // Inclusive day count across the clipped range.
-    const days = Math.floor((end.getTime() - start.getTime()) / MS_PER_DAY) + 1;
-    if (days > 0) totalDays += days;
+    totalDays += countDaysClippedToPeriod(r.dateFrom, r.dateTo, month, year);
   }
 
   return totalDays;

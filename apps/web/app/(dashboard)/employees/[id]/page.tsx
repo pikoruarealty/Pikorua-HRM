@@ -15,7 +15,8 @@ export default async function EmployeeDetailPage({
   // isn't special-cased here since no other part of this page differentiates
   // Leads yet either — the API will 403 and the panel shows that error if a
   // Lead without access somehow lands here).
-  const canViewAttendance = canManage || session!.employeeId === params.id;
+  const isSelf = session!.employeeId === params.id;
+  const canViewAttendance = canManage || isSelf;
 
   return (
     <EmployeeDetail
@@ -23,6 +24,7 @@ export default async function EmployeeDetailPage({
       canManage={canManage}
       isAdmin={isAdmin}
       canViewAttendance={canViewAttendance}
+      isSelf={isSelf}
     />
   );
 }

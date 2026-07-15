@@ -12,6 +12,8 @@
     "build": "bun run --filter=@pikorua-hrm/web build",
     "start": "bun run --filter=@pikorua-hrm/web start",
     "lint": "bun run --filter=@pikorua-hrm/web lint",
+    "test": "bun test apps/web/lib",
+    "typecheck": "bun run --filter=@pikorua-hrm/web typecheck",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",

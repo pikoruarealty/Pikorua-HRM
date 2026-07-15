@@ -13,15 +13,18 @@ import {
   Trophy,
   Megaphone,
   CalendarDays,
+  CalendarRange,
   Bell,
   Package,
+  ShieldCheck,
+  ScrollText,
   type LucideIcon,
 } from "lucide-react";
 
 // RBAC-aware nav model. `show(ctx)` decides visibility per role — a link the
 // role can't use is never rendered (the routes still enforce access server-side;
 // this keeps forbidden options out of sight entirely, per the product rule).
-export type NavCtx = { isFinance: boolean; isLead: boolean; hasEmployee: boolean };
+export type NavCtx = { isFinance: boolean; isLead: boolean; hasEmployee: boolean; isAdmin: boolean };
 export type NavItem = { href: string; label: string; icon: LucideIcon; show?: (c: NavCtx) => boolean };
 export type NavGroup = { label: string | null; items: NavItem[] };
 
@@ -58,11 +61,19 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     label: "Culture",
     items: [
+      { href: "/calendar", label: "Calendar", icon: CalendarRange },
       { href: "/recognition", label: "Recognition", icon: Trophy },
       { href: "/announcements", label: "Announcements", icon: Megaphone },
       { href: "/events", label: "Events", icon: CalendarDays },
       { href: "/notifications", label: "Notifications", icon: Bell },
       { href: "/assets", label: "Assets", icon: Package, show: (c) => c.isFinance },
+    ],
+  },
+  {
+    label: "System",
+    items: [
+      { href: "/settings", label: "Account Security", icon: ShieldCheck },
+      { href: "/audit", label: "Audit Log", icon: ScrollText, show: (c) => c.isAdmin },
     ],
   },
 ];

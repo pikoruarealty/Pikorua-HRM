@@ -9,6 +9,11 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmployeeAttendancePanel } from "@/components/attendance/employee-attendance-panel";
 import { EmployeeWorkPanel } from "@/components/employees/employee-work-panel";
+import { EmployeeAvatar } from "@/components/employees/employee-avatar";
+import {
+  EmployeeRequestsPanel,
+  EmployeePayslipsPanel,
+} from "@/components/employees/employee-profile-panels";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 type Employee = {
@@ -20,8 +25,11 @@ type Employee = {
   departmentId: string | null;
   teamId: string | null;
   status: "active" | "inactive";
+  dateOfBirth: string | null;
   dateOfJoining: string;
   deviceUid: number | null;
+  photoUrl: string | null;
+  createdAt: string;
   baseSalary?: string;
 };
 
@@ -39,11 +47,13 @@ export function EmployeeDetail({
   canManage,
   isAdmin,
   canViewAttendance,
+  isSelf,
 }: {
   employeeId: string;
   canManage: boolean;
   isAdmin: boolean;
   canViewAttendance: boolean;
+  isSelf: boolean;
 }) {
   const router = useRouter();
   const [employee, setEmployee] = useState<Employee | null>(null);
@@ -61,10 +71,13 @@ export function EmployeeDetail({
   async function load() {
     setLoading(true);
     try {
+      // Departments/teams are fetched for every viewer so the profile can
+      // show names instead of ids (both endpoints are role-safe: departments
+      // is Any, teams is server-scoped).
       const [emp, deptData, teamData] = await Promise.all([
         getJson(await fetch(`/api/v1/employees/${employeeId}`)),
-        canManage ? getJson(await fetch("/api/v1/departments")) : Promise.resolve([]),
-        canManage ? getJson(await fetch("/api/v1/teams")) : Promise.resolve([]),
+        getJson(await fetch("/api/v1/departments")).catch(() => []),
+        getJson(await fetch("/api/v1/teams")).catch(() => []),
       ]);
       setEmployee(emp);
       setDepartments(deptData);
@@ -141,9 +154,13 @@ export function EmployeeDetail({
   return (
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">{employee.fullName}</h1>
-          <p className="text-sm text-muted-foreground">{employee.email}</p>
+        <div className="flex items-center gap-4">
+          <EmployeeAvatar fullName={employee.fullName} photoUrl={employee.photoUrl} size="lg" />
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight">{employee.fullName}</h1>
+            <p className="text-sm text-muted-foreground">{employee.email}</p>
+            {canManage && <PhotoReplaceControl employeeId={employee.id} onUploaded={load} />}
+          </div>
         </div>
         <Badge variant={employee.status === "active" ? "default" : "secondary"}>
           {employee.status}
@@ -164,8 +181,24 @@ export function EmployeeDetail({
             {employee.phone ?? "—"}
           </div>
           <div>
+            <span className="text-muted-foreground">Date of birth: </span>
+            {employee.dateOfBirth ? new Date(employee.dateOfBirth).toLocaleDateString() : "—"}
+          </div>
+          <div>
             <span className="text-muted-foreground">Date of joining: </span>
             {new Date(employee.dateOfJoining).toLocaleDateString()}
+          </div>
+          <div>
+            <span className="text-muted-foreground">Department: </span>
+            {departments.find((d) => d.id === employee.departmentId)?.name ?? "—"}
+          </div>
+          <div>
+            <span className="text-muted-foreground">Team: </span>
+            {teams.find((t) => t.id === employee.teamId)?.name ?? "—"}
+          </div>
+          <div>
+            <span className="text-muted-foreground">On record since: </span>
+            {new Date(employee.createdAt).toLocaleDateString()}
           </div>
           {canManage && (
             <div>
@@ -259,6 +292,14 @@ export function EmployeeDetail({
 
       {canViewAttendance && <EmployeeWorkPanel employeeId={employeeId} />}
 
+      {/* Requests are server-scoped (Admin/HR all, Lead own team, Employee
+          self); amounts are golden-rule data so only Admin/HR/self see them. */}
+      <EmployeeRequestsPanel employeeId={employeeId} showAmounts={canManage || isSelf} />
+
+      {/* Payslips: Admin/HR any; employees see their own (finalized only,
+          enforced server-side). Leads viewing teammates get no panel at all. */}
+      {(canManage || isSelf) && <EmployeePayslipsPanel employeeId={employeeId} />}
+
       <div className="flex gap-3">
         {isAdmin && employee.status === "active" && (
           <Button variant="destructive" onClick={onDeactivate} className="w-fit">
@@ -278,6 +319,58 @@ export function EmployeeDetail({
       <Button variant="outline" className="w-fit" onClick={() => router.push("/employees")}>
         Back to list
       </Button>
+    </div>
+  );
+}
+
+/** Admin/HR: upload or replace the profile photo (POST /employees/:id/photo). */
+function PhotoReplaceControl({
+  employeeId,
+  onUploaded,
+}: {
+  employeeId: string;
+  onUploaded: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function onFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const form = new FormData();
+      form.set("photo", file);
+      const res = await fetch(`/api/v1/employees/${employeeId}/photo`, {
+        method: "POST",
+        body: form,
+      });
+      const json = await res.json();
+      if (json.error) throw new Error(json.error.message);
+      onUploaded();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to upload photo.");
+    } finally {
+      setBusy(false);
+      e.target.value = "";
+    }
+  }
+
+  return (
+    <div className="mt-1">
+      <label className="cursor-pointer text-xs text-primary underline-offset-2 hover:underline">
+        {busy ? "Uploading…" : "Change photo"}
+        <input
+          type="file"
+          accept="image/jpeg,image/png,image/webp"
+          className="sr-only"
+          disabled={busy}
+          onChange={onFileChange}
+          aria-label="Upload a new profile photo"
+        />
+      </label>
+      {error && <p className="text-xs text-destructive">{error}</p>}
     </div>
   );
 }

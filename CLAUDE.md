@@ -47,6 +47,10 @@ Also flag once (not a hard block) when adding new files under `app/api/v1/employ
 - **Golden RBAC rule:** salary/incentive/bonus/reimbursement data + leave/reimbursement approval = **Admin/HR only**, ever.
 - Never `new PrismaClient()` in feature code — import `prisma` from `@/lib/db/prisma`.
 - Server-generate all attendance timestamps; payroll counts **approved** attendance only.
+- **Audit trail (2026-07-15):** any route that mutates financial/sensitive data (payslips, payroll config, attendance edit/approve, request approve/reject, employee CRUD, auth events) must call `audit()` from `@/lib/audit` after the mutation succeeds (action naming: `"<entity>.<verb>"`). `audit_logs` is append-only; viewer is Admin-only (`/audit`).
+- **Verbose logging (2026-07-15):** structured console logging via `createLogger("<scope>")` from `@/lib/log` (level via `LOG_LEVEL`, default debug in dev / info in prod). Three chokepoints are already instrumented — middleware logs every request (with an `x-request-id` header), `ok()`/`fail()` in `@/lib/api/response` log every API response (failures at WARN, 5xx at ERROR), and `audit()` logs every audited mutation — so new routes get logging for free; add ad-hoc `logger.*` lines only for domain events those three can't see.
+- **Profile photos (2026-07-15):** required at employee creation — `POST /employees` is **multipart/form-data** (fields + `photo` file), not JSON. Stored as opaque local-storage keys; always expose via `/employees/:id/photo` (use `withPhotoPath` from `@/lib/employees/photo`), never the raw key.
+- **Admin manual overrides (2026-07-15):** `request.override`, `attendance/manual`, `payslip unfinalize`/`delete draft`, `announcement delete` are **Admin-only** (deliberately narrower than Admin/HR), require a `reason` where applicable, and must stay audited. Don't widen these to HR.
 
 ## Deferred (do NOT build in v1)
 Biometric device LAN-sync (`device_punch_raw`, device worker), statutory deductions (PF/ESI/TDS), asset management beyond the stub, non-tech incentive automation.

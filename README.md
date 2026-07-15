@@ -48,6 +48,27 @@ bun run dev                   # http://localhost:3000
 
 Seeded logins (default password `Password123!`): `admin@pikorua.test`, `hr@pikorua.test`, `tech.lead@pikorua.test`, `tech.emp@pikorua.test`, `sales.lead@pikorua.test`, `sales.emp@pikorua.test`, `bde@pikorua.test`.
 
+## Testing & CI
+
+Unit tests cover the pure business logic (payslip math, unpaid-leave period clipping, attendance time math, RBAC guards, rate limiter, password policy, env validation) using Bun's built-in runner — no extra dependencies:
+
+```bash
+bun run test          # or: bun test apps/web/lib
+bun run typecheck
+```
+
+CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs on every push/PR: installs, applies migrations against a clean Postgres 16, seeds, typechecks, lints, tests, and does a full production build (a full `next build` is the only thing that catches route-collision errors — see progress.md Phase 4).
+
+## Production operations
+
+- **Health check:** `GET /api/health` (unauthenticated) → `{ status, db }`; `503` when the DB is unreachable. Point the reverse proxy / uptime monitor here.
+- **Env validation:** the server validates `DATABASE_URL`/`AUTH_SECRET`/`CRON_SECRET` at boot (`apps/web/lib/env.ts`). In production it **refuses to start** on a missing or placeholder `AUTH_SECRET`.
+- **Security headers:** set for all routes in `apps/web/middleware.ts` (frame-deny, nosniff, referrer policy, permissions policy, HSTS in production). A strict CSP is a known follow-up (needs Next nonce plumbing).
+- **Login protection:** rate-limited (5 tries / 15 min per IP+email, 20 / 15 min per IP, in-memory — single-instance assumption, same as the cron scheduler). Users change their own password at **Account Security** (`/settings`, `POST /api/v1/auth/change-password`, min 10 chars with mixed case + digit).
+- **Audit trail:** every sensitive action (logins incl. failures, password changes, payslip generate/finalize, payroll config changes, attendance edits/approvals, request approve/reject/override, employee create/update/deactivate, holidays, admin overrides) is written to the append-only `audit_logs` table via `audit()` from `@/lib/audit`. Admin-only viewer at `/audit` (`GET /api/v1/audit-logs`).
+- **Verbose logging:** structured console logs from `@/lib/log` (`LOG_LEVEL` env: `debug`/`info`/`warn`/`error`; defaults to debug in dev, info in production). Every request gets an `INFO [http] request rid=…` line and an `x-request-id` response header; every API failure gets a `WARN/ERROR [api]` line; every audited mutation gets an `INFO [audit]` line — correlate by timestamp/rid when debugging.
+- **File uploads on disk:** employee documents **and profile photos** live under `<cwd>/uploads/` (outside `public/`, served only through authenticated routes) — include this directory in backups.
+
 ## Scheduled jobs (recognition, birthdays, meeting reminders)
 
 The server runs an **in-process scheduler** (node-cron, started from `apps/web/instrumentation.ts` on boot) that fires the recognition snapshot, birthday/anniversary check, and meeting reminders. No external cron setup is needed — but this **assumes a single running server instance** (the GCP-VM deployment target). If the app is ever horizontally scaled, disable the scheduler and instead hit the CRON_SECRET-gated routes from one external crontab: `POST /api/v1/cron/{recognition-snapshot,birthday-check,meeting-reminders}` with `Authorization: Bearer $CRON_SECRET`.

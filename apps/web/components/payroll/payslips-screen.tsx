@@ -41,10 +41,47 @@ const MONTH_NAMES = [
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
-export function PayslipsScreen({ canGenerate }: { canGenerate: boolean }) {
+export function PayslipsScreen({
+  canGenerate,
+  isAdmin,
+}: {
+  canGenerate: boolean;
+  isAdmin: boolean;
+}) {
   const [payslips, setPayslips] = useState<Payslip[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Admin-only overrides (audited server-side): finalized → draft, and
+  // delete-draft — together the correction/regeneration flow.
+  async function unfinalize(id: string) {
+    const reason = prompt("Reason for unfinalizing this payslip?");
+    if (!reason) return;
+    setError(null);
+    try {
+      await getJson(
+        await fetch(`/api/v1/payslips/${id}/unfinalize`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reason }),
+        }),
+      );
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to unfinalize.");
+    }
+  }
+
+  async function deleteDraft(id: string) {
+    if (!confirm("Delete this draft payslip? It can be regenerated afterwards.")) return;
+    setError(null);
+    try {
+      await getJson(await fetch(`/api/v1/payslips/${id}`, { method: "DELETE" }));
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to delete draft.");
+    }
+  }
 
   async function load() {
     setLoading(true);
@@ -111,12 +148,24 @@ export function PayslipsScreen({ canGenerate }: { canGenerate: boolean }) {
                     </TableCell>
                     <TableCell>{p.employeeOfMonthRef ? "🏆" : "—"}</TableCell>
                     <TableCell>
-                      <Link
-                        href={`/payslips/${p.id}`}
-                        className="text-sm font-medium text-primary hover:underline"
-                      >
-                        View
-                      </Link>
+                      <span className="flex items-center gap-2">
+                        <Link
+                          href={`/payslips/${p.id}`}
+                          className="text-sm font-medium text-primary hover:underline"
+                        >
+                          View
+                        </Link>
+                        {isAdmin && p.status === "finalized" && (
+                          <Button size="sm" variant="ghost" onClick={() => unfinalize(p.id)}>
+                            Unfinalize
+                          </Button>
+                        )}
+                        {isAdmin && p.status === "draft" && (
+                          <Button size="sm" variant="ghost" onClick={() => deleteDraft(p.id)}>
+                            Delete
+                          </Button>
+                        )}
+                      </span>
                     </TableCell>
                   </TableRow>
                 ))}

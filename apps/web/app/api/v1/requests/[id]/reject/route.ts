@@ -4,6 +4,7 @@ import { FINANCE_ROLES, requireRole, AuthzError } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { pushNotification } from "@/lib/notifications/push";
 import { RequestStatus } from "@prisma/client";
+import { audit, clientIp } from "@/lib/audit";
 
 // Track B. PATCH /api/v1/requests/:id/reject — Milestone 1.3.
 // Golden rule: Admin/HR only, always — Team Leads get 403 even for their own team.
@@ -45,6 +46,16 @@ export async function PATCH(_req: Request, { params }: { params: { id: string } 
       `Your ${request.type} request has been rejected.`,
     );
   }
+
+  await audit({
+    action: "request.reject",
+    actorUserId: session!.userId,
+    actorRole: session!.role,
+    entityType: "request",
+    entityId: params.id,
+    metadata: { type: request.type, employee_id: request.employeeId },
+    ip: clientIp(_req),
+  });
 
   return ok(updated);
 }

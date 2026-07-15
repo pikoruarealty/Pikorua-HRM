@@ -4,6 +4,8 @@ import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { FINANCE_ROLES, Role, isLeadRole } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
+import { audit, clientIp } from "@/lib/audit";
+import { withPhotoPath } from "@/lib/employees/photo";
 
 // Track A. GET/PATCH/DELETE /api/v1/employees/:id — role-scoped per PRD/API_SPEC.
 
@@ -18,6 +20,7 @@ const PUBLIC_SELECT = {
   dateOfBirth: true,
   dateOfJoining: true,
   deviceUid: true,
+  photoUrl: true,
   status: true,
   createdAt: true,
   updatedAt: true,
@@ -47,7 +50,7 @@ export async function GET(
       select: FINANCE_SELECT,
     });
     if (!employee) return failFor(ErrorCode.NOT_FOUND, "Employee not found.");
-    return ok(employee);
+    return ok(withPhotoPath(employee));
   }
 
   if (session.employeeId === params.id) {
@@ -56,7 +59,7 @@ export async function GET(
       select: PUBLIC_SELECT,
     });
     if (!self) return failFor(ErrorCode.NOT_FOUND, "Employee not found.");
-    return ok(self);
+    return ok(withPhotoPath(self));
   }
 
   if (isLead && session.employeeId) {
@@ -69,7 +72,7 @@ export async function GET(
       select: PUBLIC_SELECT,
     });
     if (target && viewer?.teamId && target.teamId === viewer.teamId) {
-      return ok(target);
+      return ok(withPhotoPath(target));
     }
   }
 
@@ -138,7 +141,25 @@ export async function PATCH(
     select: FINANCE_SELECT,
   });
 
-  return ok(employee);
+  // Salary changes are exactly what an HR audit trail exists for — record
+  // old → new alongside the other touched fields (viewer is Admin-only).
+  await audit({
+    action: "employee.update",
+    actorUserId: session.userId,
+    actorRole: session.role,
+    entityType: "employee",
+    entityId: params.id,
+    metadata: {
+      changed: Object.keys(d),
+      ...(d.base_salary !== undefined
+        ? { base_salary_before: Number(existing.baseSalary), base_salary_after: d.base_salary }
+        : {}),
+      ...(d.status !== undefined ? { status_after: d.status } : {}),
+    },
+    ip: clientIp(req),
+  });
+
+  return ok(withPhotoPath(employee));
 }
 
 export async function DELETE(
@@ -165,5 +186,14 @@ export async function DELETE(
     select: FINANCE_SELECT,
   });
 
-  return ok(employee);
+  await audit({
+    action: "employee.deactivate",
+    actorUserId: session.userId,
+    actorRole: session.role,
+    entityType: "employee",
+    entityId: params.id,
+    ip: clientIp(_req),
+  });
+
+  return ok(withPhotoPath(employee));
 }

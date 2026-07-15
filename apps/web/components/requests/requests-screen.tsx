@@ -22,6 +22,7 @@ type RequestRow = {
 export function RequestsScreen() {
   const [requests, setRequests] = useState<RequestRow[]>([]);
   const [canApprove, setCanApprove] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [type, setType] = useState("leave_paid");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -38,7 +39,10 @@ export function RequestsScreen() {
   useEffect(() => {
     refresh();
     apiFetch<{ role: string }>("/auth/me").then((res) => {
-      if (res.data) setCanApprove(res.data.role === "admin" || res.data.role === "hr");
+      if (res.data) {
+        setCanApprove(res.data.role === "admin" || res.data.role === "hr");
+        setIsAdmin(res.data.role === "admin");
+      }
     });
   }, []);
 
@@ -69,6 +73,20 @@ export function RequestsScreen() {
   async function decide(id: string, action: "approve" | "reject") {
     setActionError(null);
     const res = await apiFetch(`/requests/${id}/${action}`, { method: "PATCH" });
+    if (res.error) setActionError(`${res.error.code}: ${res.error.message}`);
+    refresh();
+  }
+
+  // Admin-only escape hatch: force any request into any status (audited,
+  // reason required). Renders on already-decided requests.
+  async function override(id: string, status: "pending" | "approved" | "rejected") {
+    const reason = prompt(`Reason for overriding this request to "${status}"?`);
+    if (!reason) return;
+    setActionError(null);
+    const res = await apiFetch(`/requests/${id}/override`, {
+      method: "PATCH",
+      body: JSON.stringify({ status, reason }),
+    });
     if (res.error) setActionError(`${res.error.code}: ${res.error.message}`);
     refresh();
   }
@@ -156,6 +174,22 @@ export function RequestsScreen() {
                     </Button>
                     <Button size="sm" variant="destructive" onClick={() => decide(r.id, "reject")}>
                       Reject
+                    </Button>
+                  </>
+                )}
+                {r.status !== "pending" && isAdmin && (
+                  <>
+                    <Button size="sm" variant="ghost" onClick={() => override(r.id, "pending")}>
+                      Reopen
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() =>
+                        override(r.id, r.status === "approved" ? "rejected" : "approved")
+                      }
+                    >
+                      Force {r.status === "approved" ? "reject" : "approve"}
                     </Button>
                   </>
                 )}

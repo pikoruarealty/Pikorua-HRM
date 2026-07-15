@@ -4,6 +4,10 @@
 // never tries to load node-cron in the Edge runtime.
 export async function register() {
   if (process.env.NEXT_RUNTIME === "nodejs") {
+    // Fail fast on missing/placeholder secrets (fatal in production only).
+    const { validateEnv } = await import("@/lib/env");
+    validateEnv();
+
     const { startScheduler } = await import("@/lib/cron/scheduler");
     startScheduler();
   }
