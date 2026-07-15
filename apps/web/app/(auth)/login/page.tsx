@@ -29,7 +29,7 @@ export default function LoginPage() {
       setError(json.error.message);
       return;
     }
-    router.push("/employees");
+    router.push("/");
     router.refresh();
   }
 
