@@ -4,6 +4,7 @@ import { getSession } from "@/lib/auth";
 import { FINANCE_ROLES, isAdmin } from "@/lib/rbac";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { getLatestPayrollConfig } from "@/lib/payroll/config";
+import { audit, clientIp } from "@/lib/audit";
 
 // Track A. GET /api/v1/payroll/config — Admin/HR; current (latest
 // effective_from) flat deduction rates.
@@ -53,6 +54,21 @@ export async function PUT(req: Request) {
       halfDayDeductionFlat: parsed.data.half_day_deduction_flat,
       effectiveFrom: parsed.data.effective_from,
     },
+  });
+
+  await audit({
+    action: "payroll_config.update",
+    actorUserId: session.userId,
+    actorRole: session.role,
+    entityType: "payroll_config",
+    entityId: created.id,
+    metadata: {
+      late: parsed.data.late_deduction_flat,
+      unpaid_leave: parsed.data.unpaid_leave_deduction_flat,
+      half_day: parsed.data.half_day_deduction_flat,
+      effective_from: parsed.data.effective_from.toISOString().slice(0, 10),
+    },
+    ip: clientIp(req),
   });
 
   return ok(created);

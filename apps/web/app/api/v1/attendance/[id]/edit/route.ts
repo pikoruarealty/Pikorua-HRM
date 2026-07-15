@@ -4,6 +4,7 @@ import { getSession } from "@/lib/auth";
 import { requireRole, AuthzError, FINANCE_ROLES } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { computeHours } from "@/lib/attendance/time";
+import { audit, clientIp } from "@/lib/audit";
 
 // Track A. PATCH /api/v1/attendance/:id/edit — Admin/HR. Edits the
 // clock_in_approved/clock_out_approved times (e.g. correcting a forgotten
@@ -73,6 +74,22 @@ export async function PATCH(
       clockOutApproved,
       ...(hours ? { totalHours: hours.totalHours, isHalfDay: hours.isHalfDay } : {}),
     },
+  });
+
+  await audit({
+    action: "attendance.edit",
+    actorUserId: session!.userId,
+    actorRole: session!.role,
+    entityType: "attendance_record",
+    entityId: params.id,
+    metadata: {
+      employee_id: existing.employeeId,
+      clock_in_before: existing.clockInApproved?.toISOString() ?? null,
+      clock_in_after: clockInApproved?.toISOString() ?? null,
+      clock_out_before: existing.clockOutApproved?.toISOString() ?? null,
+      clock_out_after: clockOutApproved?.toISOString() ?? null,
+    },
+    ip: clientIp(req),
   });
 
   return ok(updated);

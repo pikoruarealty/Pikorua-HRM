@@ -14,10 +14,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { EmployeeAvatar } from "@/components/employees/employee-avatar";
 
 type Employee = {
   id: string;
   fullName: string;
+  photoUrl: string | null;
   email: string;
   role: string;
   departmentId: string | null;
@@ -106,7 +108,12 @@ export function EmployeeListScreen({ canManage }: { canManage: boolean }) {
               <TableBody>
                 {filtered.map((e) => (
                   <TableRow key={e.id}>
-                    <TableCell>{e.fullName}</TableCell>
+                    <TableCell>
+                      <span className="flex items-center gap-2">
+                        <EmployeeAvatar fullName={e.fullName} photoUrl={e.photoUrl} size="sm" />
+                        {e.fullName}
+                      </span>
+                    </TableCell>
                     <TableCell>{e.email}</TableCell>
                     <TableCell>{e.role}</TableCell>
                     <TableCell>

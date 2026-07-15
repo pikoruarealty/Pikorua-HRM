@@ -14,9 +14,10 @@
 
 | Method | Path | Roles | Notes |
 |---|---|---|---|
-| POST | `/auth/login` | Public | `{ email, password }` → session + user profile (id, role, employee_id) |
+| POST | `/auth/login` | Public | `{ email, password }` → session + user profile (id, role, employee_id). Rate-limited (5/15min per ip+email, 20/15min per ip → `429 RATE_LIMITED` + `Retry-After`); success/failure/blocked attempts are audited. |
 | POST | `/auth/logout` | Any | |
 | GET | `/auth/me` | Any | returns current user + role + employee profile summary |
+| POST | `/auth/change-password` | Any (self) | `{ current_password, new_password }` — re-verifies the current password; policy: ≥10 chars, mixed case, a digit. Audited. Added 2026-07-15 (production hardening). |
 
 ---
 
@@ -25,10 +26,12 @@
 | Method | Path | Roles | Notes |
 |---|---|---|---|
 | GET | `/employees` | Admin/HR (all), Lead (own team only), Employee (self only) | Query filters: `department_id`, `team_id`. Response scoped server-side by role — do not rely on frontend filtering. |
-| GET | `/employees/:id` | Admin/HR (any), Lead (if in own team), Employee (self only) | |
-| POST | `/employees` | Admin/HR | Creates employee + base_salary + department/team assignment |
+| GET | `/employees/:id` | Admin/HR (any), Lead (if in own team), Employee (self only) | Responses include `photoUrl` (authenticated serving path) since 2026-07-15 |
+| POST | `/employees` | Admin/HR | **multipart/form-data since 2026-07-15**: employee fields as form fields + a **required `photo` image file** (JPEG/PNG/WebP ≤ 5MB). JSON bodies are rejected with 422. |
 | PATCH | `/employees/:id` | Admin/HR | Editable: salary, department, team, status, device_uid mapping |
 | DELETE | `/employees/:id` | Admin | Soft-delete (status → inactive) |
+| GET | `/employees/:id/photo` | Any | Serves the profile photo bytes (photos appear in lists/calendar for every role — not golden-rule data). 404 if none. |
+| POST | `/employees/:id/photo` | Admin/HR | multipart `photo` file — upload/replace (also backfills pre-requirement employees). Audited. |
 | GET | `/departments` | Any | Returns departments + their `department_labels` config |
 | POST | `/departments` | Admin | `{ name, type_key }` |
 | GET | `/departments/:type_key/labels` | Any | Returns work_unit/sub_unit/work_item label mapping for that department type |
@@ -51,6 +54,8 @@
 | GET | `/attendance/:employee_id/summary` | Admin/HR, Lead (own team), Employee (self) | monthly summary: total late count, half-days, unpaid leave days — computed from **approved** records only, feeds payroll |
 | PATCH | `/attendance/:id/edit` | Admin/HR | Edits `clock_in_approved`/`clock_out_approved` (e.g., correcting a forgotten clock-out) |
 | PATCH | `/attendance/:id/approve` | Admin/HR | Sets `approval_status = approved`, `approved_by`, `approved_at`. If not separately edited first, approved times default to the raw values. |
+| GET | `/attendance/overview` | Admin/HR | Added 2026-07-15. One-day glance: `?date=YYYY-MM-DD` (default today) → `{ date, holiday, counts: { total, present, halfDay, onLeave, absent, late, pendingApproval }, rows: [per-employee status] }`. A holiday date suppresses "absent". |
+| POST | `/attendance/manual` | **Admin only** | Added 2026-07-15 (manual override). `{ employee_id, date, clock_in, clock_out?, reason }` — creates/overwrites the record's **approved** times, written pre-approved with the admin as approver; raw clock values never touched. Audited (`attendance.manual_create` / `attendance.manual_override`). |
 
 ---
 
@@ -91,6 +96,8 @@
 | GET | `/payslips` | Admin/HR (all), Employee (self only, finalized only) | filters: `employee_id`, `month`, `year` |
 | GET | `/payslips/:id` | Admin/HR (any), Employee (self only) | |
 | PATCH | `/payslips/:id/finalize` | Admin/HR | draft → finalized |
+| PATCH | `/payslips/:id/unfinalize` | **Admin only** | Added 2026-07-15 (manual override). finalized → draft; `{ reason }` required, audited. |
+| DELETE | `/payslips/:id` | **Admin only** | Added 2026-07-15 (manual override). Drafts only (409 otherwise) — the unfinalize → delete → regenerate correction flow. Audited. |
 
 ---
 
@@ -103,6 +110,7 @@
 | GET | `/requests/:id` | scoped as above | |
 | PATCH | `/requests/:id/approve` | **Admin/HR only** (all request types, including leave and reimbursement — Team Leads cannot approve) | sets status + approver_id + approved_at |
 | PATCH | `/requests/:id/reject` | **Admin/HR only** | same as approve |
+| PATCH | `/requests/:id/override` | **Admin only** | Added 2026-07-15 (manual override). Force any status (`pending`/`approved`/`rejected`) regardless of current state; `{ status, reason }` required; requester notified; audited (`request.override`). |
 
 ---
 
@@ -115,6 +123,7 @@
 | PATCH | `/notifications/:id/read` | Any (self) | |
 | GET | `/announcements` | Any | server scopes results: all-company + specific-team announcements matching the user's team + team announcements for the user's own team |
 | POST | `/announcements` | Lead (own team only — `scope_type` forced to `team`), Admin/HR (`scope_type` = `all` or `specific_teams`) | `{ title, body, scope_type, team_ids? }` |
+| DELETE | `/announcements/:id` | **Admin only** | Added 2026-07-15 (manual override). Audited. |
 | GET | `/employees/:id/documents` | Admin/HR (any), Employee (self) | |
 | POST | `/employees/:id/documents` | Admin/HR | upload at hiring time or later |
 | GET | `/events/today` | Any | returns today's birthdays/anniversaries (derived query, see Schema doc) for the login banner |
@@ -125,6 +134,15 @@
 
 ---
 
+## 8b. Holidays & Calendar (added 2026-07-15) — **Track A**
+
+| Method | Path | Roles | Notes |
+|---|---|---|---|
+| GET | `/holidays` | Any | Company holiday list; `?year=` filter. |
+| POST | `/holidays` | Admin/HR | `{ date: "YYYY-MM-DD", name }` — one holiday per date (409 on duplicate). Audited (`holiday.create`). |
+| DELETE | `/holidays/:id` | Admin/HR | Audited (`holiday.delete`). |
+| GET | `/calendar` | Any (server-scoped) | `?month=&year=` (default current) → `{ month, year, items }` — everything with a date in one feed for the `/calendar` page: **holidays** + **birthdays/anniversaries** (everyone, celebratory), **meetings** (Admin/HR all; others only created/invited, same scoping as `/events/meetings`), **leave** (approved + pending `leave_*` requests: Admin/HR all, Lead own team, Employee self; multi-day leave expanded to one item per day). |
+
 ## 9. Assets (stub) — **Track B (low priority)**
 
 | Method | Path | Roles | Notes |
@@ -132,6 +150,13 @@
 | GET | `/assets` | Admin/HR | placeholder, not built out in v1 |
 
 ---
+
+## 9b. Operations & Audit (production hardening, added 2026-07-15)
+
+| Method | Path | Roles | Notes |
+|---|---|---|---|
+| GET | `/api/health` | Public | **Not under `/api/v1`.** Liveness/readiness probe: `{ status, db }`, `503` if the DB is down. No auth, no version info. |
+| GET | `/audit-logs` | **Admin only** (narrower than Admin/HR — HR's own actions are part of the trail) | Append-only audit trail. Filters: `action` (prefix match), `actor_user_id`, `entity_type`, `entity_id`, `date_from`, `date_to`; paginated (`page`, `limit` ≤ 200). Rows are written by `audit()` from `@/lib/audit` — see CLAUDE.md conventions for which mutations must audit. |
 
 ## 10. Cross-cutting: Scheduled Jobs (not user-facing endpoints, but must exist)
 

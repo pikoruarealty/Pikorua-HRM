@@ -126,6 +126,8 @@ model User {
   notifications      Notification[]
   createdAnnouncements Announcement[]   @relation("AnnouncementCreator")
   createdEvents        Event[]          @relation("EventCreator")
+  auditLogs            AuditLog[]       @relation("AuditActor")
+  createdHolidays      Holiday[]        @relation("HolidayCreator")
 
   @@map("users")
 }
@@ -190,6 +192,10 @@ model Employee {
   dateOfBirth   DateTime? @map("date_of_birth") @db.Date
   dateOfJoining DateTime  @map("date_of_joining") @db.Date
   baseSalary    Decimal   @map("base_salary") @db.Decimal(12, 2)
+  // Opaque local-storage key (lib/storage/local.ts), served via
+  // GET /employees/:id/photo. Nullable in the DB because pre-2026-07-15 rows
+  // predate the requirement; the create API requires a photo for new hires.
+  photoUrl      String?  @map("photo_url")
   deviceUid     Int?     @map("device_uid") // reserved for future device-sync phase
   status        EmployeeStatus @default(active)
   createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
@@ -493,6 +499,44 @@ model EmployeeDocument {
 
   @@index([employeeId])
   @@map("employee_documents")
+}
+
+// Append-only audit trail for sensitive/financial mutations (payslips,
+// payroll config, attendance edits/approvals, request approvals, employee
+// CRUD, auth events). Written via `audit()` from @/lib/audit — rows are never
+// updated or deleted, and a failed audit write never blocks the mutation.
+// `actorUserId` is null for unauthenticated events (e.g. failed logins).
+model AuditLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  actorUserId String?  @map("actor_user_id") @db.Uuid
+  actor       User?    @relation("AuditActor", fields: [actorUserId], references: [id])
+  actorRole   Role?    @map("actor_role")
+  action      String // dotted verb, e.g. "payslip.generate", "auth.login_failed"
+  entityType  String?  @map("entity_type") // e.g. "payslip", "employee"
+  entityId    String?  @map("entity_id") @db.Uuid
+  metadata    Json?
+  ip          String?
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([actorUserId, createdAt])
+  @@index([action, createdAt])
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}
+
+// Company holidays, managed by Admin/HR (added 2026-07-15). One row per
+// calendar date; surfaced on the /calendar page and in the attendance
+// overview (a holiday date suppresses "absent" counting). Not wired into
+// payroll deductions — deduction math stays attendance/leave-driven per PRD.
+model Holiday {
+  id          String   @id @default(uuid()) @db.Uuid
+  date        DateTime @unique @db.Date
+  name        String
+  createdById String?  @map("created_by") @db.Uuid
+  createdBy   User?    @relation("HolidayCreator", fields: [createdById], references: [id])
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("holidays")
 }
 
 // Stub only — not built out in v1 (PRD §5.12).

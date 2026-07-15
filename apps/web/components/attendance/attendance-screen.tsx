@@ -13,6 +13,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { AttendanceOverviewPanel } from "@/components/attendance/attendance-overview-panel";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 type AttendanceRecord = {
   id: string;
@@ -46,12 +49,15 @@ export function AttendanceScreen({
   canReview,
   canSeeAll,
   employeeId,
+  isAdmin,
 }: {
   /** Admin/HR — can edit + approve. */
   canReview: boolean;
   /** Admin/HR or Lead — sees more than just their own records. */
   canSeeAll: boolean;
   employeeId: string | null;
+  /** Admin only — manual-record override form. */
+  isAdmin: boolean;
 }) {
   return (
     <div className="flex flex-col gap-6">
@@ -63,6 +69,10 @@ export function AttendanceScreen({
       </div>
 
       {employeeId && <ClockWidget employeeId={employeeId} />}
+
+      {canReview && <AttendanceOverviewPanel />}
+
+      {isAdmin && <ManualRecordForm />}
 
       <AttendanceTable canReview={canReview} canSeeAll={canSeeAll} employeeId={employeeId} />
     </div>
@@ -380,5 +390,111 @@ function EditRecordForm({
         {submitting ? "Saving…" : "Save"}
       </Button>
     </form>
+  );
+}
+
+// Admin-only override (2026-07-15): create/overwrite an attendance record by
+// hand for any employee/date — POST /api/v1/attendance/manual (audited,
+// written pre-approved with the admin as approver).
+function ManualRecordForm() {
+  const [employees, setEmployees] = useState<{ id: string; fullName: string }[]>([]);
+  const [employeeId, setEmployeeId] = useState("");
+  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [clockIn, setClockIn] = useState("09:00");
+  const [clockOut, setClockOut] = useState("18:00");
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      const res = await fetch("/api/v1/employees");
+      const json = await res.json();
+      if (json.data) setEmployees(json.data);
+    })();
+  }, []);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const res = await fetch("/api/v1/attendance/manual", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          employee_id: employeeId,
+          date,
+          clock_in: new Date(`${date}T${clockIn}`).toISOString(),
+          clock_out: clockOut ? new Date(`${date}T${clockOut}`).toISOString() : undefined,
+          reason,
+        }),
+      });
+      const json = await res.json();
+      if (json.error) throw new Error(json.error.message);
+      setMessage("Record saved (pre-approved). Refresh the table below to see it.");
+      setReason("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save record.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Manual record (admin override)</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={submit} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="manual_employee">Employee</Label>
+            <Select value={employeeId || "__none__"} onValueChange={(v) => setEmployeeId(v === "__none__" ? "" : v)}>
+              <SelectTrigger id="manual_employee">
+                <SelectValue placeholder="Select employee" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">Select…</SelectItem>
+                {employees.map((e) => (
+                  <SelectItem key={e.id} value={e.id}>
+                    {e.fullName}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="manual_date">Date</Label>
+            <Input id="manual_date" type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="manual_in">Clock in</Label>
+            <Input id="manual_in" type="time" value={clockIn} onChange={(e) => setClockIn(e.target.value)} required />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="manual_out">Clock out</Label>
+            <Input id="manual_out" type="time" value={clockOut} onChange={(e) => setClockOut(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5 sm:col-span-2">
+            <Label htmlFor="manual_reason">Reason (audited)</Label>
+            <Input
+              id="manual_reason"
+              placeholder="e.g. forgot to clock in, device issue"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              required
+            />
+          </div>
+          {error && <p className="text-sm text-destructive sm:col-span-2 lg:col-span-3">{error}</p>}
+          {message && <p className="text-sm text-muted-foreground sm:col-span-2 lg:col-span-3">{message}</p>}
+          <Button type="submit" disabled={busy || !employeeId} className="w-fit">
+            {busy ? "Saving…" : "Save manual record"}
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
   );
 }

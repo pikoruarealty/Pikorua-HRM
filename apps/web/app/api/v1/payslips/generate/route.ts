@@ -5,6 +5,8 @@ import { FINANCE_ROLES } from "@/lib/rbac";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { getAttendanceSummary } from "@/lib/attendance/summary";
 import { getEffectivePayrollConfig } from "@/lib/payroll/config";
+import { computeStandardDeductionTotal, computeNetPay } from "@/lib/payroll/calc";
+import { audit, clientIp } from "@/lib/audit";
 import { getApprovedReimbursementTotal } from "@/lib/requests/reimbursements";
 import { getEmployeeOfMonthStatus } from "@/lib/recognition/employee-of-month";
 import { NotImplementedError } from "@/lib/errors";
@@ -115,23 +117,28 @@ export async function POST(req: Request) {
     }
   }
 
-  const standardDeductionTotal =
-    summary.lateCount * Number(config.lateDeductionFlat) +
-    summary.halfDayCount * Number(config.halfDayDeductionFlat) +
-    unpaidLeaveCount * Number(config.unpaidLeaveDeductionFlat);
+  const standardDeductionTotal = computeStandardDeductionTotal(
+    { lateCount: summary.lateCount, halfDayCount: summary.halfDayCount, unpaidLeaveCount },
+    {
+      lateDeductionFlat: Number(config.lateDeductionFlat),
+      halfDayDeductionFlat: Number(config.halfDayDeductionFlat),
+      unpaidLeaveDeductionFlat: Number(config.unpaidLeaveDeductionFlat),
+    },
+  );
 
   const baseSalary = Number(employee.baseSalary);
-  const otherAddition = otherAdditionAmount ?? 0;
-  const otherDeduction = otherDeductionAmount ?? 0;
 
-  const netPay =
-    baseSalary +
-    incentiveAmount +
-    bonusAmount +
-    otherAddition -
-    standardDeductionTotal -
-    otherDeduction +
-    reimbursementTotal;
+  const netPay = computeNetPay(
+    {
+      baseSalary,
+      incentiveAmount,
+      bonusAmount,
+      otherAdditionAmount: otherAdditionAmount ?? 0,
+      otherDeductionAmount: otherDeductionAmount ?? 0,
+      reimbursementTotal,
+    },
+    standardDeductionTotal,
+  );
 
   const payslip = await prisma.payslip.create({
     data: {
@@ -155,6 +162,22 @@ export async function POST(req: Request) {
       netPay,
       generatedById: session.userId,
     },
+  });
+
+  await audit({
+    action: "payslip.generate",
+    actorUserId: session.userId,
+    actorRole: session.role,
+    entityType: "payslip",
+    entityId: payslip.id,
+    metadata: {
+      employee_id: employeeId,
+      period: `${year}-${month}`,
+      net_pay: netPay,
+      standard_deduction_total: standardDeductionTotal,
+      reimbursement_total: reimbursementTotal,
+    },
+    ip: clientIp(req),
   });
 
   return ok({

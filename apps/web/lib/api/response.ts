@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { createLogger } from "@/lib/log";
 
 // SHARED (Phase 0). Standard API envelope from API_SPEC.md:
 //   success -> { data, error: null }
@@ -29,8 +30,17 @@ export const ErrorCode = {
 
 export type ErrorCodeValue = (typeof ErrorCode)[keyof typeof ErrorCode];
 
+// Verbose logging (2026-07-15): every API response funnels through ok/fail,
+// so logging here instruments the entire API surface at once. Failures are
+// WARN (5xx → ERROR) with code + message; successes are DEBUG. The route
+// path isn't known here — correlate with the middleware "request rid=…" line
+// logged immediately before.
+const logger = createLogger("api");
+
 export function ok<T>(data: T, init?: number | ResponseInit): NextResponse {
   const responseInit = typeof init === "number" ? { status: init } : init;
+  const status = (typeof init === "number" ? init : init?.status) ?? 200;
+  logger.debug(`response ok (${status})`);
   return NextResponse.json<ApiResponse<T>>({ data, error: null }, responseInit);
 }
 
@@ -39,6 +49,7 @@ export function fail(
   message: string,
   status = 400,
 ): NextResponse {
+  logger[status >= 500 ? "error" : "warn"](`response ${code} (${status}): ${message}`);
   return NextResponse.json<ApiResponse<never>>(
     { data: null, error: { code, message } },
     { status },

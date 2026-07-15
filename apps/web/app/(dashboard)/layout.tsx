@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
-import { FINANCE_ROLES, isLeadRole } from "@/lib/rbac";
+import { FINANCE_ROLES, Role, isLeadRole } from "@/lib/rbac";
 import { prisma } from "@/lib/db/prisma";
 import { AppShell } from "@/components/shell/app-shell";
 
@@ -28,6 +28,7 @@ export default async function DashboardLayout({
         isFinance: FINANCE_ROLES.includes(session.role),
         isLead: isLeadRole(session.role),
         hasEmployee: !!session.employeeId,
+        isAdmin: session.role === Role.admin,
       }}
     >
       {children}

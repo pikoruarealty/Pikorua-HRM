@@ -4,6 +4,9 @@ import { prisma } from "@/lib/db/prisma";
 import { getSession, hashPassword } from "@/lib/auth";
 import { FINANCE_ROLES, Role, isLeadRole } from "@/lib/rbac";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
+import { audit, clientIp } from "@/lib/audit";
+import { saveUploadedFile } from "@/lib/storage/local";
+import { validatePhotoFile, withPhotoPath } from "@/lib/employees/photo";
 
 // Track A. GET /api/v1/employees — role-scoped list. POST — Admin/HR only,
 // creates the Employee row and its linked User login in the same call
@@ -20,6 +23,7 @@ const PUBLIC_SELECT = {
   dateOfBirth: true,
   dateOfJoining: true,
   deviceUid: true,
+  photoUrl: true,
   status: true,
   createdAt: true,
   updatedAt: true,
@@ -56,7 +60,7 @@ export async function GET(req: Request) {
       select: FINANCE_SELECT,
       orderBy: { fullName: "asc" },
     });
-    return ok(employees);
+    return ok(employees.map(withPhotoPath));
   }
 
   if (!session.employeeId) {
@@ -79,7 +83,7 @@ export async function GET(req: Request) {
       select: PUBLIC_SELECT,
       orderBy: { fullName: "asc" },
     });
-    return ok(employees);
+    return ok(employees.map(withPhotoPath));
   }
 
   // Individual contributor (or lead with no team assigned yet): self only.
@@ -87,7 +91,7 @@ export async function GET(req: Request) {
     where: { id: session.employeeId },
     select: PUBLIC_SELECT,
   });
-  return ok(self ? [self] : []);
+  return ok(self ? [withPhotoPath(self)] : []);
 }
 
 const createSchema = z.object({
@@ -99,10 +103,19 @@ const createSchema = z.object({
   role: z.nativeEnum(Role),
   date_of_birth: z.string().optional(),
   date_of_joining: z.string(),
-  base_salary: z.number().positive(),
-  device_uid: z.number().int().optional(),
+  base_salary: z.coerce.number().positive(),
+  device_uid: z.coerce.number().int().optional(),
   password: z.string().min(8).optional(),
 });
+
+/** Collapse a FormData into a plain string record (empty fields dropped). */
+function formFields(formData: FormData): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of formData.entries()) {
+    if (typeof value === "string" && value.trim() !== "") out[key] = value;
+  }
+  return out;
+}
 
 export async function POST(req: Request) {
   const session = await getSession();
@@ -113,18 +126,29 @@ export async function POST(req: Request) {
     return failFor(ErrorCode.FORBIDDEN);
   }
 
-  let body: unknown;
+  // Since 2026-07-15 a profile photo is REQUIRED at creation, so this route
+  // takes multipart/form-data (employee fields as form fields + a `photo`
+  // file) instead of JSON — same transport as the documents upload route.
+  let formData: FormData;
   try {
-    body = await req.json();
+    formData = await req.formData();
   } catch {
-    return failFor(ErrorCode.VALIDATION, "Request body must be valid JSON.");
+    return failFor(
+      ErrorCode.VALIDATION,
+      "Request must be multipart/form-data (employee fields + required `photo` image file).",
+    );
   }
 
-  const parsed = createSchema.safeParse(body);
+  const parsed = createSchema.safeParse(formFields(formData));
   if (!parsed.success) {
     return failFor(ErrorCode.VALIDATION, "Missing or invalid employee fields.");
   }
   const d = parsed.data;
+
+  const photo = validatePhotoFile(formData.get("photo"));
+  if (!photo.ok) {
+    return failFor(ErrorCode.VALIDATION, photo.message);
+  }
 
   if (d.department_id) {
     const dept = await prisma.department.findUnique({ where: { id: d.department_id } });
@@ -143,8 +167,14 @@ export async function POST(req: Request) {
   const tempPassword = d.password ?? generateTempPassword();
   const passwordHash = await hashPassword(tempPassword);
 
+  // Save the photo before creating the row so a created employee always has
+  // one (an orphaned file from a failed create is harmless on local disk).
+  const photoBuffer = Buffer.from(await photo.file.arrayBuffer());
+  const { storageKey } = await saveUploadedFile(photoBuffer, `photo${photo.extension}`, "photos");
+
   const employee = await prisma.employee.create({
     data: {
+      photoUrl: storageKey,
       fullName: d.full_name,
       email: d.email,
       phone: d.phone,
@@ -166,9 +196,19 @@ export async function POST(req: Request) {
     select: FINANCE_SELECT,
   });
 
+  await audit({
+    action: "employee.create",
+    actorUserId: session.userId,
+    actorRole: session.role,
+    entityType: "employee",
+    entityId: employee.id,
+    metadata: { email: d.email, role: d.role },
+    ip: clientIp(req),
+  });
+
   return ok(
     {
-      ...employee,
+      ...withPhotoPath(employee),
       // Returned once so HR can hand it to the employee; never stored in plaintext.
       temporaryPassword: d.password ? undefined : tempPassword,
     },

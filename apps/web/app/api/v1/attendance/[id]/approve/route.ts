@@ -4,6 +4,7 @@ import { getSession } from "@/lib/auth";
 import { FINANCE_ROLES } from "@/lib/rbac";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { computeHours } from "@/lib/attendance/time";
+import { audit, clientIp } from "@/lib/audit";
 
 // Track A. PATCH /api/v1/attendance/:id/approve — Admin/HR. If not
 // separately edited first (via .../edit), approved times default to the raw
@@ -52,6 +53,16 @@ export async function PATCH(
       approvedById: session.userId,
       approvedAt: new Date(),
     },
+  });
+
+  await audit({
+    action: "attendance.approve",
+    actorUserId: session.userId,
+    actorRole: session.role,
+    entityType: "attendance_record",
+    entityId: params.id,
+    metadata: { employee_id: existing.employeeId, total_hours: totalHours, is_half_day: isHalfDay },
+    ip: clientIp(_req),
   });
 
   return ok(updated);
