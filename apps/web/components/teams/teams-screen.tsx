@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -216,22 +217,18 @@ function CreateTeamForm({
           </div>
           <div className="flex flex-col gap-2">
             <Label htmlFor="department_id">Department</Label>
-            <select
-              id="department_id"
-              className="flex h-10 w-56 rounded-md border border-input bg-background px-3 py-2 text-sm"
-              value={departmentId}
-              onChange={(e) => setDepartmentId(e.target.value)}
-              required
-            >
-              <option value="" disabled>
-                Select department
-              </option>
-              {departments.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.name}
-                </option>
-              ))}
-            </select>
+            <Select value={departmentId || undefined} onValueChange={setDepartmentId}>
+              <SelectTrigger id="department_id" className="w-56">
+                <SelectValue placeholder="Select department" />
+              </SelectTrigger>
+              <SelectContent>
+                {departments.map((d) => (
+                  <SelectItem key={d.id} value={d.id}>
+                    {d.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <div className="flex flex-col gap-2">
             <Label htmlFor="team_lead_id">Team lead employee ID</Label>

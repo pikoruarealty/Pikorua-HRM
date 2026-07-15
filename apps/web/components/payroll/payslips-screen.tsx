@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -215,35 +216,33 @@ function GenerateForm({ onGenerated }: { onGenerated: () => void }) {
           <div className="flex flex-wrap items-end gap-4">
             <div className="flex flex-col gap-2">
               <Label htmlFor="employee">Employee</Label>
-              <select
-                id="employee"
-                required
-                className="flex h-10 w-56 rounded-md border border-input bg-background px-3 py-2 text-sm"
-                value={employeeId}
-                onChange={(e) => setEmployeeId(e.target.value)}
-              >
-                <option value="">Select…</option>
-                {employees.map((e) => (
-                  <option key={e.id} value={e.id}>
-                    {e.fullName}
-                  </option>
-                ))}
-              </select>
+              <Select value={employeeId || undefined} onValueChange={setEmployeeId}>
+                <SelectTrigger id="employee" className="w-56">
+                  <SelectValue placeholder="Select…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {employees.map((e) => (
+                    <SelectItem key={e.id} value={e.id}>
+                      {e.fullName}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="flex flex-col gap-2">
               <Label htmlFor="month">Month</Label>
-              <select
-                id="month"
-                className="flex h-10 w-28 rounded-md border border-input bg-background px-3 py-2 text-sm"
-                value={month}
-                onChange={(e) => setMonth(Number(e.target.value))}
-              >
-                {MONTH_NAMES.map((m, i) => (
-                  <option key={m} value={i + 1}>
-                    {m}
-                  </option>
-                ))}
-              </select>
+              <Select value={String(month)} onValueChange={(v) => setMonth(Number(v))}>
+                <SelectTrigger id="month" className="w-28">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {MONTH_NAMES.map((m, i) => (
+                    <SelectItem key={m} value={String(i + 1)}>
+                      {m}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="flex flex-col gap-2">
               <Label htmlFor="year">Year</Label>

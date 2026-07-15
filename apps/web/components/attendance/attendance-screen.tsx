@@ -4,6 +4,7 @@ import { Fragment, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -205,15 +206,21 @@ function AttendanceTable({
       <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle>{canSeeAll ? "Attendance records" : "My attendance"}</CardTitle>
         {canReview && (
-          <select
-            className="flex h-9 rounded-md border border-input bg-background px-3 py-1 text-sm"
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}
+          <Select
+            value={statusFilter || "__all__"}
+            onValueChange={(v) =>
+              setStatusFilter(v === "__all__" ? "" : (v as typeof statusFilter))
+            }
           >
-            <option value="">All statuses</option>
-            <option value="pending">Pending</option>
-            <option value="approved">Approved</option>
-          </select>
+            <SelectTrigger className="h-9 w-40">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">All statuses</SelectItem>
+              <SelectItem value="pending">Pending</SelectItem>
+              <SelectItem value="approved">Approved</SelectItem>
+            </SelectContent>
+          </Select>
         )}
       </CardHeader>
       <CardContent>

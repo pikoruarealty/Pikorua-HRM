@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Select } from "@/components/ui/select";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { apiFetch } from "@/components/_lib/api";
 
@@ -141,15 +141,19 @@ function GenerateTasksPanel({
               <div className="flex flex-col gap-1.5">
                 <Label>Assign every generated WorkItem to</Label>
                 <Select
-                  value={defaultAssigneeId}
-                  onChange={(e) => setDefaultAssigneeId(e.target.value)}
+                  value={defaultAssigneeId || undefined}
+                  onValueChange={setDefaultAssigneeId}
                 >
-                  <option value="">Select an employee…</option>
-                  {employees.map((emp) => (
-                    <option key={emp.id} value={emp.id}>
-                      {emp.fullName} ({emp.role})
-                    </option>
-                  ))}
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select an employee…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {employees.map((emp) => (
+                      <SelectItem key={emp.id} value={emp.id}>
+                        {emp.fullName} ({emp.role})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
                 </Select>
               </div>
               <Button type="button" size="sm" onClick={handlePersist} disabled={loading !== null}>
@@ -244,20 +248,29 @@ function NewWorkItemForm({
       </div>
       <div className="flex flex-col gap-1.5">
         <Label>Assigned employee</Label>
-        <Select value={assignedTo} onChange={(e) => setAssignedTo(e.target.value)} required>
-          <option value="">Select an employee…</option>
-          {employees.map((emp) => (
-            <option key={emp.id} value={emp.id}>
-              {emp.fullName} ({emp.role})
-            </option>
-          ))}
+        <Select value={assignedTo || undefined} onValueChange={setAssignedTo}>
+          <SelectTrigger>
+            <SelectValue placeholder="Select an employee…" />
+          </SelectTrigger>
+          <SelectContent>
+            {employees.map((emp) => (
+              <SelectItem key={emp.id} value={emp.id}>
+                {emp.fullName} ({emp.role})
+              </SelectItem>
+            ))}
+          </SelectContent>
         </Select>
       </div>
       <div className="flex flex-col gap-1.5">
         <Label>Mode</Label>
-        <Select value={mode} onChange={(e) => setMode(e.target.value as "atomic" | "metric")}>
-          <option value="atomic">atomic</option>
-          <option value="metric">metric</option>
+        <Select value={mode} onValueChange={(v) => setMode(v as "atomic" | "metric")}>
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="atomic">Atomic</SelectItem>
+            <SelectItem value="metric">Metric</SelectItem>
+          </SelectContent>
         </Select>
       </div>
       {mode === "atomic" ? (
