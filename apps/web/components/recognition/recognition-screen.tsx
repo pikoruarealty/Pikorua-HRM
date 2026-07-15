@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Select } from "@/components/ui/select";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { apiFetch } from "@/components/_lib/api";
 
 type LeaderboardRow = {
@@ -63,10 +63,15 @@ export function RecognitionScreen() {
               <Label>Period</Label>
               <Select
                 value={periodType}
-                onChange={(e) => setPeriodType(e.target.value as "weekly" | "monthly")}
+                onValueChange={(v) => setPeriodType(v as "weekly" | "monthly")}
               >
-                <option value="monthly">Monthly</option>
-                <option value="weekly">Weekly</option>
+                <SelectTrigger className="w-40">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="monthly">Monthly</SelectItem>
+                  <SelectItem value="weekly">Weekly</SelectItem>
+                </SelectContent>
               </Select>
             </div>
           </div>

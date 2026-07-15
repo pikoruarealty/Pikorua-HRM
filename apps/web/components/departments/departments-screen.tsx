@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -271,15 +272,15 @@ function LabelEditor({
           </div>
           <div className="flex flex-col gap-2">
             <Label htmlFor="work_item_mode">Mode</Label>
-            <select
-              id="work_item_mode"
-              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-              value={workItemMode}
-              onChange={(e) => setWorkItemMode(e.target.value as "atomic" | "metric")}
-            >
-              <option value="atomic">atomic</option>
-              <option value="metric">metric</option>
-            </select>
+            <Select value={workItemMode} onValueChange={(v) => setWorkItemMode(v as "atomic" | "metric")}>
+              <SelectTrigger id="work_item_mode">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="atomic">Atomic</SelectItem>
+                <SelectItem value="metric">Metric</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           {error && <p className="text-sm text-destructive">{error}</p>}
           <Button type="submit" disabled={submitting}>

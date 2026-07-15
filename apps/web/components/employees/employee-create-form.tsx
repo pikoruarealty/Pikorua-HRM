@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 const ROLES = [
   "admin",
@@ -131,54 +132,60 @@ export function EmployeeCreateForm() {
           </div>
           <div className="flex flex-col gap-2">
             <Label htmlFor="role">Role</Label>
-            <select
-              id="role"
-              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-              value={role}
-              onChange={(e) => setRole(e.target.value)}
-            >
-              {ROLES.map((r) => (
-                <option key={r} value={r}>
-                  {r}
-                </option>
-              ))}
-            </select>
+            <Select value={role} onValueChange={setRole}>
+              <SelectTrigger id="role">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {ROLES.map((r) => (
+                  <SelectItem key={r} value={r}>
+                    {r.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <div className="flex flex-col gap-2">
             <Label htmlFor="department_id">Department</Label>
-            <select
-              id="department_id"
-              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-              value={departmentId}
-              onChange={(e) => {
-                setDepartmentId(e.target.value);
+            <Select
+              value={departmentId || "__none__"}
+              onValueChange={(v) => {
+                setDepartmentId(v === "__none__" ? "" : v);
                 setTeamId("");
               }}
             >
-              <option value="">— none —</option>
-              {departments.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.name}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger id="department_id">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">None</SelectItem>
+                {departments.map((d) => (
+                  <SelectItem key={d.id} value={d.id}>
+                    {d.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <div className="flex flex-col gap-2">
             <Label htmlFor="team_id">Team</Label>
-            <select
-              id="team_id"
-              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-              value={teamId}
-              onChange={(e) => setTeamId(e.target.value)}
+            <Select
+              value={teamId || "__none__"}
+              onValueChange={(v) => setTeamId(v === "__none__" ? "" : v)}
               disabled={!departmentId}
             >
-              <option value="">— none —</option>
-              {teamsInDepartment.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger id="team_id">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">None</SelectItem>
+                {teamsInDepartment.map((t) => (
+                  <SelectItem key={t.id} value={t.id}>
+                    {t.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <div className="flex flex-col gap-2">
             <Label htmlFor="date_of_joining">Date of joining</Label>

@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Select } from "@/components/ui/select";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { apiFetch } from "@/components/_lib/api";
 
@@ -98,10 +98,15 @@ export function AnnouncementsScreen({
                   <Label>Scope</Label>
                   <Select
                     value={scopeType}
-                    onChange={(e) => setScopeType(e.target.value as "all" | "specific_teams")}
+                    onValueChange={(v) => setScopeType(v as "all" | "specific_teams")}
                   >
-                    <option value="all">Everyone</option>
-                    <option value="specific_teams">Specific teams</option>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Everyone</SelectItem>
+                      <SelectItem value="specific_teams">Specific teams</SelectItem>
+                    </SelectContent>
                   </Select>
                 </div>
               )}

@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmployeeAttendancePanel } from "@/components/attendance/employee-attendance-panel";
 import { EmployeeWorkPanel } from "@/components/employees/employee-work-panel";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 type Employee = {
   id: string;
@@ -184,39 +185,45 @@ export function EmployeeDetail({
             <form onSubmit={onSave} className="grid gap-4 sm:grid-cols-2">
               <div className="flex flex-col gap-2">
                 <Label htmlFor="department_id">Department</Label>
-                <select
-                  id="department_id"
-                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                  value={departmentId}
-                  onChange={(e) => {
-                    setDepartmentId(e.target.value);
+                <Select
+                  value={departmentId || "__none__"}
+                  onValueChange={(v) => {
+                    setDepartmentId(v === "__none__" ? "" : v);
                     setTeamId("");
                   }}
                 >
-                  <option value="">— none —</option>
-                  {departments.map((d) => (
-                    <option key={d.id} value={d.id}>
-                      {d.name}
-                    </option>
-                  ))}
-                </select>
+                  <SelectTrigger id="department_id">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">None</SelectItem>
+                    {departments.map((d) => (
+                      <SelectItem key={d.id} value={d.id}>
+                        {d.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               <div className="flex flex-col gap-2">
                 <Label htmlFor="team_id">Team</Label>
-                <select
-                  id="team_id"
-                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                  value={teamId}
-                  onChange={(e) => setTeamId(e.target.value)}
+                <Select
+                  value={teamId || "__none__"}
+                  onValueChange={(v) => setTeamId(v === "__none__" ? "" : v)}
                   disabled={!departmentId}
                 >
-                  <option value="">— none —</option>
-                  {teamsInDepartment.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name}
-                    </option>
-                  ))}
-                </select>
+                  <SelectTrigger id="team_id">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">None</SelectItem>
+                    {teamsInDepartment.map((t) => (
+                      <SelectItem key={t.id} value={t.id}>
+                        {t.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               <div className="flex flex-col gap-2">
                 <Label htmlFor="base_salary">Base salary</Label>

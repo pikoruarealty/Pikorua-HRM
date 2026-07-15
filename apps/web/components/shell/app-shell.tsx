@@ -51,7 +51,7 @@ function NavContent({
   }
 
   return (
-    <nav className="flex flex-1 flex-col gap-6 overflow-y-auto px-3 py-4">
+    <nav className="scrollbar-thin flex flex-1 flex-col gap-6 overflow-y-auto px-3 py-4">
       {groups.map((group, gi) => (
         <div key={gi} className="flex flex-col gap-1">
           {group.label && (

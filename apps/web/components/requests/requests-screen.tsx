@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Select } from "@/components/ui/select";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { apiFetch } from "@/components/_lib/api";
 
 type RequestRow = {
@@ -90,10 +90,15 @@ export function RequestsScreen() {
           <form onSubmit={submit} className="grid gap-3 sm:grid-cols-2">
             <div className="flex flex-col gap-1.5">
               <Label>Type</Label>
-              <Select value={type} onChange={(e) => setType(e.target.value)}>
-                <option value="leave_paid">Paid leave</option>
-                <option value="leave_unpaid">Unpaid leave</option>
-                <option value="reimbursement">Reimbursement</option>
+              <Select value={type} onValueChange={setType}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="leave_paid">Paid leave</SelectItem>
+                  <SelectItem value="leave_unpaid">Unpaid leave</SelectItem>
+                  <SelectItem value="reimbursement">Reimbursement</SelectItem>
+                </SelectContent>
               </Select>
             </div>
             <div className="flex flex-col gap-1.5">

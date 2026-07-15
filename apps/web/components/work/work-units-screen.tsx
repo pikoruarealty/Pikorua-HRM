@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Select } from "@/components/ui/select";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { apiFetch } from "@/components/_lib/api";
 
@@ -83,13 +83,17 @@ export function WorkUnitsScreen() {
             </div>
             <div className="flex flex-col gap-1.5">
               <Label>Department</Label>
-              <Select value={departmentId} onChange={(e) => setDepartmentId(e.target.value)} required>
-                <option value="">Select a department…</option>
-                {departments.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.name}
-                  </option>
-                ))}
+              <Select value={departmentId || undefined} onValueChange={setDepartmentId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select a department…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {departments.map((d) => (
+                    <SelectItem key={d.id} value={d.id}>
+                      {d.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
               </Select>
             </div>
             <div className="flex flex-col gap-1.5 sm:col-span-2">
@@ -102,13 +106,21 @@ export function WorkUnitsScreen() {
             </div>
             <div className="flex flex-col gap-1.5 sm:col-span-2">
               <Label>Team Lead (optional, Leads default to self)</Label>
-              <Select value={teamLeadId} onChange={(e) => setTeamLeadId(e.target.value)}>
-                <option value="">(default to self)</option>
-                {employees.map((emp) => (
-                  <option key={emp.id} value={emp.id}>
-                    {emp.fullName} ({emp.role})
-                  </option>
-                ))}
+              <Select
+                value={teamLeadId || "__self__"}
+                onValueChange={(v) => setTeamLeadId(v === "__self__" ? "" : v)}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__self__">(default to self)</SelectItem>
+                  {employees.map((emp) => (
+                    <SelectItem key={emp.id} value={emp.id}>
+                      {emp.fullName} ({emp.role})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
               </Select>
             </div>
             {error && <p className="text-sm text-destructive sm:col-span-2">{error}</p>}
