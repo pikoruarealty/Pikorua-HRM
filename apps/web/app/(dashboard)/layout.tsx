@@ -1,7 +1,8 @@
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
-import { FINANCE_ROLES } from "@/lib/rbac";
-import { DashboardNav } from "@/components/dashboard-nav";
+import { FINANCE_ROLES, isLeadRole } from "@/lib/rbac";
+import { prisma } from "@/lib/db/prisma";
+import { AppShell } from "@/components/shell/app-shell";
 
 export default async function DashboardLayout({
   children,
@@ -13,13 +14,23 @@ export default async function DashboardLayout({
     redirect("/login");
   }
 
+  // Email for the sidebar profile block (session carries only ids/role).
+  const user = await prisma.user.findUnique({
+    where: { id: session.userId },
+    select: { email: true },
+  });
+
   return (
-    <div className="min-h-screen">
-      <DashboardNav
-        role={session.role}
-        isFinance={FINANCE_ROLES.includes(session.role)}
-      />
-      <main className="container mx-auto max-w-5xl px-6 py-8">{children}</main>
-    </div>
+    <AppShell
+      email={user?.email ?? "account"}
+      role={session.role}
+      ctx={{
+        isFinance: FINANCE_ROLES.includes(session.role),
+        isLead: isLeadRole(session.role),
+        hasEmployee: !!session.employeeId,
+      }}
+    >
+      {children}
+    </AppShell>
   );
 }

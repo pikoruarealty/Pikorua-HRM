@@ -3,7 +3,31 @@
 > Living status doc. Update after every meaningful change (standing project rule).
 > Source of truth for scope = [docs/](docs/) (PRD, SCHEMA, IMPLEMENTATION_PLAN, API_SPEC).
 
-**Last updated:** 2026-07-14 — **Phase 4 integration: Track A + Track B merged into `main`.**
+**Last updated:** 2026-07-15 — **Phase 6 UI redesign: professional app shell, design tokens, dark mode, mobile-responsive, RBAC-hidden nav.**
+
+### Phase 6 — UI redesign (2026-07-15, on `main`)
+Reworked the whole dashboard into a polished, modern product UI (build clean, screenshot-verified in light + dark, desktop + mobile, across roles). Kept one design system (shadcn/ui + Tailwind — the design-taste-frontend skill flags dashboards as out-of-scope for its landing-page core, so applied its applicable rules: one accent, token consistency, real dark mode, mobile discipline, RBAC visibility, zero em-dashes in visible copy).
+- **App shell:** replaced the wrapping horizontal `dashboard-nav` with a fixed left **sidebar** (`components/shell/app-shell.tsx` + `nav-config.ts`) — grouped nav (Work / People / Money / Culture), lucide icons, brand-accent active state, profile block, dark/light toggle, sign-out, live unread-notifications badge. Mobile: sidebar collapses to a hamburger drawer + sticky top bar. `app/(dashboard)/layout.tsx` now renders the shell.
+- **RBAC visibility (hard requirement):** the sidebar and Overview cards render **only** the items a role can use — a tech employee has no Work Units / Departments / Payroll Config / Assets links at all (verified live). Predicates in `nav-config.ts`; routes still enforce server-side.
+- **Design tokens:** refined `globals.css` — cool-slate neutrals + a single confident blue accent (`--brand`), softer radius, success/warning/brand badge variants, full **dark theme** with a no-flash boot script in `layout.tsx`; `prefers-reduced-motion` guard. Fonts switched to **Geist** (`geist` pkg, `next/font`, no Inter).
+- **Primitive polish:** `button` (brand default + success/primary variants, tactile active state), `badge` (brand/success/warning/muted), `card` (softer radius + tinted shadow); new `select`/`textarea` used across screens.
+- **Shared files touched (flagged):** `components/ui/*` (button/badge/card + new primitives), `globals.css`, `tailwind.config.ts`, root `layout.tsx`, `apps/web/package.json` (geist). Removed the old `components/dashboard-nav.tsx`.
+
+**Prior state — 2026-07-15 — Phase 5 wire-up: full-system integration on `main` (production UI, EOD flow, cron scheduler).**
+
+### Phase 5 — Wire-up & integration (2026-07-15, on `main`)
+Made the whole system reachable and working as one unit (both tracks). Build clean (`bun run typecheck` + `bun run build`), live-verified end-to-end against the seeded DB (dev server), test data cleaned up afterward.
+- **Build hygiene:** added root `postinstall: prisma generate` — a fresh checkout no longer typechecks against a stale client (this was actually broken before: `WorkUnit.description` errors until a manual generate).
+- **Clock-in task selection + clock-out EOD (PRD §5.4), the one real feature gap:** `POST /attendance/clock-in` now accepts optional `workItemIds` and records them into `DailyTaskSelection` in the same action (validated as assigned-to-caller). `POST /attendance/clock-out` derives an **EOD summary** (`lib/eod/summary.ts` — planned/completed/points-today from the day's selections + ledger, read-only) and pushes an `eod_summary` notification. New `GET /attendance/eod`. Points still credit immediately on completion (Track B's transactional logic untouched); EOD is a summary, not a re-credit — decided with the user. Live-verified: clock-in with a task → complete (+15 pts) → clock-out → EOD `1/1, +15 pts` + notification; second clock-out → 409.
+- **In-process cron scheduler (node-cron):** each cron's logic extracted to `lib/cron/{recognition,birthday,meeting-reminders}.ts`; the CRON_SECRET-gated HTTP routes now delegate (external crontab still works). `apps/web/instrumentation.ts` (`instrumentationHook: true`) starts a scheduler on server boot: meeting-reminders /5min, birthday 00:05, recognition weekly/monthly. Confirmed `[cron] in-process scheduler started` on boot; recognition snapshot ran (5 rows/period) and the leaderboard reflected the EOD points (Tech Employee EoM=true). Assumes a single VM instance (documented). Added `node-cron` + `@types/node-cron` to `apps/web/package.json`.
+- **Production UI for all of Track B** (previously only the `/test` harness): fresh dashboard screens under `app/(dashboard)/` — `work` (+ `[id]` detail with the AI generate-tasks panel), `my-tasks`, `planning` (the clock-in→EOD flow), `requests`, `recognition`, `notifications`, `announcements`, `events`, `assets` — each a server page (role-gated) + `components/<x>/<x>-screen.tsx` client, hitting the real `/api/v1` routes via `components/_lib/api.ts`. Employee detail gained Documents/Points/Growth-history sections. New shadcn primitives `components/ui/{select,textarea}.tsx`. `/test` kept as a dev harness.
+- **Nav + home:** `components/dashboard-nav.tsx` now carries both tracks' links with per-role visibility predicates; removed the old `app/page.tsx` placeholder and added a role-aware dashboard home at `app/(dashboard)/page.tsx` (path `/`, avoids the `/`-collision parallel-page error). Login now lands on `/`.
+- **Milestone 4 (cross-track) verified live:** full payslip generation with the now-real reimbursement/unpaid-leave/EoM helpers → `net_pay 56300` (base+incentive+bonus−deductions), `employeeOfMonthRef` true from the recognition snapshot → finalize. RBAC spot-check held: employee 403 on payslip-generate + payroll-config, employees list omits `baseSalary`, `/work` and `/assets` pages 307-redirect ICs.
+- **Shared files touched (flagged):** `apps/web/package.json` (node-cron), root `package.json` (postinstall), `components/ui/` (2 new primitives), `components/dashboard-nav.tsx`. **No `schema.prisma`/`seed.ts` change** — EOD derived, cron reuses `notifications`.
+
+---
+
+**Prior state — 2026-07-14 — Phase 4 integration: Track A + Track B merged into `main`.**
 - **Track A Milestone 3 — Payroll — code complete** (employees, departments/teams, attendance, payroll config + payslip generation/review). Was blocked on Track B for full end-to-end; now unblocked (all 3 cross-track helpers live as of 2026-07-14 — `getApprovedReimbursementTotal`, `getEmployeeOfMonthStatus`, `getApprovedUnpaidLeaveDays`; see closeout note below).
 - **Track B Milestones 1–3 complete:** 1.1/1.2/1.3 + hierarchy follow-up; 2.1 decision, 2.2 metric mode, 2.3 daily planning/EOD + point ledger, 2.4 reimbursements + `getApprovedReimbursementTotal` live; 2.4b `getApprovedUnpaidLeaveDays` stub; 3.1 recognition + Employee of the Month + `getEmployeeOfMonthStatus` live; 3.2 notifications infra (wired into leave/reimbursement approve+reject); 3.3 announcements; 3.4 employee documents (local-disk storage); 3.5 events (birthday/anniversary banner + meetings CRUD + reminder cron); post-M3 bug-fix pass (Lead cross-team assignment scoping, Lead self-service, S3→local-disk).
 - **Integration note (Phase 4):** merge conflicts resolved in `CLAUDE.md`, `.githooks/pre-commit`, `README.md`, `progress.md`. Track-b's duplicate `init` migration removed (kept Track A's `20260713100632_init` + `20260714063516_add_team_expected_start_time`, byte-identical init). **Post-merge build fix:** Track A's `app/(auth)/login` and Track B's `app/login` both resolved to `/login` (Next.js parallel-page error — not caught by typecheck, only by a full `next build`); kept Track A's real-app login (→ dashboard), removed Track B's test-only duplicate. ⚠️ **Cross-track mismatch surfaced:** `getApprovedUnpaidLeaveDays` — Track A imports it from `@/lib/requests/leave`, Track B put its stub in `@/lib/requests/reimbursements`. Both are still throwing stubs (real impl deferred), and Track A catches `NotImplementedError` gracefully, so the build/runtime is fine — but the real implementation must land in `leave.ts` (Track A's import site) and the `reimbursements.ts` duplicate deleted.
@@ -71,7 +95,7 @@ Employees · Departments/Teams/Hierarchy config · Attendance (manual) · Payrol
 | Employee CRUD + department/team management | ✅ |
 | `department_labels` config UI | ✅ |
 | Manual Clock In/Out + HR/Admin approval & edit screen | ✅ |
-| Payroll config + payslip generation (manual fields + auto deductions + reimbursement pull-in + EoM ref) | ⚠️ code complete, blocked on Track B stubs for a full live generation |
+| Payroll config + payslip generation (manual fields + auto deductions + reimbursement pull-in + EoM ref) | ✅ (2026-07-15 — unblocked; full generate+finalize live-verified with real cross-track helpers) |
 
 ### Milestone 1 — Org Structure Foundations ✅ (2026-07-13)
 Verified live against the seeded DB (login → API → role-scoped response for every endpoint below), not just build-checked.
@@ -117,11 +141,12 @@ Work units/tasks · Daily planning/EOD · Requests · Recognition · Notificatio
 | M2: Reimbursement requests + implement `getApprovedReimbursementTotal` | ✅ |
 | M3: Recognition leaderboard + Employee of the Month + implement `getEmployeeOfMonthStatus` | ✅ |
 | M3: Notifications infra | ✅ |
-| M3: Announcements (team/all/specific-team scoping) | ⬜ |
-| M3: Employee documents upload | ⬜ |
-| M3: Events — birthday banner + Meetings + reminders | ⬜ |
-| M4: Cross-track integration testing (joint w/ Track A) | ⬜ |
-| Assets stub | ⬜ |
+| M3: Announcements (team/all/specific-team scoping) | ✅ |
+| M3: Employee documents upload | ✅ |
+| M3: Events — birthday banner + Meetings + reminders | ✅ |
+| M4: Cross-track integration testing (joint w/ Track A) | ✅ (2026-07-15 — payslip E2E + EOD flow + cron, live-verified) |
+| Assets stub | ✅ |
+| Production dashboard UI for all Track B modules (was `/test`-only) | ✅ (2026-07-15) |
 
 ### 1.2 detail (2026-07-13)
 Built `POST /work-units/:id/sub-units`, `POST /sub-units/:id/work-items` (atomic only — `mode = metric` rejected with `NOT_IMPLEMENTED`/501), `PATCH /work-items/:id`, `GET /work-items/mine`. Also extended `GET /work-units/:id` to nest `subUnits` + `workItems` per API_SPEC §4 (Employee's status-only view filters `workItems` down to their own assignments). `bun run build` clean. Verified live against the seeded DB with curl: Tech Lead creates sub-unit/work-item; Sales Lead gets 404 (not 403) on another department's WorkUnit; Tech Employee gets 403 creating sub-units; atomic WorkItem requires `taskPoints`; assigned Employee can cycle `pending → wip → completed` (server sets `completedAt`) but 403s on editing `taskPoints`; owning Lead can edit all fields including `taskPoints`; `GET /work-items/mine` returns the assignee's own tasks and 403s for non-Employee roles (tech_lead) per spec's strict role list.

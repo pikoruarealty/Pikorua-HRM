@@ -7,6 +7,7 @@
     "apps/*"
   ],
   "scripts": {
+    "postinstall": "prisma generate",
     "dev": "bun run --filter=@pikorua-hrm/web dev",
     "build": "bun run --filter=@pikorua-hrm/web build",
     "start": "bun run --filter=@pikorua-hrm/web start",

@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmployeeAttendancePanel } from "@/components/attendance/employee-attendance-panel";
+import { EmployeeWorkPanel } from "@/components/employees/employee-work-panel";
 
 type Employee = {
   id: string;
@@ -248,6 +249,8 @@ export function EmployeeDetail({
       )}
 
       {canViewAttendance && <EmployeeAttendancePanel employeeId={employeeId} />}
+
+      {canViewAttendance && <EmployeeWorkPanel employeeId={employeeId} />}
 
       <div className="flex gap-3">
         {isAdmin && employee.status === "active" && (

@@ -48,6 +48,10 @@ bun run dev                   # http://localhost:3000
 
 Seeded logins (default password `Password123!`): `admin@pikorua.test`, `hr@pikorua.test`, `tech.lead@pikorua.test`, `tech.emp@pikorua.test`, `sales.lead@pikorua.test`, `sales.emp@pikorua.test`, `bde@pikorua.test`.
 
+## Scheduled jobs (recognition, birthdays, meeting reminders)
+
+The server runs an **in-process scheduler** (node-cron, started from `apps/web/instrumentation.ts` on boot) that fires the recognition snapshot, birthday/anniversary check, and meeting reminders. No external cron setup is needed — but this **assumes a single running server instance** (the GCP-VM deployment target). If the app is ever horizontally scaled, disable the scheduler and instead hit the CRON_SECRET-gated routes from one external crontab: `POST /api/v1/cron/{recognition-snapshot,birthday-check,meeting-reminders}` with `Authorization: Bearer $CRON_SECRET`.
+
 ## Track ownership
 
 - **Track A — People, Time & Money** (Umang): employees, departments/teams, attendance, payroll. Detailed tasklist: (Track A owner to add one, mirroring `TRACK_B_TASKLIST.md`).
