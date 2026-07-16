@@ -16,7 +16,6 @@ import {
   CalendarRange,
   Bell,
   Package,
-  ShieldCheck,
   ScrollText,
   type LucideIcon,
 } from "lucide-react";
@@ -71,10 +70,7 @@ export const NAV_GROUPS: NavGroup[] = [
   },
   {
     label: "System",
-    items: [
-      { href: "/settings", label: "Account Security", icon: ShieldCheck },
-      { href: "/audit", label: "Audit Log", icon: ScrollText, show: (c) => c.isAdmin },
-    ],
+    items: [{ href: "/audit", label: "Audit Log", icon: ScrollText, show: (c) => c.isAdmin }],
   },
 ];
 
