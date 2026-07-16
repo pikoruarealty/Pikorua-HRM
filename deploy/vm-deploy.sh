@@ -22,6 +22,6 @@ npx prisma generate
 bun run prisma:deploy
 bun run build
 
-sudo systemctl restart pikorua-hrm
+sudo systemctl restart hrm
 
 echo "Deployed $(git rev-parse --short HEAD)"
