@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Menu, X, Sun, Moon, LogOut, Hexagon } from "lucide-react";
+import { Menu, X, Sun, Moon, LogOut, Hexagon, ChevronsUpDown, ShieldCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { visibleGroups, type NavCtx } from "@/components/shell/nav-config";
@@ -37,14 +37,21 @@ function useTheme(): [boolean, () => void] {
 function NavContent({
   ctx,
   unread,
+  dark,
+  toggleTheme,
   onNavigate,
 }: {
   ctx: NavCtx;
   unread: number;
+  dark: boolean;
+  toggleTheme: () => void;
   onNavigate?: () => void;
 }) {
   const pathname = usePathname();
   const groups = visibleGroups(ctx);
+  if (!groups.some((g) => g.label === "System")) {
+    groups.push({ label: "System", items: [] });
+  }
 
   function isActive(href: string) {
     return href === "/" ? pathname === "/" : pathname?.startsWith(href);
@@ -90,6 +97,19 @@ function NavContent({
               </Link>
             );
           })}
+          {group.label === "System" && (
+            <button
+              onClick={toggleTheme}
+              className="group flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60 hover:text-white"
+            >
+              {dark ? (
+                <Sun className="size-[18px] shrink-0 text-sidebar-muted group-hover:text-sidebar-foreground" strokeWidth={2} />
+              ) : (
+                <Moon className="size-[18px] shrink-0 text-sidebar-muted group-hover:text-sidebar-foreground" strokeWidth={2} />
+              )}
+              <span className="flex-1 text-left">{dark ? "Light mode" : "Dark mode"}</span>
+            </button>
+          )}
         </div>
       ))}
     </nav>
@@ -112,6 +132,20 @@ function SidebarInner({
   onLogout: () => void;
 }) {
   const [dark, toggleTheme] = useTheme();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    function onClickOutside(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, [menuOpen]);
+
   return (
     <div className="flex h-full flex-col bg-sidebar">
       <div className="flex h-16 items-center gap-2.5 border-b border-sidebar-border px-5">
@@ -121,10 +155,41 @@ function SidebarInner({
         <span className="text-[15px] font-semibold tracking-tight text-white">Pikorua HRM</span>
       </div>
 
-      <NavContent ctx={ctx} unread={unread} onNavigate={onNavigate} />
+      <NavContent ctx={ctx} unread={unread} dark={dark} toggleTheme={toggleTheme} onNavigate={onNavigate} />
 
-      <div className="border-t border-sidebar-border p-3">
-        <div className="flex items-center gap-3 rounded-lg px-2 py-2">
+      <div ref={menuRef} className="relative border-t border-sidebar-border p-3">
+        {menuOpen && (
+          <div className="animate-in fade-in slide-in-from-bottom-2 absolute inset-x-3 bottom-[calc(100%+0.5rem)] z-10 overflow-hidden rounded-xl border border-white/10 bg-sidebar-accent p-1.5 shadow-2xl shadow-black/50 ring-1 ring-white/10 duration-150">
+            <Link
+              href="/settings"
+              onClick={() => setMenuOpen(false)}
+              className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2.5 text-sm font-medium text-slate-200 transition-colors hover:bg-white/10 hover:text-white"
+            >
+              <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-white/10">
+                <ShieldCheck className="size-4" />
+              </span>
+              Account Security
+            </Link>
+            <div className="my-1 h-px bg-white/10" />
+            <button
+              onClick={() => {
+                setMenuOpen(false);
+                onLogout();
+              }}
+              className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2.5 text-sm font-medium text-red-400 transition-colors hover:bg-red-500/10 hover:text-red-300"
+            >
+              <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-red-500/10">
+                <LogOut className="size-4" />
+              </span>
+              Sign out
+            </button>
+          </div>
+        )}
+
+        <button
+          onClick={() => setMenuOpen((v) => !v)}
+          className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors hover:bg-sidebar-accent/60"
+        >
           <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-sidebar-accent text-sm font-semibold uppercase text-white">
             {email.slice(0, 1)}
           </span>
@@ -132,23 +197,8 @@ function SidebarInner({
             <p className="truncate text-sm font-medium text-white">{email}</p>
             <p className="text-xs text-sidebar-muted">{ROLE_LABELS[role] ?? role}</p>
           </div>
-        </div>
-        <div className="mt-1 flex gap-1">
-          <button
-            onClick={toggleTheme}
-            className="flex flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60 hover:text-white"
-          >
-            {dark ? <Sun className="size-4" /> : <Moon className="size-4" />}
-            {dark ? "Light" : "Dark"}
-          </button>
-          <button
-            onClick={onLogout}
-            className="flex flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60 hover:text-white"
-          >
-            <LogOut className="size-4" />
-            Sign out
-          </button>
-        </div>
+          <ChevronsUpDown className="size-4 shrink-0 text-sidebar-muted" />
+        </button>
       </div>
     </div>
   );
