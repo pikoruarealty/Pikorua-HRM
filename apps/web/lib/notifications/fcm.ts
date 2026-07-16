@@ -73,19 +73,21 @@ export async function sendPushToUser(
   const messaging = getMessaging(fcmApp);
   const results = await Promise.allSettled(
     tokens.map((t) =>
-      // Data-only on purpose. A `notification` payload makes the FCM SDK
-      // auto-display the message in the background AND still fire the service
-      // worker's onBackgroundMessage — which showNotification()s it a second
-      // time, so every push arrived twice. Sending data-only means the message
-      // is rendered exactly once by our own code: the service worker when
-      // backgrounded, onMessage() when the tab is in the foreground.
+      // A `notification` payload makes the FCM SDK render this itself when the
+      // tab is backgrounded — title and body both, no code of ours involved.
+      // The service worker deliberately registers NO onBackgroundMessage
+      // handler (see public/firebase-messaging-sw.js): the SDK runs both the
+      // auto-display and the handler, so having both is what double-fired every
+      // push. Keeping the render inside the SDK also means a stale cached
+      // service worker still shows correct content, which a data-only payload
+      // could not — it left the render to worker code that may be out of date.
       messaging.send({
         token: t.token,
-        data: {
-          title: payload.title,
-          body: payload.body,
-          type: payload.type,
-          link: "/notifications",
+        notification: { title: payload.title, body: payload.body },
+        data: { type: payload.type },
+        webpush: {
+          fcmOptions: { link: "/notifications" },
+          notification: { icon: "/icon-192.png" },
         },
       }),
     ),

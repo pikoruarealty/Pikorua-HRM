@@ -118,9 +118,8 @@ export async function enablePush(): Promise<string> {
   if (!foregroundHandlerBound) {
     foregroundHandlerBound = true;
     onMessage(messaging, (payload) => {
-      // Data-only payload (see lib/notifications/fcm.ts) — title/body are in `data`.
-      const title = payload.data?.title ?? "Pikorua HRM";
-      const body = payload.data?.body ?? "";
+      const title = payload.notification?.title ?? "Pikorua HRM";
+      const body = payload.notification?.body ?? "";
       if (Notification.permission === "granted") {
         new Notification(title, { body, icon: "/icon-192.png" });
       }
