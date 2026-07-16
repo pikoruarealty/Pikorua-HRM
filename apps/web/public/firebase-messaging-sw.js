@@ -22,13 +22,17 @@ if (firebaseConfig.apiKey) {
   firebase.initializeApp(firebaseConfig);
   const messaging = firebase.messaging();
 
+  // Messages are sent data-only (see lib/notifications/fcm.ts) so that the SDK
+  // does not auto-display them alongside this handler — that double-fired every
+  // push. Title/body therefore live in `data`, not `notification`.
   messaging.onBackgroundMessage((payload) => {
-    const title = payload.notification?.title ?? "Pikorua HRM";
-    const body = payload.notification?.body ?? "";
+    const data = payload.data ?? {};
+    const title = data.title ?? "Pikorua HRM";
+    const body = data.body ?? "";
     self.registration.showNotification(title, {
       body,
       icon: "/icon-192.png",
-      data: { url: "/notifications" },
+      data: { url: data.link ?? "/notifications" },
     });
   });
 }
