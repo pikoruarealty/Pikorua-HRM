@@ -100,6 +100,21 @@ export async function enablePush(): Promise<string> {
   const token = await getToken(messaging, { vapidKey, serviceWorkerRegistration: registration });
   if (!token) throw new Error("Could not obtain a push token from the browser.");
 
+  // FCM can hand this browser a new token (a SW code change, cleared storage,
+  // etc.) without invalidating whatever token it issued before — so unless we
+  // explicitly clean up the old one, this device ends up with two live rows in
+  // push_tokens and receives every push twice. Best-effort: a failed cleanup
+  // just leaves a stale row for sendPushToUser's dead-token pruning to catch
+  // later, it must never block getting the new token registered.
+  const previousToken = currentStoredToken();
+  if (previousToken && previousToken !== token) {
+    await fetch("/api/v1/notifications/push-token", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: previousToken }),
+    }).catch(() => undefined);
+  }
+
   const res = await fetch("/api/v1/notifications/push-token", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
