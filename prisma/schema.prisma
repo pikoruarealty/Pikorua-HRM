@@ -137,8 +137,26 @@ model User {
   auditLogs            AuditLog[]       @relation("AuditActor")
   createdHolidays      Holiday[]        @relation("HolidayCreator")
   pushTokens           PushToken[]
+  resetTokens          PasswordResetToken[]
 
   @@map("users")
+}
+
+// Forgot-password flow (2026-07-16). Raw token is emailed once and never
+// stored — only its sha256 hash lives here, so a DB read can't yield a usable
+// token. Single-use (`usedAt`) + short-lived (`expiresAt`, 15min, set by the
+// forgot-password route).
+model PasswordResetToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  user      User      @relation(fields: [userId], references: [id])
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(6)
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([userId])
+  @@map("password_reset_tokens")
 }
 
 model Department {

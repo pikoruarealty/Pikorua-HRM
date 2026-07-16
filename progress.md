@@ -3,7 +3,19 @@
 > Living status doc. Update after every meaningful change (standing project rule).
 > Source of truth for scope = [docs/](docs/) (PRD, SCHEMA, IMPLEMENTATION_PLAN, API_SPEC).
 
-**Last updated:** 2026-07-16 — **Phase 11: dashboard + onboarding UX pass (role-based dashboard, first-login forced password change, square photo crop, DD/MM/YYYY joining default, employee filters, show-password toggle).**
+**Last updated:** 2026-07-16 — **Phase 12: forgot/reset password via Brevo transactional email.**
+
+### Phase 12 — Forgot/reset password (2026-07-16, on `main`)
+Build + lint + typecheck clean. Live-verified against the dev server + seeded DB with a throwaway user pointed at a real inbox (a real `POST` to Brevo's API succeeded, not mocked); test data cleaned up afterward.
+- **Flow:** `POST /api/v1/auth/forgot-password` (`{ email }`, public) always returns the same generic response regardless of whether the account exists — no enumeration signal. If it does exist: any previous unused token for that user is invalidated, a random 32-byte token is generated, its **sha256 hash** (never the raw token) is stored in a new `PasswordResetToken` row with a **15-minute expiry**, and an email is sent via Brevo with a link to `/reset-password?token=...`. `POST /api/v1/auth/reset-password` (`{ token, new_password }`, public) validates the token (unused + unexpired), enforces the existing `checkPasswordStrength` policy, and — matching change-password's precedent — **bumps `tokenVersion`** (revokes every outstanding session) and marks the token used; it does **not** auto-login, the user returns to `/login`. Both routes rate-limited (`checkRateLimit`, 5/15min and 10/15min respectively) and audited (`auth.forgot_password_requested`, `auth.password_reset`).
+- **Schema (⚠️ shared file, migration `20260716130208_add_password_reset_tokens`):** new `PasswordResetToken` table (`userId`, unique `tokenHash`, `expiresAt`, `usedAt`) + `User.resetTokens` back-relation. No changes to existing `User` columns.
+- **Email infra (new, `lib/email/`):** `brevo.ts` — fetch-based client (no SDK, matches `lib/ai/groq.ts`'s style, `apps/web/package.json` untouched) calling Brevo's `v3/smtp/email`. **Degrades gracefully**: missing/placeholder `BREVO_API_KEY` logs at debug and no-ops rather than throwing (verified live: forgot-password still returns its normal 200 with the key unset). `templates/password-reset.ts` — a plain inline-styled HTML email, no template-engine dependency.
+- **UI:** `app/(auth)/forgot-password/page.tsx` (email form, shows the same generic message regardless of API response, matching the no-enumeration guarantee client-side too) and `app/(auth)/reset-password/page.tsx` (reads `?token=`, reuses the existing `PasswordField` show/hide component from Phase 11, confirm-password match check). "Forgot password?" link added to `/login`.
+- **Env:** `APP_BASE_URL` (builds the email's reset link; `https://` is assumed if no scheme is given — normalized in code) and `BREVO_API_KEY`/`BREVO_SENDER_EMAIL`/`BREVO_SENDER_NAME` (sender verified in Brevo: `pikoruaweb@gmail.com` / "PIKORUA"). Documented in `.env.example`.
+- **Live-verified:** real Brevo send succeeded (200 from their API); weak-password 422; valid reset 200 → old password rejected, new password logs in; token reuse 422 (invalid/expired); expired token 422 (backdated `expiresAt` in a throwaway script); rate limit 429 on the 6th forgot-password call from the same IP within the window; Brevo-unconfigured case still returns the normal 200 without throwing.
+- **Shared files touched (flagged up front):** `prisma/schema.prisma` only (new table, additive).
+
+---
 
 ### Phase 11 — Dashboard & onboarding UX (2026-07-16, on `main`)
 Build + lint + typecheck + 43 unit tests all clean; `bun run build` clean.
