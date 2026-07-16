@@ -3,6 +3,7 @@ import { getSession } from "@/lib/auth";
 import { FINANCE_ROLES, Role, isLeadRole } from "@/lib/rbac";
 import { prisma } from "@/lib/db/prisma";
 import { AppShell } from "@/components/shell/app-shell";
+import { FirstLoginGate } from "@/components/settings/first-login-gate";
 
 export default async function DashboardLayout({
   children,
@@ -17,8 +18,14 @@ export default async function DashboardLayout({
   // Email for the sidebar profile block (session carries only ids/role).
   const user = await prisma.user.findUnique({
     where: { id: session.userId },
-    select: { email: true },
+    select: { email: true, mustChangePassword: true },
   });
+
+  // First-login guard: until the onboarding temp password is replaced, every
+  // dashboard route renders the gate instead of the app.
+  if (user?.mustChangePassword) {
+    return <FirstLoginGate email={user.email} />;
+  }
 
   return (
     <AppShell

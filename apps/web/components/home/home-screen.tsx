@@ -2,6 +2,18 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import {
+  CheckSquare,
+  Bell,
+  Clock,
+  Award,
+  Inbox,
+  Users,
+  UserCheck,
+  CalendarClock,
+  FileText,
+  ShieldCheck,
+} from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { apiFetch } from "@/components/_lib/api";
@@ -12,6 +24,22 @@ type TodayEvents = {
   birthdays: { employeeId: string; fullName: string }[];
   anniversaries: { employeeId: string; fullName: string }[];
 };
+type WorkItem = { id: string; status: "pending" | "wip" | "completed" };
+type RequestRow = { id: string; status: string };
+type Employee = { id: string; status: "active" | "inactive" };
+type Payslip = { id: string; periodMonth: number; periodYear: number; status: string };
+type Announcement = { id: string; title: string; createdAt: string };
+type AttendanceOverview = {
+  counts: { total: number; present: number; halfDay: number; onLeave: number; absent: number; late: number; pendingApproval: number };
+};
+type DailySelection = { id: string };
+type AuditLog = { id: string; action: string; actor: { email: string } | null; createdAt: string };
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function humanizeRole(role: string) {
+  return role.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 const QUICK_LINKS: { href: string; label: string; desc: string }[] = [
   { href: "/planning", label: "Daily Planning", desc: "Clock in, pick today's tasks, see your EOD." },
@@ -23,11 +51,15 @@ const QUICK_LINKS: { href: string; label: string; desc: string }[] = [
 ];
 
 export function HomeScreen({
+  role,
   isFinance,
+  isAdmin,
   isLead,
   hasEmployee,
 }: {
+  role: string;
   isFinance: boolean;
+  isAdmin: boolean;
   isLead: boolean;
   hasEmployee: boolean;
 }) {
@@ -35,25 +67,93 @@ export function HomeScreen({
   const [unread, setUnread] = useState(0);
   const [events, setEvents] = useState<TodayEvents | null>(null);
 
+  // Individual-contributor data.
+  const [tasks, setTasks] = useState<WorkItem[] | null>(null);
+  const [myRequests, setMyRequests] = useState<RequestRow[] | null>(null);
+  const [points, setPoints] = useState<number | null>(null);
+  const [latestPayslip, setLatestPayslip] = useState<Payslip | null>(null);
+  const [plannedToday, setPlannedToday] = useState<number | null>(null);
+
+  // Lead / finance shared: pending approvals in the viewer's scope.
+  const [pendingApprovals, setPendingApprovals] = useState<number | null>(null);
+
+  // Finance (Admin/HR) org-wide data.
+  const [employees, setEmployees] = useState<Employee[] | null>(null);
+  const [attendance, setAttendance] = useState<AttendanceOverview | null>(null);
+  const [draftPayslips, setDraftPayslips] = useState<number | null>(null);
+
+  // Announcements (all roles) + audit trail (admin only).
+  const [announcements, setAnnouncements] = useState<Announcement[] | null>(null);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[] | null>(null);
+
   useEffect(() => {
-    apiFetch<Me>("/auth/me").then((r) => setMe(r.data));
+    // Fire each request independently; a forbidden/empty endpoint just leaves
+    // its widget in the loading/zero state (every endpoint self-scopes by role).
+    apiFetch<Me>("/auth/me").then((r) => {
+      setMe(r.data);
+      if (r.data?.employeeId) {
+        apiFetch<{ balance: number }>(`/employees/${r.data.employeeId}/points`).then((p) => {
+          if (p.data) setPoints(p.data.balance);
+        });
+      }
+    });
     apiFetch<{ notifications: Notification[] }>("/notifications").then((r) => {
       if (r.data) setUnread(r.data.notifications.filter((n) => !n.readAt).length);
     });
     apiFetch<TodayEvents>("/events/today").then((r) => setEvents(r.data));
-  }, []);
+    apiFetch<Announcement[]>("/announcements").then((r) => setAnnouncements(r.data ?? []));
+
+    if (hasEmployee) {
+      apiFetch<WorkItem[]>("/work-items/mine").then((r) => setTasks(r.data ?? []));
+      apiFetch<RequestRow[]>("/requests").then((r) => setMyRequests(r.data ?? []));
+      apiFetch<Payslip[]>("/payslips").then((r) => setLatestPayslip(r.data?.[0] ?? null));
+    }
+
+    if (isLead || isFinance) {
+      apiFetch<RequestRow[]>("/requests?status=pending").then((r) =>
+        setPendingApprovals(r.data?.length ?? 0),
+      );
+    }
+
+    if (isLead && !isFinance) {
+      apiFetch<DailySelection[]>("/daily-selections/today").then((r) =>
+        setPlannedToday(r.data?.length ?? 0),
+      );
+    }
+
+    if (isFinance) {
+      apiFetch<Employee[]>("/employees").then((r) => setEmployees(r.data ?? []));
+      apiFetch<AttendanceOverview>("/attendance/overview").then((r) => setAttendance(r.data));
+      apiFetch<Payslip[]>("/payslips").then((r) =>
+        setDraftPayslips(r.data?.filter((p) => p.status === "draft").length ?? 0),
+      );
+    }
+
+    if (isAdmin) {
+      apiFetch<{ logs: AuditLog[] }>("/audit-logs?limit=5").then((r) =>
+        setAuditLogs(r.data?.logs ?? []),
+      );
+    }
+  }, [hasEmployee, isLead, isFinance, isAdmin]);
 
   const celebrations = [
     ...(events?.birthdays ?? []).map((b) => `🎉 ${b.fullName}'s birthday`),
     ...(events?.anniversaries ?? []).map((a) => `🎊 ${a.fullName}'s work anniversary`),
   ];
 
+  const openTasks = tasks?.filter((t) => t.status !== "completed").length ?? null;
+  const pendingMyRequests = myRequests?.filter((r) => r.status === "pending").length ?? null;
+  const activeHeadcount = employees?.filter((e) => e.status === "active").length ?? null;
+
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Pikorua HRM</h1>
+        <h1 className="text-2xl font-bold tracking-tight">
+          {greeting()}
+          {me?.email ? `, ${me.email.split("@")[0]}` : ""}
+        </h1>
         <p className="text-sm text-muted-foreground">
-          {me ? `Signed in as ${me.email} · ${me.role}` : "Loading…"}
+          {me ? `Signed in as ${me.email} · ${humanizeRole(role)}` : "Loading…"}
         </p>
       </div>
 
@@ -70,45 +170,165 @@ export function HomeScreen({
         </Card>
       )}
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Notifications</CardTitle>
-          </CardHeader>
-          <CardContent className="text-sm text-muted-foreground">
-            <span className="text-2xl font-bold text-foreground">{unread}</span> unread ·{" "}
-            <Link href="/notifications" className="underline">
-              view all
-            </Link>
-          </CardContent>
-        </Card>
+      {/* Personal stat tiles — shown to anyone with an employee record. */}
+      {hasEmployee && (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <StatTile
+            icon={<CheckSquare className="size-4" />}
+            label="Open tasks"
+            value={openTasks}
+            href="/my-tasks"
+          />
+          <StatTile
+            icon={<Clock className="size-4" />}
+            label="Pending requests"
+            value={pendingMyRequests}
+            href="/requests"
+          />
+          <StatTile
+            icon={<Bell className="size-4" />}
+            label="Unread notifications"
+            value={unread}
+            href="/notifications"
+          />
+          <StatTile
+            icon={<Award className="size-4" />}
+            label="Recognition points"
+            value={points}
+            href="/recognition"
+          />
+        </div>
+      )}
 
-        {(isFinance || isLead) && (
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Work Units</CardTitle>
-            </CardHeader>
-            <CardContent className="text-sm text-muted-foreground">
-              Manage projects, sub-units and tasks ·{" "}
-              <Link href="/work" className="underline">
-                open
-              </Link>
-            </CardContent>
-          </Card>
-        )}
+      {/* Lead tiles — team-scoped oversight (no salary/finance data). */}
+      {isLead && !isFinance && (
+        <section className="flex flex-col gap-3">
+          <h2 className="text-sm font-semibold text-muted-foreground">Your team</h2>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <StatTile
+              icon={<Inbox className="size-4" />}
+              label="Requests awaiting action"
+              value={pendingApprovals}
+              href="/requests"
+            />
+            <StatTile
+              icon={<CalendarClock className="size-4" />}
+              label="Planned today"
+              value={plannedToday}
+              href="/planning"
+            />
+            <StatTile
+              icon={<Users className="size-4" />}
+              label="Work units"
+              value={null}
+              hint="Manage projects & tasks"
+              href="/work"
+            />
+          </div>
+        </section>
+      )}
 
-        {isFinance && (
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Finance</CardTitle>
-            </CardHeader>
-            <CardContent className="text-sm text-muted-foreground">
-              Generate payslips & configure payroll ·{" "}
-              <Link href="/payslips" className="underline">
-                payslips
-              </Link>
-            </CardContent>
-          </Card>
+      {/* Admin/HR org-wide tiles. */}
+      {isFinance && (
+        <section className="flex flex-col gap-3">
+          <h2 className="text-sm font-semibold text-muted-foreground">Company at a glance</h2>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <StatTile
+              icon={<Users className="size-4" />}
+              label="Active headcount"
+              value={activeHeadcount}
+              href="/employees"
+            />
+            <StatTile
+              icon={<UserCheck className="size-4" />}
+              label="Present today"
+              value={attendance ? attendance.counts.present + attendance.counts.halfDay : null}
+              hint={attendance ? `${attendance.counts.absent} absent · ${attendance.counts.onLeave} on leave` : undefined}
+              href="/attendance"
+            />
+            <StatTile
+              icon={<Inbox className="size-4" />}
+              label="Pending approvals"
+              value={pendingApprovals}
+              hint={attendance ? `${attendance.counts.pendingApproval} attendance to review` : undefined}
+              href="/requests"
+            />
+            <StatTile
+              icon={<FileText className="size-4" />}
+              label="Draft payslips"
+              value={draftPayslips}
+              href="/payslips"
+            />
+          </div>
+        </section>
+      )}
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        {/* Latest announcements — everyone. */}
+        <Panel title="Announcements" href="/announcements" linkLabel="All">
+          {announcements === null ? (
+            <p className="text-sm text-muted-foreground">Loading…</p>
+          ) : announcements.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No announcements yet.</p>
+          ) : (
+            <ul className="flex flex-col divide-y">
+              {announcements.slice(0, 4).map((a) => (
+                <li key={a.id} className="flex items-center justify-between gap-3 py-2 text-sm">
+                  <span className="truncate">{a.title}</span>
+                  <span className="shrink-0 text-xs text-muted-foreground">
+                    {new Date(a.createdAt).toLocaleDateString()}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Panel>
+
+        {/* Latest payslip for the individual; audit trail for admins. */}
+        {isAdmin ? (
+          <Panel title="Recent activity" href="/audit" linkLabel="Audit log">
+            {auditLogs === null ? (
+              <p className="text-sm text-muted-foreground">Loading…</p>
+            ) : auditLogs.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No audited activity yet.</p>
+            ) : (
+              <ul className="flex flex-col divide-y">
+                {auditLogs.map((l) => (
+                  <li key={l.id} className="flex items-center justify-between gap-3 py-2 text-sm">
+                    <span className="flex items-center gap-2 truncate">
+                      <ShieldCheck className="size-3.5 shrink-0 text-muted-foreground" />
+                      <span className="truncate font-mono text-xs">{l.action}</span>
+                      {l.actor && (
+                        <span className="truncate text-xs text-muted-foreground">
+                          {l.actor.email}
+                        </span>
+                      )}
+                    </span>
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      {new Date(l.createdAt).toLocaleDateString()}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Panel>
+        ) : (
+          hasEmployee && (
+            <Panel title="Latest payslip" href="/payslips" linkLabel="All payslips">
+              {latestPayslip === null ? (
+                <p className="text-sm text-muted-foreground">No payslips available yet.</p>
+              ) : (
+                <div className="flex items-center justify-between text-sm">
+                  <span className="font-medium">
+                    {MONTHS[latestPayslip.periodMonth - 1]} {latestPayslip.periodYear}
+                  </span>
+                  <Badge variant={latestPayslip.status === "finalized" ? "default" : "secondary"}>
+                    {latestPayslip.status}
+                  </Badge>
+                </div>
+              )}
+            </Panel>
+          )
         )}
       </div>
 
@@ -128,5 +348,66 @@ export function HomeScreen({
         </div>
       </div>
     </div>
+  );
+}
+
+function greeting() {
+  const h = new Date().getHours();
+  if (h < 12) return "Good morning";
+  if (h < 18) return "Good afternoon";
+  return "Good evening";
+}
+
+/** Compact metric tile. `value === null` renders a dash (loading / N/A). */
+function StatTile({
+  icon,
+  label,
+  value,
+  hint,
+  href,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: number | null;
+  hint?: string;
+  href: string;
+}) {
+  return (
+    <Link href={href}>
+      <Card className="h-full transition-colors hover:border-primary/50">
+        <CardContent className="flex flex-col gap-1 py-4">
+          <span className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+            {icon}
+            {label}
+          </span>
+          <span className="text-2xl font-bold">{value === null ? "—" : value}</span>
+          {hint && <span className="text-xs text-muted-foreground">{hint}</span>}
+        </CardContent>
+      </Card>
+    </Link>
+  );
+}
+
+function Panel({
+  title,
+  href,
+  linkLabel,
+  children,
+}: {
+  title: string;
+  href: string;
+  linkLabel: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between space-y-0">
+        <CardTitle className="text-base">{title}</CardTitle>
+        <Link href={href} className="text-xs text-primary hover:underline">
+          {linkLabel}
+        </Link>
+      </CardHeader>
+      <CardContent>{children}</CardContent>
+    </Card>
   );
 }

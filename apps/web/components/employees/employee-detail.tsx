@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmployeeAttendancePanel } from "@/components/attendance/employee-attendance-panel";
 import { EmployeeWorkPanel } from "@/components/employees/employee-work-panel";
 import { EmployeeAvatar } from "@/components/employees/employee-avatar";
+import { ImageCropModal, isSquare } from "@/components/employees/image-cropper";
 import {
   EmployeeRequestsPanel,
   EmployeePayslipsPanel,
@@ -35,6 +36,20 @@ type Employee = {
 
 type Department = { id: string; name: string };
 type Team = { id: string; name: string; departmentId: string };
+
+const ROLES = [
+  "admin",
+  "hr",
+  "tech_lead",
+  "sales_lead",
+  "tech_employee",
+  "sales_employee",
+  "bde",
+];
+
+function humanizeRole(role: string) {
+  return role.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 async function getJson(res: Response) {
   const json = await res.json();
@@ -66,7 +81,9 @@ export function EmployeeDetail({
   const [teamId, setTeamId] = useState("");
   const [baseSalary, setBaseSalary] = useState("");
   const [deviceUid, setDeviceUid] = useState("");
+  const [role, setRole] = useState("");
   const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
@@ -86,6 +103,7 @@ export function EmployeeDetail({
       setTeamId(emp.teamId ?? "");
       setBaseSalary(emp.baseSalary ?? "");
       setDeviceUid(emp.deviceUid?.toString() ?? "");
+      setRole(emp.role);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load employee.");
     } finally {
@@ -102,6 +120,10 @@ export function EmployeeDetail({
     e.preventDefault();
     setSaving(true);
     setError(null);
+    setNotice(null);
+    // Only an admin may change role, and only send it when it actually changed
+    // (a no-op role in the body would needlessly revoke the employee's session).
+    const roleChanged = isAdmin && !isSelf && role !== employee?.role;
     try {
       await getJson(
         await fetch(`/api/v1/employees/${employeeId}`, {
@@ -112,9 +134,15 @@ export function EmployeeDetail({
             team_id: teamId || null,
             base_salary: Number(baseSalary),
             device_uid: deviceUid ? Number(deviceUid) : null,
+            ...(roleChanged ? { role } : {}),
           }),
         }),
       );
+      if (roleChanged) {
+        setNotice(
+          "Role updated. The employee's active sessions were revoked — they must sign in again to get the new permissions.",
+        );
+      }
       load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save changes.");
@@ -174,7 +202,7 @@ export function EmployeeDetail({
         <CardContent className="grid gap-2 text-sm sm:grid-cols-2">
           <div>
             <span className="text-muted-foreground">Role: </span>
-            {employee.role}
+            {humanizeRole(employee.role)}
           </div>
           <div>
             <span className="text-muted-foreground">Phone: </span>
@@ -279,6 +307,29 @@ export function EmployeeDetail({
                   onChange={(e) => setDeviceUid(e.target.value)}
                 />
               </div>
+              {isAdmin && (
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="role">Role</Label>
+                  <Select value={role} onValueChange={setRole} disabled={isSelf}>
+                    <SelectTrigger id="role">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {ROLES.map((r) => (
+                        <SelectItem key={r} value={r}>
+                          {humanizeRole(r)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    {isSelf
+                      ? "You cannot change your own role."
+                      : "Changing the role revokes the employee's sessions; they must sign in again."}
+                  </p>
+                </div>
+              )}
+              {notice && <p className="text-sm text-green-600 sm:col-span-2">{notice}</p>}
               {error && <p className="text-sm text-destructive sm:col-span-2">{error}</p>}
               <Button type="submit" disabled={saving} className="sm:col-span-2">
                 {saving ? "Saving…" : "Save changes"}
@@ -333,10 +384,10 @@ function PhotoReplaceControl({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Non-square picks are routed through the square cropper before upload.
+  const [cropSource, setCropSource] = useState<File | null>(null);
 
-  async function onFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  async function upload(file: File) {
     setBusy(true);
     setError(null);
     try {
@@ -353,12 +404,32 @@ function PhotoReplaceControl({
       setError(err instanceof Error ? err.message : "Failed to upload photo.");
     } finally {
       setBusy(false);
-      e.target.value = "";
+    }
+  }
+
+  async function onFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    if (await isSquare(file).catch(() => false)) {
+      upload(file);
+    } else {
+      setCropSource(file);
     }
   }
 
   return (
     <div className="mt-1">
+      {cropSource && (
+        <ImageCropModal
+          file={cropSource}
+          onCancel={() => setCropSource(null)}
+          onCropped={(cropped) => {
+            setCropSource(null);
+            upload(cropped);
+          }}
+        />
+      )}
       <label className="cursor-pointer text-xs text-primary underline-offset-2 hover:underline">
         {busy ? "Uploading…" : "Change photo"}
         <input

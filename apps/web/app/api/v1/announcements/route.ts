@@ -3,7 +3,41 @@ import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { isFinanceRole, isLeadRole } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
-import { AnnouncementScope } from "@prisma/client";
+import { pushNotification } from "@/lib/notifications/push";
+import { AnnouncementScope, EmployeeStatus, type Announcement } from "@prisma/client";
+
+// Fan a freshly-created announcement out to its audience as per-user
+// notifications (in-app bell + FCM push, via the shared pushNotification
+// chokepoint). Audience mirrors GET's visibility rules: "all" → every
+// active-employee user; "team"/"specific_teams" → active members of the listed
+// teams. The creator is never notified of their own post. Fire-and-safe: a
+// notification failure must never fail the announcement itself.
+async function notifyAnnouncementAudience(
+  announcement: Announcement,
+  creatorUserId: string,
+): Promise<void> {
+  try {
+    const where =
+      announcement.scopeType === AnnouncementScope.all
+        ? { employee: { status: EmployeeStatus.active } }
+        : { employee: { status: EmployeeStatus.active, teamId: { in: announcement.teamIds } } };
+
+    const recipients = await prisma.user.findMany({
+      where: { ...where, id: { not: creatorUserId } },
+      select: { id: true },
+    });
+
+    // A Notification carries a single `message` string, so fold the
+    // announcement's title + body into it — otherwise the notifications page
+    // (which renders `message`) would show only the headline, not the content.
+    const message = `${announcement.title} — ${announcement.body}`;
+    await Promise.allSettled(
+      recipients.map((u) => pushNotification(u.id, "announcement", message)),
+    );
+  } catch (err) {
+    console.error(`[announcements] failed to notify audience for ${announcement.id}:`, err);
+  }
+}
 
 // Track B. GET/POST /api/v1/announcements — Milestone 3.3.
 // RBAC: POST — Lead (own team only, scope_type forced to "team"), Admin/HR
@@ -50,6 +84,7 @@ export async function POST(req: Request) {
         createdById: session.userId,
       },
     });
+    await notifyAnnouncementAudience(announcement, session.userId);
     return ok(announcement, 201);
   }
 
@@ -73,6 +108,7 @@ export async function POST(req: Request) {
       createdById: session.userId,
     },
   });
+  await notifyAnnouncementAudience(announcement, session.userId);
   return ok(announcement, 201);
 }
 

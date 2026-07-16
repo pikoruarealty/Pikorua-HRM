@@ -64,6 +64,8 @@ export async function POST(req: Request) {
     data: {
       passwordHash: await hashPassword(parsed.data.new_password),
       tokenVersion: { increment: 1 },
+      // Clear the onboarding force-change flag once they've set their own password.
+      mustChangePassword: false,
     },
     select: { tokenVersion: true, role: true, employeeId: true },
   });

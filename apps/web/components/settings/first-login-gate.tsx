@@ -1,24 +1,31 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { apiFetch } from "@/components/_lib/api";
-import { PushNotificationsToggle } from "@/components/settings/push-notifications-toggle";
 import { PasswordField } from "@/components/settings/password-field";
 
-export function SecurityScreen() {
+// Shown full-screen (in place of the app shell) whenever the signed-in user
+// still carries `mustChangePassword`. Every dashboard route renders through the
+// layout that mounts this, so the user cannot reach the rest of the app until
+// they replace their onboarding temp password. On success the change-password
+// API clears the flag and re-issues the session cookie, so a refresh drops the
+// gate and reveals the app.
+export function FirstLoginGate({ email }: { email: string }) {
+  const router = useRouter();
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    setMessage(null);
+    setError(null);
     if (next !== confirm) {
-      setMessage({ kind: "error", text: "New password and confirmation do not match." });
+      setError("New password and confirmation do not match.");
       return;
     }
     setBusy(true);
@@ -28,34 +35,27 @@ export function SecurityScreen() {
     });
     setBusy(false);
     if (res.error) {
-      setMessage({ kind: "error", text: res.error.message });
+      setError(res.error.message);
       return;
     }
-    setCurrent("");
-    setNext("");
-    setConfirm("");
-    setMessage({ kind: "ok", text: "Password changed." });
+    router.refresh();
   }
 
   return (
-    <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Account Security</h1>
-        <p className="text-sm text-muted-foreground">
-          Change the password you sign in with. If you are still using the temporary password you
-          were given at onboarding, change it now.
-        </p>
-      </div>
-
-      <Card className="max-w-md">
+    <main className="flex min-h-screen items-center justify-center p-6">
+      <Card className="w-full max-w-sm">
         <CardHeader>
-          <CardTitle>Change password</CardTitle>
+          <CardTitle>Set your password</CardTitle>
         </CardHeader>
         <CardContent>
+          <p className="mb-4 text-sm text-muted-foreground">
+            Welcome{email ? `, ${email}` : ""}. You&apos;re signed in with the temporary password
+            you were given at onboarding. Choose a new password to continue.
+          </p>
           <form className="flex flex-col gap-4" onSubmit={submit}>
             <PasswordField
               id="current"
-              label="Current password"
+              label="Temporary password"
               autoComplete="current-password"
               value={current}
               onChange={setCurrent}
@@ -75,23 +75,13 @@ export function SecurityScreen() {
               value={confirm}
               onChange={setConfirm}
             />
-            {message && (
-              <p
-                className={
-                  message.kind === "ok" ? "text-sm text-green-600" : "text-sm text-destructive"
-                }
-              >
-                {message.text}
-              </p>
-            )}
+            {error && <p className="text-sm text-destructive">{error}</p>}
             <Button type="submit" disabled={busy}>
-              {busy ? "Changing…" : "Change password"}
+              {busy ? "Saving…" : "Set password & continue"}
             </Button>
           </form>
         </CardContent>
       </Card>
-
-      <PushNotificationsToggle />
-    </div>
+    </main>
   );
 }
