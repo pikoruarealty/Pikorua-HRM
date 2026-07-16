@@ -190,6 +190,8 @@ export async function POST(req: Request) {
           email: d.email,
           passwordHash,
           role: d.role,
+          // New accounts start on a temp password: force a change at first login.
+          mustChangePassword: true,
         },
       },
     },

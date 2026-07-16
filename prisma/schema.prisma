@@ -117,6 +117,11 @@ model User {
   // Bumped on password change / deactivation to revoke all outstanding JWTs
   // (session.ts embeds this as the `tv` claim and rejects a mismatch).
   tokenVersion Int      @default(0) @map("token_version")
+  // True while the account still uses its onboarding temp password; the
+  // dashboard layout forces a password change before anything else is usable.
+  // Cleared on the first successful change-password. Default false so existing
+  // and seeded accounts are never force-prompted.
+  mustChangePassword Boolean @default(false) @map("must_change_password")
   employeeId   String?  @unique @map("employee_id") @db.Uuid
   employee     Employee? @relation(fields: [employeeId], references: [id])
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)

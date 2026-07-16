@@ -1,5 +1,5 @@
 import { getSession } from "@/lib/auth";
-import { FINANCE_ROLES, isLeadRole } from "@/lib/rbac";
+import { FINANCE_ROLES, Role, isLeadRole } from "@/lib/rbac";
 import { HomeScreen } from "@/components/home/home-screen";
 
 // Dashboard landing (path "/", inside the (dashboard) route group). Replaces
@@ -8,7 +8,9 @@ export default async function HomePage() {
   const session = await getSession();
   return (
     <HomeScreen
+      role={session!.role}
       isFinance={FINANCE_ROLES.includes(session!.role)}
+      isAdmin={session!.role === Role.admin}
       isLead={isLeadRole(session!.role)}
       hasEmployee={!!session!.employeeId}
     />
