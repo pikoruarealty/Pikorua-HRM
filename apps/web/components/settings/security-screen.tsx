@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { apiFetch } from "@/components/_lib/api";
+import { PushNotificationsToggle } from "@/components/settings/push-notifications-toggle";
 
 export function SecurityScreen() {
   const [current, setCurrent] = useState("");
@@ -104,6 +105,8 @@ export function SecurityScreen() {
           </form>
         </CardContent>
       </Card>
+
+      <PushNotificationsToggle />
     </div>
   );
 }

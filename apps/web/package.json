@@ -16,6 +16,8 @@
     "bcryptjs": "^2.4.3",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
+    "firebase": "^12.16.0",
+    "firebase-admin": "^14.1.0",
     "geist": "^1.7.2",
     "jose": "^5.9.6",
     "lucide-react": "^0.454.0",

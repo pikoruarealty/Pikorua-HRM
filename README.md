@@ -12,6 +12,7 @@ Full context lives in [docs/](docs/):
 2. [SCHEMA.md](docs/SCHEMA.md) — database schema.
 3. [IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) — architecture + the 2-dev track split.
 4. [API_SPEC.md](docs/API_SPEC.md) — endpoints + roles per endpoint.
+5. [DEPLOYMENT.md](docs/DEPLOYMENT.md) — deploying to a GCP VM (Postgres, nginx, HTTPS, PM2).
 
 Live status: [progress.md](progress.md).
 
@@ -42,6 +43,9 @@ cp .env.example .env          # then fill DATABASE_URL and AUTH_SECRET
 bun run prisma:migrate        # first run creates the initial migration
 bun run db:seed               # 3 departments, teams, one user per role
 
+# To wipe the DB and start over with fresh seed data (e.g. for testing):
+bun run db:reset               # drops DB, reapplies all migrations, reruns seed.ts
+
 # 4. Run the app
 bun run dev                   # http://localhost:3000
 ```
@@ -68,6 +72,16 @@ CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs on every push/PR:
 - **Audit trail:** every sensitive action (logins incl. failures, password changes, payslip generate/finalize, payroll config changes, attendance edits/approvals, request approve/reject/override, employee create/update/deactivate, holidays, admin overrides) is written to the append-only `audit_logs` table via `audit()` from `@/lib/audit`. Admin-only viewer at `/audit` (`GET /api/v1/audit-logs`).
 - **Verbose logging:** structured console logs from `@/lib/log` (`LOG_LEVEL` env: `debug`/`info`/`warn`/`error`; defaults to debug in dev, info in production). Every request gets an `INFO [http] request rid=…` line and an `x-request-id` response header; every API failure gets a `WARN/ERROR [api]` line; every audited mutation gets an `INFO [audit]` line — correlate by timestamp/rid when debugging.
 - **File uploads on disk:** employee documents **and profile photos** live under `<cwd>/uploads/` (outside `public/`, served only through authenticated routes) — include this directory in backups.
+
+## Push notifications (Firebase Cloud Messaging)
+
+Every notification the system already generates (leave approved/rejected, admin request overrides, meeting reminders, birthdays/anniversaries, EOD summaries, recognition) fans out through one chokepoint — `pushNotification()` in `apps/web/lib/notifications/push.ts` — which writes the in-app `notifications` row **and** sends a browser push via FCM to every device the user has opted in on. Push is strictly additive: if Firebase isn't configured, `pushNotification()` still works exactly as before (in-app only).
+
+- **Setup:** create a Firebase project, add a Web App, generate a Web Push (VAPID) key pair, and generate a service-account key (Project Settings → Service Accounts). Fill the `NEXT_PUBLIC_FIREBASE_*`, `FIREBASE_ADMIN_*`, and `NEXT_PUBLIC_FIREBASE_VAPID_KEY` values in `.env` (see `.env.example`). Missing values degrade to a no-op, logged at debug level — never a hard failure.
+- **Opt-in only:** users enable push per-browser from **Account Security** (`/settings`) — nothing prompts for notification permission automatically.
+- **Server:** `apps/web/lib/notifications/fcm.ts` wraps `firebase-admin`; `sendPushToUser()` sends to every token in the new `push_tokens` table for a user and prunes tokens FCM reports as unregistered/invalid. Never throws — a push failure logs and moves on, matching the `audit()` fire-and-safe contract.
+- **Client:** `apps/web/lib/firebase/client.ts` (lazy app/Messaging init) + `apps/web/lib/firebase/messaging-client.ts` (permission request → service worker registration → `getToken` → `POST /api/v1/notifications/push-token`) + `public/firebase-messaging-sw.js` (background push handler; reads its Firebase config from the registration URL's query string, since static files can't read `NEXT_PUBLIC_*` env vars).
+- **RBAC:** token registration/unregistration (`POST`/`DELETE /api/v1/notifications/push-token`) is self-only — a user can only manage tokens tied to their own account; the send path is server-only and never exposed to clients.
 
 ## Scheduled jobs (recognition, birthdays, meeting reminders)
 
