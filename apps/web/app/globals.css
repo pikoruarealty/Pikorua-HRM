@@ -89,6 +89,19 @@
   }
 }
 
+/* Browser autofill (esp. Chrome/webkit) paints its own background via an
+   internal box-shadow, ignoring page CSS and any theme — override it so
+   autofilled fields stay on the app's --background/--foreground instead of
+   forcing white regardless of dark mode. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-text-fill-color: hsl(var(--foreground));
+  -webkit-box-shadow: 0 0 0 1000px hsl(var(--background)) inset;
+  box-shadow: 0 0 0 1000px hsl(var(--background)) inset;
+  transition: background-color 9999s ease-in-out 0s;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
