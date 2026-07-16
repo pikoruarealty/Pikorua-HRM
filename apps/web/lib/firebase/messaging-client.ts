@@ -18,6 +18,31 @@ let foregroundHandlerBound = false;
 
 export type PushSupport = "unsupported" | "unconfigured" | "denied" | "ready";
 
+/** Brave exposes this to let sites detect it (its own opt-in API, not a UA sniff). */
+export async function isBraveBrowser(): Promise<boolean> {
+  const brave = (navigator as unknown as { brave?: { isBrave?: () => Promise<boolean> } }).brave;
+  if (!brave?.isBrave) return false;
+  return brave.isBrave().catch(() => false);
+}
+
+// Brave ships with "Use Google services for push messaging" OFF by default
+// (its own privacy setting, in brave://settings/privacy) — this blocks the
+// underlying push service FCM's getToken() depends on, and the browser
+// throws a bare "Registration failed - push service error" with no
+// actionable detail. Not a bug in this app; rewrite it into something a user
+// can actually act on.
+function translatePushError(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  if (/push service error/i.test(message)) {
+    return (
+      "Your browser blocked the push service. In Brave, go to Settings → Privacy and " +
+      "security → \"Use Google services for push messaging\" and turn it on, then reload " +
+      "this page and try again."
+    );
+  }
+  return message;
+}
+
 export function pushSupportStatus(): PushSupport {
   if (typeof window === "undefined" || !("Notification" in window) || !("serviceWorker" in navigator)) {
     return "unsupported";
@@ -97,7 +122,12 @@ export async function enablePush(): Promise<string> {
   const vapidKey = process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY;
   if (!vapidKey) throw new Error("Push notifications are not configured (missing VAPID key).");
 
-  const token = await getToken(messaging, { vapidKey, serviceWorkerRegistration: registration });
+  let token: string;
+  try {
+    token = await getToken(messaging, { vapidKey, serviceWorkerRegistration: registration });
+  } catch (err) {
+    throw new Error(translatePushError(err));
+  }
   if (!token) throw new Error("Could not obtain a push token from the browser.");
 
   // FCM can hand this browser a new token (a SW code change, cleared storage,

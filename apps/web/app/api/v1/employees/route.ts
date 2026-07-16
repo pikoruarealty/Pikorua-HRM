@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
@@ -35,8 +36,44 @@ const FINANCE_SELECT = {
   baseSalary: true,
 } satisfies Prisma.EmployeeSelect;
 
+// Onboarding temp password (2026-07-16 fix): previously a fixed "Pk" + 8
+// random chars + "!1" — every temp password shared the same prefix/suffix,
+// cutting the effective search space down to just the 8-char middle and
+// making them fingerprintable. Now: 14 chars drawn from a crypto-secure RNG
+// (crypto.randomInt, not Math.random), one required char from each of
+// upper/lower/digit guaranteed then shuffled into a random position, no
+// fixed characters anywhere. Ambiguous-looking characters (I/l/1/0/O) are
+// excluded so a temp password read off a screen/printout is easy to
+// transcribe correctly.
+const TEMP_PASSWORD_UPPER = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+const TEMP_PASSWORD_LOWER = "abcdefghijkmnpqrstuvwxyz";
+const TEMP_PASSWORD_DIGITS = "23456789";
+const TEMP_PASSWORD_SYMBOLS = "!@#$%^&*";
+const TEMP_PASSWORD_ALL =
+  TEMP_PASSWORD_UPPER + TEMP_PASSWORD_LOWER + TEMP_PASSWORD_DIGITS + TEMP_PASSWORD_SYMBOLS;
+const TEMP_PASSWORD_LENGTH = 14;
+
+function randomChar(charset: string): string {
+  return charset[crypto.randomInt(charset.length)];
+}
+
 function generateTempPassword(): string {
-  return `Pk${Math.random().toString(36).slice(2, 10)}!1`;
+  const required = [
+    randomChar(TEMP_PASSWORD_UPPER),
+    randomChar(TEMP_PASSWORD_LOWER),
+    randomChar(TEMP_PASSWORD_DIGITS),
+  ];
+  const rest = Array.from({ length: TEMP_PASSWORD_LENGTH - required.length }, () =>
+    randomChar(TEMP_PASSWORD_ALL),
+  );
+  const chars = [...required, ...rest];
+  // Fisher-Yates shuffle so the guaranteed chars aren't always in the first
+  // three positions — crypto.randomInt keeps the shuffle itself unbiased.
+  for (let i = chars.length - 1; i > 0; i--) {
+    const j = crypto.randomInt(i + 1);
+    [chars[i], chars[j]] = [chars[j], chars[i]];
+  }
+  return chars.join("");
 }
 
 export async function GET(req: Request) {
