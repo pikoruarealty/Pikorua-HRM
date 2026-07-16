@@ -11,10 +11,14 @@ on:
     workflows: ["CI"]
     types: [completed]
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   deploy:
-    if: github.event.workflow_run.conclusion == 'success'
+    # workflow_run only fires this job on a successful CI run; workflow_dispatch
+    # is a manual "redeploy the current main as-is" escape hatch and has no
+    # workflow_run context to check, so it's allowed through unconditionally.
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Deploy over SSH
