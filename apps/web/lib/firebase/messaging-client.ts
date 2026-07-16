@@ -28,9 +28,53 @@ export function currentStoredToken(): string | null {
   return window.localStorage.getItem(STORAGE_KEY);
 }
 
+/** Resolve once `registration` has an activated worker, or reject on timeout. */
+function waitForActivation(
+  registration: ServiceWorkerRegistration,
+  timeoutMs = 10_000,
+): Promise<void> {
+  if (registration.active) return Promise.resolve();
+
+  const worker = registration.installing ?? registration.waiting;
+  if (!worker) {
+    // No worker on this registration yet — fall back to whatever ends up
+    // controlling our scope (navigator.serviceWorker.ready resolves on active).
+    return navigator.serviceWorker.ready.then(() => undefined);
+  }
+
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      worker.removeEventListener("statechange", onStateChange);
+      reject(new Error("The notification service worker did not start in time. Reload and try again."));
+    }, timeoutMs);
+
+    function onStateChange() {
+      if (worker!.state === "activated") {
+        clearTimeout(timer);
+        worker!.removeEventListener("statechange", onStateChange);
+        resolve();
+      } else if (worker!.state === "redundant") {
+        clearTimeout(timer);
+        worker!.removeEventListener("statechange", onStateChange);
+        reject(new Error("The notification service worker failed to install."));
+      }
+    }
+
+    worker.addEventListener("statechange", onStateChange);
+  });
+}
+
 async function registerServiceWorker(): Promise<ServiceWorkerRegistration> {
   const url = `${SW_PATH}?${serviceWorkerConfigParams()}`;
-  return navigator.serviceWorker.register(url);
+  const registration = await navigator.serviceWorker.register(url);
+
+  // register() resolves as soon as the *registration* exists — its worker may
+  // still be "installing"/"waiting". getToken() calls PushManager.subscribe(),
+  // which requires an ACTIVE worker and otherwise fails with "Subscription
+  // failed - no active Service Worker". Wait for activation before handing the
+  // registration to FCM.
+  await waitForActivation(registration);
+  return registration;
 }
 
 /** Request permission (if needed), register the SW, get an FCM token, and register it server-side. */
