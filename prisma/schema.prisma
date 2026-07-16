@@ -128,6 +128,7 @@ model User {
   createdEvents        Event[]          @relation("EventCreator")
   auditLogs            AuditLog[]       @relation("AuditActor")
   createdHolidays      Holiday[]        @relation("HolidayCreator")
+  pushTokens           PushToken[]
 
   @@map("users")
 }
@@ -441,6 +442,25 @@ model Notification {
 
   @@index([userId, readAt])
   @@map("notifications")
+}
+
+// FCM web-push device tokens (added 2026-07-15). A user can have multiple
+// registered browsers/devices, so this is one-to-many, not a column on User.
+// `pushNotification()` (lib/notifications/push.ts) sends to every token for
+// the target user after writing the in-app Notification row — push is an
+// additional delivery channel for the same event, not a parallel system.
+// Registration/unregistration is self-only (POST/DELETE
+// /api/v1/notifications/push-token); a token that FCM reports as
+// invalid/unregistered is deleted lazily on next send failure.
+model PushToken {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  user      User     @relation(fields: [userId], references: [id])
+  token     String   @unique
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([userId])
+  @@map("push_tokens")
 }
 
 model Announcement {
