@@ -27,12 +27,12 @@ async function notifyAnnouncementAudience(
       select: { id: true },
     });
 
-    // A Notification carries a single `message` string, so fold the
-    // announcement's title + body into it — otherwise the notifications page
-    // (which renders `message`) would show only the headline, not the content.
-    const message = `${announcement.title} — ${announcement.body}`;
+    // Title and body stay separate fields all the way through: the headline
+    // renders above the body in-app, and becomes the FCM push title.
     await Promise.allSettled(
-      recipients.map((u) => pushNotification(u.id, "announcement", message)),
+      recipients.map((u) =>
+        pushNotification(u.id, "announcement", announcement.body, announcement.title),
+      ),
     );
   } catch (err) {
     console.error(`[announcements] failed to notify audience for ${announcement.id}:`, err);
