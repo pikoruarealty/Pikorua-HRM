@@ -9,10 +9,17 @@ import { apiFetch } from "@/components/_lib/api";
 type Notification = {
   id: string;
   type: string;
+  title: string | null;
   message: string;
   readAt: string | null;
   createdAt: string;
 };
+
+/** "leave_approved" -> "Leave Approved" — headline fallback for the many
+ *  notification types that are a single self-contained sentence. */
+function humanizeType(type: string): string {
+  return type.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 export function NotificationsScreen() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -66,19 +73,31 @@ export function NotificationsScreen() {
           {error && <p className="text-sm text-destructive">{error}</p>}
           {notifications.length === 0 && <p className="text-sm text-muted-foreground">None yet.</p>}
           {notifications.map((n) => (
-            <div key={n.id} className="flex items-center justify-between rounded border p-3 text-sm">
-              <div>
+            <div
+              key={n.id}
+              className="flex items-start justify-between gap-3 rounded border p-3 text-sm"
+            >
+              {/* min-w-0 lets a long body wrap instead of stretching the row. */}
+              <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <Badge variant="outline">{n.type}</Badge>
                   {!n.readAt && <Badge>unread</Badge>}
                 </div>
-                <p className="mt-1">{n.message}</p>
-                <p className="text-xs text-muted-foreground">
+                <p className="mt-1.5 font-medium">{n.title ?? humanizeType(n.type)}</p>
+                <p className="mt-0.5 whitespace-pre-wrap break-words text-muted-foreground">
+                  {n.message}
+                </p>
+                <p className="mt-1.5 text-xs text-muted-foreground">
                   {new Date(n.createdAt).toLocaleString()}
                 </p>
               </div>
               {!n.readAt && (
-                <Button size="sm" variant="outline" onClick={() => markRead(n.id)}>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="shrink-0"
+                  onClick={() => markRead(n.id)}
+                >
                   Mark read
                 </Button>
               )}

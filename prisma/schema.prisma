@@ -448,6 +448,11 @@ model Notification {
   userId    String   @map("user_id") @db.Uuid
   user      User     @relation(fields: [userId], references: [id])
   type      String   // e.g. leave_approved, task_assigned, birthday
+  // Optional headline, rendered above `message` in the UI and used as the FCM
+  // push title. Nullable: most notification types are a single sentence and
+  // fall back to a humanized `type` for display. Announcements set it to the
+  // announcement title so the (potentially long) body stays a separate block.
+  title     String?
   message   String
   readAt    DateTime? @map("read_at") @db.Timestamptz(6)
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)

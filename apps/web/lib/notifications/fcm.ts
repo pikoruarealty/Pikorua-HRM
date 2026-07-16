@@ -14,6 +14,13 @@ import { createLogger } from "@/lib/log";
 
 const logger = createLogger("fcm");
 
+// Error codes that mean *this token is dead* and should be dropped. Kept
+// deliberately narrow — see the invalid-argument note in sendPushToUser().
+const DEAD_TOKEN_CODES = [
+  "registration-token-not-registered",
+  "invalid-registration-token",
+];
+
 function isConfigured(): boolean {
   return !!(
     process.env.FIREBASE_ADMIN_PROJECT_ID &&
@@ -90,8 +97,19 @@ export async function sendPushToUser(
       // firebase-admin's FirebaseError puts the code directly on `.code`
       // (e.g. "messaging/registration-token-not-registered"), not nested.
       const code = (result.reason as { code?: string })?.code ?? "unknown";
-      if (code.includes("registration-token-not-registered") || code.includes("invalid-argument")) {
+
+      if (DEAD_TOKEN_CODES.some((dead) => code.includes(dead))) {
         staleIds.push(tokens[i]!.id);
+      } else if (code.includes("invalid-argument")) {
+        // Deliberately NOT pruned. FCM returns invalid-argument for a
+        // malformed *payload* as well as a bad token — pruning on it meant one
+        // bad payload would delete every user's token on the first send, and
+        // silently force the whole company to re-enable push. A payload bug is
+        // ours and affects everyone, so make it loud and keep the token.
+        logger.error(
+          `send rejected as invalid-argument (likely a malformed payload, NOT a dead token) — token ${tokens[i]!.id} kept`,
+          { code },
+        );
       } else {
         logger.warn(`send failed for token ${tokens[i]!.id}`, { code });
       }

@@ -24,15 +24,25 @@ function humanizeType(type: string): string {
     .join(" ");
 }
 
+/**
+ * Create an in-app notification and fan it out to the user's browsers via FCM.
+ *
+ * `title` is optional: most notification types are a single self-contained
+ * sentence and fall back to a humanized `type` ("Leave Approved"). Pass it when
+ * the notification has a real headline distinct from its body — announcements
+ * do, so their long body renders as its own block instead of being crammed onto
+ * one line with the title.
+ */
 export async function pushNotification(
   userId: string,
   type: string,
   message: string,
+  title?: string,
 ): Promise<Notification> {
   const notification = await prisma.notification.create({
-    data: { userId, type, message },
+    data: { userId, type, message, title: title ?? null },
   });
-  sendPushToUser(userId, { title: humanizeType(type), body: message, type }).catch((err) =>
+  sendPushToUser(userId, { title: title ?? humanizeType(type), body: message, type }).catch((err) =>
     console.error(`[fcm] unexpected error sending push for user=${userId}:`, err),
   );
   return notification;
