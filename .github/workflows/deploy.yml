@@ -1,0 +1,28 @@
+# Deploys to the GCP VM after CI passes on main. SSHes in and runs the same
+# steps documented in docs/DEPLOYMENT.md § 11 ("Deploying updates"), plus the
+# two VM-specific fixes we hit doing this by hand:
+#   - `prisma generate` hangs under Bun on this VM -> use npx instead
+#     (see deploy/vm-deploy.sh)
+#   - restart via systemd (deploy/pikorua-hrm.service), not PM2
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+jobs:
+  deploy:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script_stop: true
+          script: |
+            bash /home/pruthvirajsinh_biz/pikorua-hrm/deploy/vm-deploy.sh
