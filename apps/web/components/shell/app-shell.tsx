@@ -7,6 +7,7 @@ import { Menu, X, Sun, Moon, LogOut, Hexagon, ChevronsUpDown, ShieldCheck } from
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { visibleGroups, type NavCtx } from "@/components/shell/nav-config";
+import { useTheme } from "@/lib/hooks/use-theme";
 
 const ROLE_LABELS: Record<string, string> = {
   admin: "Admin",
@@ -17,22 +18,6 @@ const ROLE_LABELS: Record<string, string> = {
   sales_employee: "Sales",
   bde: "BDE",
 };
-
-function useTheme(): [boolean, () => void] {
-  const [dark, setDark] = useState(false);
-  useEffect(() => {
-    setDark(document.documentElement.classList.contains("dark"));
-  }, []);
-  const toggle = () => {
-    const next = !document.documentElement.classList.contains("dark");
-    document.documentElement.classList.toggle("dark", next);
-    try {
-      localStorage.setItem("theme", next ? "dark" : "light");
-    } catch {}
-    setDark(next);
-  };
-  return [dark, toggle];
-}
 
 function NavContent({
   ctx,
