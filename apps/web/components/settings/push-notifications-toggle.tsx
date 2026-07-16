@@ -9,6 +9,7 @@ import {
   currentStoredToken,
   enablePush,
   disablePush,
+  isBraveBrowser,
   type PushSupport,
 } from "@/lib/firebase/messaging-client";
 
@@ -24,10 +25,12 @@ export function PushNotificationsToggle() {
   const [enabled, setEnabled] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isBrave, setIsBrave] = useState(false);
 
   useEffect(() => {
     setSupport(pushSupportStatus());
     setEnabled(!!currentStoredToken());
+    isBraveBrowser().then(setIsBrave);
   }, []);
 
   async function onEnable() {
@@ -85,6 +88,13 @@ export function PushNotificationsToggle() {
           <p className="text-sm text-destructive">
             Notifications are blocked for this site in your browser settings. Allow them there,
             then reload this page.
+          </p>
+        )}
+        {support === "ready" && isBrave && !enabled && (
+          <p className="text-xs text-muted-foreground">
+            Using Brave? It blocks push by default. If enabling fails, turn on
+            Settings → Privacy and security → &quot;Use Google services for push
+            messaging&quot;, then reload this page.
           </p>
         )}
         {support === "ready" && (
