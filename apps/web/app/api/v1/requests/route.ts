@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { isFinanceRole, isLeadRole } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
+import { redactRequestFinancials } from "@/lib/requests/redact";
 import { RequestType, RequestStatus, Role } from "@prisma/client";
 
 // Who may file their own request, in hierarchy order: Employee -> approved by
@@ -124,10 +125,16 @@ export async function GET(req: Request) {
       orderBy: { createdAt: "desc" },
     });
     // A Lead may only ever see their own team's requests + their own, even via employee_id filter.
-    return ok(requests.filter((r) => scopedEmployeeIds.includes(r.employeeId)));
+    // Reimbursement amounts/attachments are stripped for non-finance viewers (golden rule).
+    return ok(
+      requests
+        .filter((r) => scopedEmployeeIds.includes(r.employeeId))
+        .map(redactRequestFinancials),
+    );
   }
 
-  // Employee: self only.
+  // Employee: self only. Reimbursement financials are redacted here too — the
+  // amount surfaces to the employee via their payslip once generated (PRD §3).
   const requests = await prisma.request.findMany({
     where: {
       employeeId: session.employeeId,
@@ -136,5 +143,5 @@ export async function GET(req: Request) {
     },
     orderBy: { createdAt: "desc" },
   });
-  return ok(requests);
+  return ok(requests.map(redactRequestFinancials));
 }

@@ -16,7 +16,22 @@ const prisma = new PrismaClient();
 
 const DEFAULT_PASSWORD = "Password123!";
 
+// This seed provisions real login accounts (including admin/hr) with the
+// well-known DEFAULT_PASSWORD above. Running it against production would create
+// or reset accounts to a password that is committed to the repo, so refuse to
+// run in production unless explicitly and deliberately overridden.
+function assertNotProduction(): void {
+  if (process.env.NODE_ENV === "production" && process.env.ALLOW_PROD_SEED !== "true") {
+    console.error(
+      "[seed] Refusing to run: NODE_ENV=production. This seed creates accounts with a public default password. " +
+        "If you really mean to, set ALLOW_PROD_SEED=true.",
+    );
+    process.exit(1);
+  }
+}
+
 async function main() {
+  assertNotProduction();
   const passwordHash = await bcrypt.hash(DEFAULT_PASSWORD, 10);
 
   // --- Payroll config (singleton-ish; keyed by effective_from) ---------------

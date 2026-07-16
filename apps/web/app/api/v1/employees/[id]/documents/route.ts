@@ -60,6 +60,18 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 
+// Allowed document MIME types → canonical extension (mirrors the whitelist the
+// file-serve route renders, so nothing servable can be an active-content type
+// like SVG/HTML). Anything else is rejected rather than stored.
+const ALLOWED_DOC_TYPES: Record<string, string> = {
+  "application/pdf": ".pdf",
+  "image/png": ".png",
+  "image/jpeg": ".jpg",
+  "image/gif": ".gif",
+  "application/msword": ".doc",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+};
+
 export async function POST(req: Request, { params }: { params: { id: string } }) {
   const session = await getSession();
   if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
@@ -89,9 +101,18 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   if (file.size > MAX_FILE_BYTES) {
     return failFor(ErrorCode.VALIDATION, "file exceeds the 10MB limit.");
   }
+  const canonicalExtension = ALLOWED_DOC_TYPES[file.type];
+  if (!canonicalExtension) {
+    return failFor(
+      ErrorCode.VALIDATION,
+      `Unsupported file type "${file.type || "unknown"}". Allowed: PDF, PNG, JPEG, GIF, DOC, DOCX.`,
+    );
+  }
 
   const buffer = Buffer.from(await file.arrayBuffer());
-  const { storageKey } = await saveUploadedFile(buffer, file.name, `documents/${employee.id}`);
+  // Store under the canonical extension from the validated MIME type, never the
+  // client-supplied filename — the serve route keys its Content-Type off this.
+  const { storageKey } = await saveUploadedFile(buffer, `document${canonicalExtension}`, `documents/${employee.id}`);
 
   const document = await prisma.employeeDocument.create({
     data: {

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
-import { getSession, verifyPassword, hashPassword } from "@/lib/auth";
+import { getSession, verifyPassword, hashPassword, createSession } from "@/lib/auth";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { checkPasswordStrength } from "@/lib/security/password-policy";
 import { checkRateLimit } from "@/lib/security/rate-limit";
@@ -56,10 +56,21 @@ export async function POST(req: Request) {
     return fail(ErrorCode.UNAUTHENTICATED, "Current password is incorrect.", 401);
   }
 
-  await prisma.user.update({
+  // Bump tokenVersion to revoke every outstanding JWT for this user (any other
+  // device / a hijacked session), then re-issue this device's cookie with the
+  // new version so the caller who just re-authenticated stays logged in.
+  const updated = await prisma.user.update({
     where: { id: user.id },
-    data: { passwordHash: await hashPassword(parsed.data.new_password) },
+    data: {
+      passwordHash: await hashPassword(parsed.data.new_password),
+      tokenVersion: { increment: 1 },
+    },
+    select: { tokenVersion: true, role: true, employeeId: true },
   });
+  await createSession(
+    { userId: user.id, role: updated.role, employeeId: updated.employeeId },
+    updated.tokenVersion,
+  );
 
   await audit({
     action: "auth.change_password",

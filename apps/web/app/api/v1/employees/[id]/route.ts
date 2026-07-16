@@ -186,6 +186,13 @@ export async function DELETE(
     select: FINANCE_SELECT,
   });
 
+  // Revoke the deactivated employee's login sessions (bumps token_version so
+  // any outstanding JWT is rejected on its next getSession()).
+  await prisma.user.updateMany({
+    where: { employeeId: params.id },
+    data: { tokenVersion: { increment: 1 } },
+  });
+
   await audit({
     action: "employee.deactivate",
     actorUserId: session.userId,

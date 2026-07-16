@@ -66,11 +66,14 @@ export async function POST(req: Request) {
     return fail(ErrorCode.UNAUTHENTICATED, "Invalid email or password.", 401);
   }
 
-  await createSession({
-    userId: user.id,
-    role: user.role,
-    employeeId: user.employeeId,
-  });
+  await createSession(
+    {
+      userId: user.id,
+      role: user.role,
+      employeeId: user.employeeId,
+    },
+    user.tokenVersion,
+  );
 
   resetRateLimit(accountKey);
   await audit({
