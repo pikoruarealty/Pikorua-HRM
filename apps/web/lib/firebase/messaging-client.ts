@@ -12,6 +12,10 @@ import { getMessagingInstance, firebaseConfigured, serviceWorkerConfigParams } f
 const STORAGE_KEY = "pikorua_push_token";
 const SW_PATH = "/firebase-messaging-sw.js";
 
+// Guards against stacking duplicate onMessage listeners across repeated
+// enablePush() calls within the same page session.
+let foregroundHandlerBound = false;
+
 export type PushSupport = "unsupported" | "unconfigured" | "denied" | "ready";
 
 export function pushSupportStatus(): PushSupport {
@@ -106,15 +110,22 @@ export async function enablePush(): Promise<string> {
 
   window.localStorage.setItem(STORAGE_KEY, token);
 
-  // Foreground messages aren't shown by the browser automatically (that's
-  // the service worker's job for background tabs) — show them manually here.
-  onMessage(messaging, (payload) => {
-    const title = payload.notification?.title ?? "Pikorua HRM";
-    const body = payload.notification?.body ?? "";
-    if (Notification.permission === "granted") {
-      new Notification(title, { body, icon: "/icon-192.png" });
-    }
-  });
+  // Foreground messages aren't shown by the browser automatically (that's the
+  // service worker's job for background tabs) — show them manually here.
+  // Bound at most once per page: enablePush() can be called repeatedly (the
+  // toggle, retries), and each onMessage() call adds another listener, which
+  // showed one duplicate notification per extra registration.
+  if (!foregroundHandlerBound) {
+    foregroundHandlerBound = true;
+    onMessage(messaging, (payload) => {
+      // Data-only payload (see lib/notifications/fcm.ts) — title/body are in `data`.
+      const title = payload.data?.title ?? "Pikorua HRM";
+      const body = payload.data?.body ?? "";
+      if (Notification.permission === "granted") {
+        new Notification(title, { body, icon: "/icon-192.png" });
+      }
+    });
+  }
 
   return token;
 }

@@ -66,13 +66,19 @@ export async function sendPushToUser(
   const messaging = getMessaging(fcmApp);
   const results = await Promise.allSettled(
     tokens.map((t) =>
+      // Data-only on purpose. A `notification` payload makes the FCM SDK
+      // auto-display the message in the background AND still fire the service
+      // worker's onBackgroundMessage — which showNotification()s it a second
+      // time, so every push arrived twice. Sending data-only means the message
+      // is rendered exactly once by our own code: the service worker when
+      // backgrounded, onMessage() when the tab is in the foreground.
       messaging.send({
         token: t.token,
-        notification: { title: payload.title, body: payload.body },
-        data: { type: payload.type },
-        webpush: {
-          fcmOptions: { link: "/notifications" },
-          notification: { icon: "/icon-192.png" },
+        data: {
+          title: payload.title,
+          body: payload.body,
+          type: payload.type,
+          link: "/notifications",
         },
       }),
     ),
