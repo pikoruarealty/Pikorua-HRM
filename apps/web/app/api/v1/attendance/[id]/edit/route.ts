@@ -65,6 +65,12 @@ export async function PATCH(
 
   const effectiveIn = clockInApproved ?? existing.clockInRaw;
   const effectiveOut = clockOutApproved ?? existing.clockOutRaw;
+  if (effectiveIn && effectiveOut && effectiveOut <= effectiveIn) {
+    return failFor(
+      ErrorCode.VALIDATION,
+      "The resulting clock-out time must be after the clock-in time.",
+    );
+  }
   const hours = effectiveIn && effectiveOut ? computeHours(effectiveIn, effectiveOut) : null;
 
   const updated = await prisma.attendanceRecord.update({

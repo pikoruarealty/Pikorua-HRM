@@ -3,7 +3,21 @@
 > Living status doc. Update after every meaningful change (standing project rule).
 > Source of truth for scope = [docs/](docs/) (PRD, SCHEMA, IMPLEMENTATION_PLAN, API_SPEC).
 
-**Last updated:** 2026-07-15 — **Phase 9: Firebase Cloud Messaging push notifications, layered onto the existing notification system.**
+**Last updated:** 2026-07-16 — **Phase 10: security-audit remediation (golden-rule reimbursement leak, task-completion race, seed prod-guard, salary-in-logs, session revocation, upload/attendance hardening).**
+
+### Phase 10 — Security audit fixes (2026-07-16, on `main`)
+Acted on a full production-readiness/security audit. Build + lint + typecheck + 43 unit tests all clean; every fix below **live-verified** against a production build (`bun run start`, port 3199) on the seeded DB, then test data cleaned up and server stopped.
+- **CRITICAL — golden-rule reimbursement leak (fixed).** `GET /requests` and `GET /requests/:id` returned reimbursement `amount`/`attachmentUrl` to non-finance viewers — a Team Lead could read team members' reimbursement amounts (PRD §3 forbids this). New `lib/requests/redact.ts` (`redactRequestFinancials`) nulls those fields for every non-finance viewer (Lead + self); Admin/HR unchanged. Live-verified: admin sees ₹4321, tech-lead + self see `null` (single + list).
+- **HIGH — task-completion double-credit race (fixed).** `EmployeePointLedger` had no uniqueness on `work_item_id`; concurrent completes (double-click, or `/complete` racing `PATCH`) double-credited points. Added `@@unique([workItemId])` + both routes catch P2002 → `409 CONFLICT`. Live-verified: two concurrent completes → one 200 / one 409, balance +15 once (exactly 1 ledger row).
+- **HIGH — seed prod-guard (fixed).** `prisma/seed.ts` (which provisions admin/HR logins with the committed default password) now refuses to run when `NODE_ENV=production` unless `ALLOW_PROD_SEED=true`.
+- **MEDIUM — salary/net-pay in INFO logs (fixed).** `audit()` logged full metadata (base_salary, net_pay, deductions) to the non-access-controlled console stream. Now redacts financial-keyed values from the console line only; the Admin-only `audit_logs` DB row keeps full detail.
+- **MEDIUM — session revocation (fixed).** Added `User.tokenVersion` (migration `20260716000000_add_token_version_and_ledger_unique`) embedded as the JWT `tv` claim; `getSession()` rejects a stale version. Password change bumps it (and re-issues the current device's cookie so the caller stays in) and employee-deactivate bumps it — outstanding JWTs on other devices die immediately. Tokens minted before this default to `tv=0` (column default) so existing sessions aren't force-logged-out on deploy. Live-verified: old cookie → 401 after change, re-issued cookie → 200, login intact.
+- **MEDIUM/LOW — upload + attendance hardening.** Employee document upload now enforces a MIME allowlist (PDF/PNG/JPEG/GIF/DOC/DOCX) and stores under the canonical extension (not the client filename). `attendance/:id/edit` now rejects a resulting clock-out ≤ clock-in.
+- **Shared files touched (flagged up front):** `prisma/schema.prisma` (User.tokenVersion + ledger unique), `prisma/seed.ts` (prod guard), `apps/web/lib/auth/session.ts` (revocation check — now does one indexed PK read per `getSession`). `createSession()`/`signSession()` gained a required `tokenVersion` arg (only caller was login; change-password now also calls it).
+
+---
+
+**Prior state — 2026-07-15 — Phase 9: Firebase Cloud Messaging push notifications, layered onto the existing notification system.**
 
 ### Phase 9 — FCM push notifications (2026-07-15, on `main`)
 Build + lint + typecheck + 43 unit tests all clean. Live-verified against the dev server with real Firebase Admin credentials (user provided a real Firebase project's config/VAPID key/service-account values): a fake-but-well-formed FCM token was registered, an approve-request notification fired a real `messaging().send()` call to Firebase, got back `messaging/registration-token-not-registered`/`invalid-argument`, and the token was auto-pruned from the DB — confirming the full send → error-handling → cleanup path against the real API, not mocked.

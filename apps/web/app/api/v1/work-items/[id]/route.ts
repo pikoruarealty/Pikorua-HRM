@@ -3,7 +3,7 @@ import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { isFinanceRole, isLeadRole } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
-import { WorkItemMode, WorkItemStatus } from "@prisma/client";
+import { Prisma, WorkItemMode, WorkItemStatus } from "@prisma/client";
 
 // Track B. PATCH /api/v1/work-items/:id — Milestone 1.2 (atomic) + 2.2 (metric).
 
@@ -105,35 +105,45 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   const nowCompleted = status === WorkItemStatus.completed;
   const completingNow = nowCompleted && !wasCompleted;
 
-  // Completion always credits task_points to the ledger, regardless of
-  // whether it happens here or via POST /work-items/:id/complete — the
-  // wasCompleted guard on both routes prevents a double credit either way.
-  const updated = completingNow
-    ? (
-        await prisma.$transaction([
-          prisma.workItem.update({
-            where: { id: params.id },
-            data: { title, assignedTo, taskPoints, status, completedAt: new Date() },
-          }),
-          prisma.employeePointLedger.create({
-            data: {
-              employeeId: assignedTo ?? workItem.assignedTo,
-              workItemId: workItem.id,
-              points: taskPoints ?? workItem.taskPoints!,
-            },
-          }),
-        ])
-      )[0]
-    : await prisma.workItem.update({
-        where: { id: params.id },
-        data: {
-          title,
-          assignedTo,
-          taskPoints,
-          status,
-          completedAt: status && !nowCompleted ? null : undefined,
-        },
-      });
+  // Completion always credits task_points to the ledger, regardless of whether
+  // it happens here or via POST /work-items/:id/complete. The ledger's
+  // unique(work_item_id) constraint guarantees at most one credit even if this
+  // route races the other one — the losing transaction rolls back (P2002) and
+  // we surface a conflict instead of double-crediting.
+  if (completingNow) {
+    try {
+      const [updatedItem] = await prisma.$transaction([
+        prisma.workItem.update({
+          where: { id: params.id },
+          data: { title, assignedTo, taskPoints, status, completedAt: new Date() },
+        }),
+        prisma.employeePointLedger.create({
+          data: {
+            employeeId: assignedTo ?? workItem.assignedTo,
+            workItemId: workItem.id,
+            points: taskPoints ?? workItem.taskPoints!,
+          },
+        }),
+      ]);
+      return ok(updatedItem);
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+        return failFor(ErrorCode.CONFLICT, "This task is already completed.");
+      }
+      throw err;
+    }
+  }
+
+  const updated = await prisma.workItem.update({
+    where: { id: params.id },
+    data: {
+      title,
+      assignedTo,
+      taskPoints,
+      status,
+      completedAt: status && !nowCompleted ? null : undefined,
+    },
+  });
 
   return ok(updated);
 }

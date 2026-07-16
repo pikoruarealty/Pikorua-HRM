@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
-import { WorkItemMode, WorkItemStatus } from "@prisma/client";
+import { Prisma, WorkItemMode, WorkItemStatus } from "@prisma/client";
 
 // Track B. POST /api/v1/work-items/:id/complete — Milestone 2.3.
 // Assigned Employee only (per API_SPEC §5 — no Lead/Admin override here;
@@ -28,19 +28,31 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
     return failFor(ErrorCode.CONFLICT, "This task is already completed.");
   }
 
-  const [updated] = await prisma.$transaction([
-    prisma.workItem.update({
-      where: { id: workItem.id },
-      data: { status: WorkItemStatus.completed, completedAt: new Date() },
-    }),
-    prisma.employeePointLedger.create({
-      data: {
-        employeeId: workItem.assignedTo,
-        workItemId: workItem.id,
-        points: workItem.taskPoints!,
-      },
-    }),
-  ]);
+  // The ledger's unique(work_item_id) constraint is the real guard against a
+  // concurrent double-complete: if two requests both pass the status check
+  // above, only one ledger insert succeeds — the other rolls back the whole
+  // transaction (P2002) and we report the conflict rather than double-crediting.
+  let updated;
+  try {
+    [updated] = await prisma.$transaction([
+      prisma.workItem.update({
+        where: { id: workItem.id },
+        data: { status: WorkItemStatus.completed, completedAt: new Date() },
+      }),
+      prisma.employeePointLedger.create({
+        data: {
+          employeeId: workItem.assignedTo,
+          workItemId: workItem.id,
+          points: workItem.taskPoints!,
+        },
+      }),
+    ]);
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      return failFor(ErrorCode.CONFLICT, "This task is already completed.");
+    }
+    throw err;
+  }
 
   return ok({ workItem: updated, pointsCredited: workItem.taskPoints });
 }

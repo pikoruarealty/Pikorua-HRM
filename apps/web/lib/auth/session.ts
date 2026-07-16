@@ -1,9 +1,18 @@
 import { cookies } from "next/headers";
 import { SignJWT, jwtVerify } from "jose";
 import type { Role } from "@prisma/client";
+import { prisma } from "@/lib/db/prisma";
 
 // SHARED (Phase 0). Session = a signed JWT stored in an httpOnly cookie.
 // getSession() is the single entry point every route/RBAC check uses.
+//
+// Revocation (2026-07-16): the JWT carries a `tv` (token version) claim. On
+// every getSession() we compare it against the user's current
+// `User.tokenVersion` in the DB; a password change or deactivation bumps that
+// column, instantly invalidating every JWT issued before it — closing the
+// "old session survives a password reset" gap. Tokens minted before this
+// change have no `tv` claim and default to 0, matching the column default, so
+// existing sessions are NOT force-logged-out on deploy.
 
 export const SESSION_COOKIE = "pikorua_session";
 
@@ -30,10 +39,14 @@ function maxAgeSeconds(): number {
   return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : DEFAULT_MAX_AGE;
 }
 
-/** Sign a session JWT for the given user. */
-export async function signSession(session: AppSession): Promise<string> {
+/** Sign a session JWT for the given user. `tokenVersion` is the user's current
+ *  `User.tokenVersion` at issue time (embedded as the `tv` claim). */
+export async function signSession(
+  session: AppSession,
+  tokenVersion: number,
+): Promise<string> {
   const maxAge = maxAgeSeconds();
-  return new SignJWT({ role: session.role, employeeId: session.employeeId })
+  return new SignJWT({ role: session.role, employeeId: session.employeeId, tv: tokenVersion })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(session.userId)
     .setIssuedAt()
@@ -42,8 +55,11 @@ export async function signSession(session: AppSession): Promise<string> {
 }
 
 /** Sign a session and write it to the httpOnly session cookie. */
-export async function createSession(session: AppSession): Promise<void> {
-  const token = await signSession(session);
+export async function createSession(
+  session: AppSession,
+  tokenVersion: number,
+): Promise<void> {
+  const token = await signSession(session, tokenVersion);
   cookies().set(SESSION_COOKIE, token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
@@ -60,6 +76,18 @@ export async function getSession(): Promise<AppSession | null> {
   try {
     const { payload } = await jwtVerify(token, getSecret());
     if (!payload.sub) return null;
+
+    // Reject the token if its version is behind the user's current one (the
+    // account was password-changed or deactivated since it was issued), or if
+    // the user no longer exists. Tokens from before revocation existed have no
+    // `tv` claim → treated as 0 (the column default).
+    const tokenVersion = typeof payload.tv === "number" ? payload.tv : 0;
+    const user = await prisma.user.findUnique({
+      where: { id: payload.sub },
+      select: { tokenVersion: true },
+    });
+    if (!user || user.tokenVersion !== tokenVersion) return null;
+
     return {
       userId: payload.sub,
       role: payload.role as Role,

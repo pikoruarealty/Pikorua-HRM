@@ -24,15 +24,38 @@ export type AuditEntry = {
 
 const logger = createLogger("audit");
 
+// Golden-rule guard (2026-07-16): the audited metadata can contain salary and
+// net-pay figures (employee.update base_salary_*, payslip.generate net_pay,
+// reimbursement/deduction totals, request amounts). The `audit_logs` DB row is
+// Admin-only, but the console/stdout stream that logger.info writes to is NOT
+// access-controlled (it flows to log aggregation ops can read). So the console
+// line gets financial VALUES redacted; the full detail is preserved only in the
+// access-controlled DB row below.
+const SENSITIVE_METADATA_KEY = /salary|net_?pay|deduction|reimbursement|amount|incentive|bonus/i;
+
+function redactMetadataForLog(
+  metadata: Prisma.InputJsonValue | undefined,
+): Prisma.InputJsonValue | undefined {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return metadata;
+  }
+  const out: Record<string, Prisma.InputJsonValue> = {};
+  for (const [key, value] of Object.entries(metadata as Record<string, Prisma.InputJsonValue>)) {
+    out[key] = SENSITIVE_METADATA_KEY.test(key) ? "[redacted]" : value;
+  }
+  return out;
+}
+
 export async function audit(entry: AuditEntry): Promise<void> {
   // Verbose logging (2026-07-15): every audited mutation also gets a console
   // line, so the full sensitive-mutation history is visible in server logs
-  // even before opening the /audit viewer.
+  // even before opening the /audit viewer — with financial values redacted
+  // (see redactMetadataForLog above).
   logger.info(
     `${entry.action} actor=${entry.actorUserId ?? "anonymous"}${
       entry.entityType ? ` entity=${entry.entityType}:${entry.entityId ?? "?"}` : ""
     }`,
-    entry.metadata,
+    redactMetadataForLog(entry.metadata),
   );
   try {
     await prisma.auditLog.create({
