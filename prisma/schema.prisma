@@ -377,11 +377,14 @@ model AttendanceRecord {
 // ===========================================================================
 
 model PayrollConfig {
-  id                        String   @id @default(uuid()) @db.Uuid
-  lateDeductionFlat         Decimal  @map("late_deduction_flat") @db.Decimal(10, 2)
-  unpaidLeaveDeductionFlat  Decimal  @map("unpaid_leave_deduction_flat") @db.Decimal(10, 2)
-  halfDayDeductionFlat      Decimal  @map("half_day_deduction_flat") @db.Decimal(10, 2)
-  effectiveFrom             DateTime @map("effective_from") @db.Date
+  id                   String   @id @default(uuid()) @db.Uuid
+  // % of a day's pay (base_salary / 30) deducted per late-arrival occurrence
+  // (2026-07-17 — replaced the old flat rupee amount). Half-day (50%) and
+  // unpaid-leave/absent (100%) are no longer separately configurable here —
+  // they're fixed fractions of a day's pay, derived directly from
+  // base_salary, not a policy knob (see lib/payroll/calc.ts).
+  lateDeductionPercent Decimal  @map("late_deduction_percent") @db.Decimal(5, 2)
+  effectiveFrom        DateTime @map("effective_from") @db.Date
 
   @@map("payroll_config")
 }
@@ -403,7 +406,22 @@ model Payslip {
   lateCount             Int      @default(0) @map("late_count")       // from approved attendance only
   unpaidLeaveCount      Int      @default(0) @map("unpaid_leave_count")
   halfDayCount          Int      @default(0) @map("half_day_count")
-  standardDeductionTotal Decimal @default(0) @map("standard_deduction_total") @db.Decimal(12, 2)
+  absentCount           Int      @default(0) @map("absent_count")     // added 2026-07-17
+  // Added 2026-07-17 (earned-pay proration): every count that feeds
+  // earned_base_pay, stored for audit reproducibility alongside the counts
+  // above. Present/half-day/paid-leave/holiday/compensation days are paid;
+  // unpaid-leave/absent days are simply excluded (no separate deduction).
+  presentCount          Int      @default(0) @map("present_count")
+  paidLeaveCount        Int      @default(0) @map("paid_leave_count")
+  holidayCount          Int      @default(0) @map("holiday_count")
+  compensationCount     Int      @default(0) @map("compensation_count")
+  // earned_base_pay = (present + half*0.5 + paid_leave + holiday + compensation) * per_day_rate
+  earnedBasePay         Decimal  @default(0) @map("earned_base_pay") @db.Decimal(12, 2)
+  // Renamed from standard_deduction_total (2026-07-17): now represents ONLY
+  // the late-arrival penalty (late_count * late_deduction_percent% *
+  // per_day_rate) — half-day/unpaid-leave/absent no longer separately
+  // deduct, they're excluded from earned_base_pay instead.
+  lateDeductionTotal    Decimal  @default(0) @map("late_deduction_total") @db.Decimal(12, 2)
   reimbursementTotal    Decimal  @default(0) @map("reimbursement_total") @db.Decimal(12, 2)
   employeeOfMonthRef    Boolean  @default(false) @map("employee_of_month_ref") // reference only
   netPay                Decimal  @map("net_pay") @db.Decimal(12, 2)

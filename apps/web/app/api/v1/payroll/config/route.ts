@@ -7,7 +7,10 @@ import { getLatestPayrollConfig } from "@/lib/payroll/config";
 import { audit, clientIp } from "@/lib/audit";
 
 // Track A. GET /api/v1/payroll/config — Admin/HR; current (latest
-// effective_from) flat deduction rates.
+// effective_from) rates. Since 2026-07-17 the only configurable rate is the
+// late-deduction percentage — half-day/unpaid-leave/absent deductions are
+// fixed fractions of a day's pay (base_salary / 30), computed directly in
+// lib/payroll/calc.ts, not stored here.
 export async function GET() {
   const session = await getSession();
   if (!session) {
@@ -26,9 +29,7 @@ export async function GET() {
 // reproducible against the rates that were effective when they were
 // generated (SCHEMA.md §4).
 const putSchema = z.object({
-  late_deduction_flat: z.coerce.number().nonnegative(),
-  unpaid_leave_deduction_flat: z.coerce.number().nonnegative(),
-  half_day_deduction_flat: z.coerce.number().nonnegative(),
+  late_deduction_percent: z.coerce.number().min(0).max(100),
   effective_from: z.coerce.date(),
 });
 
@@ -49,9 +50,7 @@ export async function PUT(req: Request) {
 
   const created = await prisma.payrollConfig.create({
     data: {
-      lateDeductionFlat: parsed.data.late_deduction_flat,
-      unpaidLeaveDeductionFlat: parsed.data.unpaid_leave_deduction_flat,
-      halfDayDeductionFlat: parsed.data.half_day_deduction_flat,
+      lateDeductionPercent: parsed.data.late_deduction_percent,
       effectiveFrom: parsed.data.effective_from,
     },
   });
@@ -63,9 +62,7 @@ export async function PUT(req: Request) {
     entityType: "payroll_config",
     entityId: created.id,
     metadata: {
-      late: parsed.data.late_deduction_flat,
-      unpaid_leave: parsed.data.unpaid_leave_deduction_flat,
-      half_day: parsed.data.half_day_deduction_flat,
+      late_deduction_percent: parsed.data.late_deduction_percent,
       effective_from: parsed.data.effective_from.toISOString().slice(0, 10),
     },
     ip: clientIp(req),

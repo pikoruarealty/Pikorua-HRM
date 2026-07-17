@@ -77,7 +77,7 @@ Owns: Employees, Departments/Teams/Hierarchy config, Attendance (manual clock-in
 - Employee CRUD + department/team management
 - `department_labels` config UI (Admin screen to configure generic tree labels per department type)
 - Manual Clock In / Clock Out flow + HR/Admin attendance approval & edit screen
-- Payroll config (flat deduction rates), payslip generation flow (Incentive/Bonus/Other Addition/Other Deduction manual fields + auto-computed standard deductions from approved attendance + reimbursement pull-in), Employee-of-the-Month reference lookup on the payslip screen
+- Payroll config (late-deduction %; half-day/unpaid-leave/absent are fixed salary-proportional fractions), payslip generation flow (Incentive/Bonus/Other Addition/Other Deduction manual fields + auto-computed standard deductions from approved attendance + reimbursement pull-in), Employee-of-the-Month reference lookup on the payslip screen
 
 ### Track B — "Work, Requests & Culture" (suggested owner: **Bhavarth** — assign as your team prefers)
 Owns: WorkUnit/SubUnit/WorkItem (project/task tracking), Daily Planning/EOD flow, Requests (leave/reimbursement/etc.), Recognition & Employee of the Month, Notifications, Announcements, Employee Documentation, Event Management (birthdays + meetings), Assets (stub).
@@ -163,7 +163,7 @@ Kept here for continuity only; do not build now. When revisited: a separate stan
 - Track B: WorkUnit/SubUnit/WorkItem CRUD (Atomic mode only first — Tech), basic Requests module (leave type only first, HR/Admin approval only).
 
 **Milestone 2 (~Week 2-3):**
-- Track A: HR/Admin attendance review/edit/approve screen; payroll config + flat deduction calculation (reading only *approved* attendance).
+- Track A: HR/Admin attendance review/edit/approve screen; payroll config + salary-proportional deduction calculation (reading only *approved* attendance).
 - Track B: Metric task mode with monthly reset (Sales/BD), Daily Planning/EOD flow + point ledger, Reimbursement request type + approval flow (HR/Admin only).
 
 **Milestone 3 (~Week 3-4):**

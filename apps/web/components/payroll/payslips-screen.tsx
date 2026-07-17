@@ -19,15 +19,23 @@ import {
 
 type Employee = { id: string; fullName: string };
 
-type AttendanceBreakdown = {
-  present_days: number;
-  half_days: number;
-  absent_days: number;
-  late_count: number;
-  paid_leave_days: number;
-  unpaid_leave_days: number;
-  compensation_days: number;
-  holiday_days: number;
+type PayslipPreview = {
+  baseSalary: number;
+  perDayRate: number;
+  presentDays: number;
+  halfDays: number;
+  paidLeaveDays: number;
+  holidayDays: number;
+  compensationDays: number;
+  unpaidLeaveDays: number;
+  absentDays: number;
+  lateCount: number;
+  earnedBasePay: number;
+  lateDeductionTotal: number;
+  reimbursementTotal: number;
+  employeeOfMonthRef: boolean;
+  netPay: number;
+  notes: { late_tracking_unavailable?: string; employee_of_month_unavailable?: string };
 };
 
 type Payslip = {
@@ -202,9 +210,10 @@ function GenerateForm({ onGenerated }: { onGenerated: () => void }) {
   const [otherDeduction, setOtherDeduction] = useState("");
   const [otherDeductionReason, setOtherDeductionReason] = useState("");
 
-  const [eomStatus, setEomStatus] = useState<boolean | null>(null);
-  const [breakdown, setBreakdown] = useState<AttendanceBreakdown | null>(null);
-  const [preview, setPreview] = useState<Record<string, unknown> | null>(null);
+  const [preview, setPreview] = useState<PayslipPreview | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [generatedResult, setGeneratedResult] = useState<{ id: string; netPay: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -219,35 +228,49 @@ function GenerateForm({ onGenerated }: { onGenerated: () => void }) {
     })();
   }, []);
 
+  // Live projection: as soon as an employee/period is picked (or any manual
+  // amount changes), show the same breakdown + net pay the server would
+  // compute on Generate — debounced so typing a manual amount doesn't fire a
+  // request per keystroke. Reuses POST /payslips/preview (same math as
+  // generate, via lib/payroll/payslip-preview.ts — never drifts from what
+  // Generate actually persists).
   useEffect(() => {
-    setEomStatus(null);
-    setBreakdown(null);
+    setPreview(null);
+    setPreviewError(null);
     if (!employeeId) return;
-    (async () => {
+    setPreviewLoading(true);
+    const t = setTimeout(async () => {
       try {
         const data = await getJson(
-          await fetch(`/api/v1/payslips/${employeeId}/employee-of-month-status?month=${month}&year=${year}`),
+          await fetch("/api/v1/payslips/preview", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              employee_id: employeeId,
+              month,
+              year,
+              incentive_amount: incentive || 0,
+              bonus_amount: bonus || 0,
+              other_addition_amount: otherAddition || undefined,
+              other_deduction_amount: otherDeduction || undefined,
+            }),
+          }),
         );
-        setEomStatus(data.is_employee_of_month);
-      } catch {
-        setEomStatus(null);
+        setPreview(data);
+      } catch (e) {
+        setPreviewError(e instanceof Error ? e.message : "Failed to compute preview.");
+      } finally {
+        setPreviewLoading(false);
       }
-      try {
-        const data = await getJson(
-          await fetch(`/api/v1/attendance/${employeeId}/summary?month=${month}&year=${year}`),
-        );
-        setBreakdown(data);
-      } catch {
-        setBreakdown(null);
-      }
-    })();
-  }, [employeeId, month, year]);
+    }, 400);
+    return () => clearTimeout(t);
+  }, [employeeId, month, year, incentive, bonus, otherAddition, otherDeduction]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setSubmitting(true);
     setError(null);
-    setPreview(null);
+    setGeneratedResult(null);
     try {
       const data = await getJson(
         await fetch("/api/v1/payslips/generate", {
@@ -267,7 +290,7 @@ function GenerateForm({ onGenerated }: { onGenerated: () => void }) {
           }),
         }),
       );
-      setPreview(data);
+      setGeneratedResult(data);
       onGenerated();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to generate payslip.");
@@ -326,28 +349,49 @@ function GenerateForm({ onGenerated }: { onGenerated: () => void }) {
                 />
               </div>
             </div>
-            {eomStatus !== null && (
-              <Badge variant={eomStatus ? "default" : "secondary"} className="w-fit">
-                {eomStatus ? "🏆 Employee of the Month" : "Not EoM this period"}
+            {preview && (
+              <Badge variant={preview.employeeOfMonthRef ? "default" : "secondary"} className="w-fit">
+                {preview.employeeOfMonthRef ? "🏆 Employee of the Month" : "Not EoM this period"}
               </Badge>
             )}
           </section>
 
           {employeeId && (
             <section className="flex flex-col gap-3 rounded-lg border p-4">
-              <h3 className="text-sm font-semibold text-muted-foreground">Attendance breakdown</h3>
-              {breakdown ? (
-                <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
-                  <BreakdownStat label="Present" value={breakdown.present_days} />
-                  <BreakdownStat label="Half-day" value={breakdown.half_days} />
-                  <BreakdownStat label="Absent" value={breakdown.absent_days} />
-                  <BreakdownStat label="Paid leave" value={breakdown.paid_leave_days} />
-                  <BreakdownStat label="Unpaid leave" value={breakdown.unpaid_leave_days} />
-                  <BreakdownStat label="Compensation" value={breakdown.compensation_days} />
-                  <BreakdownStat label="Holidays" value={breakdown.holiday_days} />
-                </dl>
+              <h3 className="text-sm font-semibold text-muted-foreground">Salary breakdown (projected)</h3>
+              {previewError && <p className="text-sm text-destructive">{previewError}</p>}
+              {preview ? (
+                <>
+                  <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
+                    <BreakdownStat label="Present" value={preview.presentDays} />
+                    <BreakdownStat label="Half-day" value={preview.halfDays} />
+                    <BreakdownStat label="Absent" value={preview.absentDays} />
+                    <BreakdownStat label="Paid leave" value={preview.paidLeaveDays} />
+                    <BreakdownStat label="Unpaid leave" value={preview.unpaidLeaveDays} />
+                    <BreakdownStat label="Compensation" value={preview.compensationDays} />
+                    <BreakdownStat label="Holidays" value={preview.holidayDays} />
+                  </dl>
+                  <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                    <Row label="Earned base pay" value={`₹${preview.earnedBasePay.toFixed(2)}`} />
+                    <Row
+                      label="Late deduction"
+                      value={`−₹${preview.lateDeductionTotal.toFixed(2)}`}
+                      sub={`${preview.lateCount} late occurrence(s)`}
+                    />
+                    <Row label="Reimbursement" value={`+₹${preview.reimbursementTotal.toFixed(2)}`} />
+                  </dl>
+                  <div className="border-t pt-3">
+                    <p className="text-xs text-muted-foreground">Net payable</p>
+                    <p className="text-2xl font-bold tabular-nums">₹{preview.netPay.toFixed(2)}</p>
+                  </div>
+                  {preview.notes.late_tracking_unavailable && (
+                    <p className="text-xs text-muted-foreground">{preview.notes.late_tracking_unavailable}</p>
+                  )}
+                </>
               ) : (
-                <p className="text-sm text-muted-foreground">Loading…</p>
+                <p className="text-sm text-muted-foreground">
+                  {previewLoading ? "Computing…" : "Loading…"}
+                </p>
               )}
             </section>
           )}
@@ -430,17 +474,11 @@ function GenerateForm({ onGenerated }: { onGenerated: () => void }) {
           </div>
         </form>
 
-        {preview && (
+        {generatedResult && (
           <div className="rounded-md border p-4 text-sm">
-            <p className="mb-2 font-medium">Generated — net pay: ₹{String(preview.netPay)}</p>
-            <p className="text-muted-foreground">
-              Base ₹{String(preview.baseSalary)} · standard deductions ₹
-              {String(preview.standardDeductionTotal)} (late {String(preview.lateCount)}, half-day{" "}
-              {String(preview.halfDayCount)}, unpaid leave {String(preview.unpaidLeaveCount)}) ·
-              reimbursement ₹{String(preview.reimbursementTotal)}
-            </p>
+            <p className="mb-2 font-medium">Generated — net pay: ₹{generatedResult.netPay}</p>
             <Link
-              href={`/payslips/${(preview as { id: string }).id}`}
+              href={`/payslips/${generatedResult.id}`}
               className="mt-2 inline-block font-medium text-primary hover:underline"
             >
               View payslip →
@@ -457,6 +495,16 @@ function BreakdownStat({ label, value }: { label: string; value: number }) {
     <div className="rounded-md border p-3">
       <dt className="text-xs text-muted-foreground">{label}</dt>
       <dd className="text-xl font-semibold tabular-nums">{value}</dd>
+    </div>
+  );
+}
+
+function Row({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div>
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="font-medium">{value}</dd>
+      {sub && <p className="text-xs text-muted-foreground">{sub}</p>}
     </div>
   );
 }
