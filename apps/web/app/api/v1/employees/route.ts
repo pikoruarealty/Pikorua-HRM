@@ -99,6 +99,7 @@ export async function GET(req: Request) {
         OR: [
           { fullName: { contains: q, mode: "insensitive" as const } },
           { email: { contains: q, mode: "insensitive" as const } },
+          { phone: { contains: q, mode: "insensitive" as const } },
         ],
       }
     : {};

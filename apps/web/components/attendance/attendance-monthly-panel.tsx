@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Table,
@@ -130,8 +131,20 @@ export function AttendanceMonthlyPanel() {
               <TableBody>
                 {overview.rows.map((r) => (
                   <TableRow key={r.employeeId}>
-                    <TableCell>{r.fullName}</TableCell>
-                    <TableCell className="text-muted-foreground">{r.team?.name ?? "—"}</TableCell>
+                    <TableCell>
+                      <Link href={`/employees/${r.employeeId}`} className="hover:underline">
+                        {r.fullName}
+                      </Link>
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {r.team ? (
+                        <Link href={`/teams/${r.team.id}`} className="hover:underline">
+                          {r.team.name}
+                        </Link>
+                      ) : (
+                        "—"
+                      )}
+                    </TableCell>
                     <TableCell>{r.presentDays}</TableCell>
                     <TableCell>{r.halfDays}</TableCell>
                     <TableCell className={r.absentDays > 0 ? "text-destructive" : undefined}>

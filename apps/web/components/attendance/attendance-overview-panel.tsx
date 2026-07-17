@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -169,12 +170,23 @@ export function AttendanceOverviewPanel() {
                 {overview.rows.map((r) => (
                   <TableRow key={r.employeeId}>
                     <TableCell>
-                      <span className="flex items-center gap-2">
+                      <Link
+                        href={`/employees/${r.employeeId}`}
+                        className="flex items-center gap-2 hover:underline"
+                      >
                         <EmployeeAvatar fullName={r.fullName} photoUrl={r.photoUrl} size="sm" />
                         {r.fullName}
-                      </span>
+                      </Link>
                     </TableCell>
-                    <TableCell className="text-muted-foreground">{r.team?.name ?? "—"}</TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {r.team ? (
+                        <Link href={`/teams/${r.team.id}`} className="hover:underline">
+                          {r.team.name}
+                        </Link>
+                      ) : (
+                        "—"
+                      )}
+                    </TableCell>
                     <TableCell>
                       <span className="flex items-center gap-1.5">
                         <Badge variant={STATUS_VARIANTS[r.status]}>{STATUS_LABELS[r.status]}</Badge>

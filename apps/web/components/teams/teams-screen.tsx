@@ -1,11 +1,18 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Table,
   TableBody,
@@ -34,6 +41,7 @@ async function getJson(res: Response) {
 }
 
 export function TeamsScreen({ canManage }: { canManage: boolean }) {
+  const router = useRouter();
   const [teams, setTeams] = useState<Team[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [loading, setLoading] = useState(true);
@@ -114,7 +122,11 @@ export function TeamsScreen({ canManage }: { canManage: boolean }) {
               </TableHeader>
               <TableBody>
                 {teams.map((t) => (
-                  <TableRow key={t.id}>
+                  <TableRow
+                    key={t.id}
+                    onClick={() => router.push(`/teams/${t.id}`)}
+                    className="cursor-pointer hover:bg-muted/50"
+                  >
                     <TableCell>{t.name}</TableCell>
                     <TableCell>{t.department.name}</TableCell>
                     <TableCell>{t.teamLead?.fullName ?? "— unassigned —"}</TableCell>
@@ -125,15 +137,21 @@ export function TeamsScreen({ canManage }: { canManage: boolean }) {
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => setEditingId(editingId === t.id ? null : t.id)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingId(t.id);
+                            }}
                           >
-                            {editingId === t.id ? "Close" : "Edit"}
+                            Edit
                           </Button>
                           <Button
                             variant="destructive"
                             size="sm"
                             disabled={deletingId === t.id}
-                            onClick={() => onDelete(t)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onDelete(t);
+                            }}
                           >
                             {deletingId === t.id ? "Deleting…" : "Delete"}
                           </Button>
@@ -148,14 +166,27 @@ export function TeamsScreen({ canManage }: { canManage: boolean }) {
         </CardContent>
       </Card>
 
-      {canManage && editingId && (
-        <EditTeamForm
-          team={teams.find((t) => t.id === editingId)!}
-          onSaved={() => {
-            setEditingId(null);
-            load();
-          }}
-        />
+      {canManage && (
+        <Dialog open={editingId !== null} onOpenChange={(open) => !open && setEditingId(null)}>
+          <DialogContent>
+            {editingId && (
+              <>
+                <DialogHeader>
+                  <DialogTitle>
+                    Edit &quot;{teams.find((t) => t.id === editingId)!.name}&quot;
+                  </DialogTitle>
+                </DialogHeader>
+                <EditTeamForm
+                  team={teams.find((t) => t.id === editingId)!}
+                  onSaved={() => {
+                    setEditingId(null);
+                    load();
+                  }}
+                />
+              </>
+            )}
+          </DialogContent>
+        </Dialog>
       )}
     </div>
   );
@@ -291,39 +322,28 @@ function EditTeamForm({ team, onSaved }: { team: Team; onSaved: () => void }) {
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Edit &quot;{team.name}&quot;</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <form onSubmit={onSubmit} className="flex flex-wrap items-end gap-4">
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="edit_name">Name</Label>
-            <Input id="edit_name" value={name} onChange={(e) => setName(e.target.value)} required />
-          </div>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="edit_lead">Team lead employee ID</Label>
-            <Input
-              id="edit_lead"
-              value={teamLeadId}
-              onChange={(e) => setTeamLeadId(e.target.value)}
-            />
-          </div>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="edit_expected_start_time">Expected start (HH:MM)</Label>
-            <Input
-              id="edit_expected_start_time"
-              type="time"
-              value={expectedStartTime}
-              onChange={(e) => setExpectedStartTime(e.target.value)}
-            />
-          </div>
-          {error && <p className="text-sm text-destructive">{error}</p>}
-          <Button type="submit" disabled={submitting}>
-            {submitting ? "Saving…" : "Save"}
-          </Button>
-        </form>
-      </CardContent>
-    </Card>
+    <form onSubmit={onSubmit} className="flex flex-col gap-4">
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="edit_name">Name</Label>
+        <Input id="edit_name" value={name} onChange={(e) => setName(e.target.value)} required />
+      </div>
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="edit_lead">Team lead employee ID</Label>
+        <Input id="edit_lead" value={teamLeadId} onChange={(e) => setTeamLeadId(e.target.value)} />
+      </div>
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="edit_expected_start_time">Expected start (HH:MM)</Label>
+        <Input
+          id="edit_expected_start_time"
+          type="time"
+          value={expectedStartTime}
+          onChange={(e) => setExpectedStartTime(e.target.value)}
+        />
+      </div>
+      {error && <p className="text-sm text-destructive">{error}</p>}
+      <Button type="submit" disabled={submitting}>
+        {submitting ? "Saving…" : "Save"}
+      </Button>
+    </form>
   );
 }
