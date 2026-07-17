@@ -7,6 +7,12 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   Table,
   TableBody,
   TableCell,
@@ -103,13 +109,9 @@ export function DepartmentsScreen() {
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() =>
-                          setEditingTypeKey(
-                            editingTypeKey === d.typeKey ? null : d.typeKey,
-                          )
-                        }
+                        onClick={() => setEditingTypeKey(d.typeKey)}
                       >
-                        {editingTypeKey === d.typeKey ? "Close" : "Edit labels"}
+                        Edit labels
                       </Button>
                     </TableCell>
                   </TableRow>
@@ -120,16 +122,25 @@ export function DepartmentsScreen() {
         </CardContent>
       </Card>
 
-      {editingTypeKey && (
-        <LabelEditor
-          typeKey={editingTypeKey}
-          initial={departments.find((d) => d.typeKey === editingTypeKey)?.labels ?? null}
-          onSaved={() => {
-            setEditingTypeKey(null);
-            load();
-          }}
-        />
-      )}
+      <Dialog open={editingTypeKey !== null} onOpenChange={(open) => !open && setEditingTypeKey(null)}>
+        <DialogContent>
+          {editingTypeKey && (
+            <>
+              <DialogHeader>
+                <DialogTitle>Labels for &quot;{editingTypeKey}&quot;</DialogTitle>
+              </DialogHeader>
+              <LabelEditor
+                typeKey={editingTypeKey}
+                initial={departments.find((d) => d.typeKey === editingTypeKey)?.labels ?? null}
+                onSaved={() => {
+                  setEditingTypeKey(null);
+                  load();
+                }}
+              />
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -237,57 +248,50 @@ function LabelEditor({
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Labels for &quot;{typeKey}&quot;</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <form onSubmit={onSubmit} className="flex flex-wrap items-end gap-4">
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="work_unit_label">Work unit label</Label>
-            <Input
-              id="work_unit_label"
-              value={workUnitLabel}
-              onChange={(e) => setWorkUnitLabel(e.target.value)}
-              required
-            />
-          </div>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="sub_unit_label">Sub unit label</Label>
-            <Input
-              id="sub_unit_label"
-              value={subUnitLabel}
-              onChange={(e) => setSubUnitLabel(e.target.value)}
-              required
-            />
-          </div>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="work_item_label">Work item label</Label>
-            <Input
-              id="work_item_label"
-              value={workItemLabel}
-              onChange={(e) => setWorkItemLabel(e.target.value)}
-              required
-            />
-          </div>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="work_item_mode">Mode</Label>
-            <Select value={workItemMode} onValueChange={(v) => setWorkItemMode(v as "atomic" | "metric")}>
-              <SelectTrigger id="work_item_mode">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="atomic">Atomic</SelectItem>
-                <SelectItem value="metric">Metric</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          {error && <p className="text-sm text-destructive">{error}</p>}
-          <Button type="submit" disabled={submitting}>
-            {submitting ? "Saving…" : "Save labels"}
-          </Button>
-        </form>
-      </CardContent>
-    </Card>
+    <form onSubmit={onSubmit} className="flex flex-col gap-4">
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="work_unit_label">Work unit label</Label>
+        <Input
+          id="work_unit_label"
+          value={workUnitLabel}
+          onChange={(e) => setWorkUnitLabel(e.target.value)}
+          required
+        />
+      </div>
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="sub_unit_label">Sub unit label</Label>
+        <Input
+          id="sub_unit_label"
+          value={subUnitLabel}
+          onChange={(e) => setSubUnitLabel(e.target.value)}
+          required
+        />
+      </div>
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="work_item_label">Work item label</Label>
+        <Input
+          id="work_item_label"
+          value={workItemLabel}
+          onChange={(e) => setWorkItemLabel(e.target.value)}
+          required
+        />
+      </div>
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="work_item_mode">Mode</Label>
+        <Select value={workItemMode} onValueChange={(v) => setWorkItemMode(v as "atomic" | "metric")}>
+          <SelectTrigger id="work_item_mode">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="atomic">Atomic</SelectItem>
+            <SelectItem value="metric">Metric</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      {error && <p className="text-sm text-destructive">{error}</p>}
+      <Button type="submit" disabled={submitting}>
+        {submitting ? "Saving…" : "Save labels"}
+      </Button>
+    </form>
   );
 }

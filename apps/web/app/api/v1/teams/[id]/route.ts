@@ -6,7 +6,45 @@ import { requireRole, isLeadRole, AuthzError, FINANCE_ROLES } from "@/lib/rbac";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { HHMM_REGEX } from "@/lib/attendance/time";
 
-// Track A. PATCH /api/v1/teams/:id — Admin/HR; reassign lead and/or rename.
+// Track A. GET /api/v1/teams/:id — Admin/HR see any team; everyone else is
+// scoped to their own department, matching GET /api/v1/teams' scoping.
+export async function GET(
+  _req: Request,
+  { params }: { params: { id: string } },
+) {
+  const session = await getSession();
+  if (!session) {
+    return failFor(ErrorCode.UNAUTHENTICATED);
+  }
+
+  const team = await prisma.team.findUnique({
+    where: { id: params.id },
+    include: {
+      department: { select: { id: true, name: true, typeKey: true } },
+      teamLead: { select: { id: true, fullName: true } },
+    },
+  });
+  if (!team) {
+    return failFor(ErrorCode.NOT_FOUND, "Team not found.");
+  }
+
+  if (!FINANCE_ROLES.includes(session.role)) {
+    if (!session.employeeId) {
+      return failFor(ErrorCode.FORBIDDEN);
+    }
+    const viewer = await prisma.employee.findUnique({
+      where: { id: session.employeeId },
+      select: { departmentId: true },
+    });
+    if (!viewer?.departmentId || viewer.departmentId !== team.departmentId) {
+      return failFor(ErrorCode.FORBIDDEN);
+    }
+  }
+
+  return ok(team);
+}
+
+// PATCH /api/v1/teams/:id — Admin/HR; reassign lead and/or rename.
 const patchSchema = z.object({
   name: z.string().min(1).optional(),
   team_lead_id: z.string().uuid().optional(),

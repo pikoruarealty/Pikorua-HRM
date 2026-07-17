@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -60,7 +61,10 @@ async function getJson(res: Response) {
   return json.data;
 }
 
+const DEFAULT_STATUS = "active";
+
 export function EmployeeListScreen({ canManage }: { canManage: boolean }) {
+  const router = useRouter();
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
@@ -73,7 +77,7 @@ export function EmployeeListScreen({ canManage }: { canManage: boolean }) {
   // client-side, since the employee list is expected to grow into the
   // thousands and shouldn't all be shipped to the browser just to filter it.
   const [debouncedSearch, setDebouncedSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string>(ALL);
+  const [statusFilter, setStatusFilter] = useState<string>(DEFAULT_STATUS);
   const [roleFilter, setRoleFilter] = useState<string>(ALL);
   const [departmentFilter, setDepartmentFilter] = useState<string>(ALL);
   const [teamFilter, setTeamFilter] = useState<string>(ALL);
@@ -141,7 +145,7 @@ export function EmployeeListScreen({ canManage }: { canManage: boolean }) {
 
   const anyFilterActive =
     search.trim() !== "" ||
-    statusFilter !== ALL ||
+    statusFilter !== DEFAULT_STATUS ||
     roleFilter !== ALL ||
     departmentFilter !== ALL ||
     teamFilter !== ALL;
@@ -149,7 +153,7 @@ export function EmployeeListScreen({ canManage }: { canManage: boolean }) {
   function resetFilters() {
     setSearch("");
     setDebouncedSearch("");
-    setStatusFilter(ALL);
+    setStatusFilter(DEFAULT_STATUS);
     setRoleFilter(ALL);
     setDepartmentFilter(ALL);
     setTeamFilter(ALL);
@@ -180,7 +184,7 @@ export function EmployeeListScreen({ canManage }: { canManage: boolean }) {
             <div className="flex min-w-[220px] flex-1 flex-col gap-1.5">
               <label className="text-xs font-medium text-muted-foreground">Search</label>
               <Input
-                placeholder="Name or email…"
+                placeholder="Name, email, or phone…"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
@@ -271,12 +275,15 @@ export function EmployeeListScreen({ canManage }: { canManage: boolean }) {
                   {canManage && <TableHead>Team</TableHead>}
                   <TableHead>Status</TableHead>
                   {canManage && <TableHead>Base salary</TableHead>}
-                  <TableHead />
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {filtered.map((e) => (
-                  <TableRow key={e.id}>
+                  <TableRow
+                    key={e.id}
+                    onClick={() => router.push(`/employees/${e.id}`)}
+                    className="cursor-pointer hover:bg-muted/50"
+                  >
                     <TableCell>
                       <span className="flex items-center gap-2">
                         <EmployeeAvatar fullName={e.fullName} photoUrl={e.photoUrl} size="sm" />
@@ -293,14 +300,6 @@ export function EmployeeListScreen({ canManage }: { canManage: boolean }) {
                       </Badge>
                     </TableCell>
                     {canManage && <TableCell>{e.baseSalary ?? "—"}</TableCell>}
-                    <TableCell>
-                      <Link
-                        href={`/employees/${e.id}`}
-                        className="text-sm font-medium text-primary hover:underline"
-                      >
-                        View
-                      </Link>
-                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>

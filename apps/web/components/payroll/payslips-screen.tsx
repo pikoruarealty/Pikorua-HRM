@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import {
   Table,
   TableBody,
@@ -17,7 +18,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
-type Employee = { id: string; fullName: string };
+type Employee = { id: string; fullName: string; email: string; phone: string | null };
 
 type PayslipPreview = {
   baseSalary: number;
@@ -311,18 +312,18 @@ function GenerateForm({ onGenerated }: { onGenerated: () => void }) {
             <div className="grid gap-4 sm:grid-cols-3">
               <div className="flex flex-col gap-2">
                 <Label htmlFor="employee">Employee</Label>
-                <Select value={employeeId || undefined} onValueChange={setEmployeeId}>
-                  <SelectTrigger id="employee">
-                    <SelectValue placeholder="Select…" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {employees.map((e) => (
-                      <SelectItem key={e.id} value={e.id}>
-                        {e.fullName}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <SearchableSelect
+                  value={employeeId || undefined}
+                  onChange={setEmployeeId}
+                  placeholder="Select…"
+                  searchPlaceholder="Search name, email, phone…"
+                  items={employees.map((e) => ({
+                    value: e.id,
+                    label: e.fullName,
+                    sublabel: e.email,
+                    keywords: e.phone ? [e.phone] : [],
+                  }))}
+                />
               </div>
               <div className="flex flex-col gap-2">
                 <Label htmlFor="month">Month</Label>
