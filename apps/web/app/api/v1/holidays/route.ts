@@ -4,6 +4,7 @@ import { getSession } from "@/lib/auth";
 import { FINANCE_ROLES, requireRole, AuthzError } from "@/lib/rbac";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { audit, clientIp } from "@/lib/audit";
+import { notifyAllActiveUsers } from "@/lib/notifications/push";
 
 // Track A (2026-07-15). GET /api/v1/holidays — any authenticated role (the
 // holiday list is company-wide, shown on /calendar). POST — Admin/HR only,
@@ -82,6 +83,13 @@ export async function POST(req: Request) {
     metadata: { date: parsed.data.date, name: holiday.name },
     ip: clientIp(req),
   });
+
+  await notifyAllActiveUsers(
+    "holiday_added",
+    `${holiday.name} on ${parsed.data.date}`,
+    "New holiday added",
+    session!.userId,
+  );
 
   return ok(holiday, 201);
 }

@@ -49,6 +49,8 @@ function pad(n: number): string {
   return String(n).padStart(2, "0");
 }
 
+const ALL_KINDS = Object.keys(KIND_STYLES) as CalendarItem["kind"][];
+
 export function CalendarScreen({ canManageHolidays }: { canManageHolidays: boolean }) {
   const today = new Date();
   const [month, setMonth] = useState(today.getMonth() + 1);
@@ -56,6 +58,16 @@ export function CalendarScreen({ canManageHolidays }: { canManageHolidays: boole
   const [items, setItems] = useState<CalendarItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [selectedKinds, setSelectedKinds] = useState<Set<CalendarItem["kind"]>>(new Set(ALL_KINDS));
+
+  function toggleKind(kind: CalendarItem["kind"]) {
+    setSelectedKinds((prev) => {
+      const next = new Set(prev);
+      if (next.has(kind)) next.delete(kind);
+      else next.add(kind);
+      return next;
+    });
+  }
 
   const [holidayDate, setHolidayDate] = useState("");
   const [holidayName, setHolidayName] = useState("");
@@ -125,8 +137,10 @@ export function CalendarScreen({ canManageHolidays }: { canManageHolidays: boole
   ];
   while (cells.length % 7 !== 0) cells.push(null);
 
+  const visibleItems = items.filter((i) => selectedKinds.has(i.kind));
+
   const byDate = new Map<string, CalendarItem[]>();
-  for (const item of items) {
+  for (const item of visibleItems) {
     const list = byDate.get(item.date) ?? [];
     list.push(item);
     byDate.set(item.date, list);
@@ -161,13 +175,27 @@ export function CalendarScreen({ canManageHolidays }: { canManageHolidays: boole
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-4" aria-hidden>
-        {Object.entries(KIND_STYLES).map(([kind, style]) => (
-          <span key={kind} className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <span className={`h-2.5 w-2.5 rounded-full ${style.dot}`} />
-            {style.label}
-          </span>
-        ))}
+      <div className="flex flex-wrap gap-2" role="group" aria-label="Filter event types">
+        {ALL_KINDS.map((kind) => {
+          const style = KIND_STYLES[kind];
+          const selected = selectedKinds.has(kind);
+          return (
+            <button
+              key={kind}
+              type="button"
+              aria-pressed={selected}
+              onClick={() => toggleKind(kind)}
+              className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors ${
+                selected
+                  ? "border-transparent bg-muted text-foreground"
+                  : "border-border text-muted-foreground opacity-50 hover:opacity-80"
+              }`}
+            >
+              <span className={`h-2.5 w-2.5 rounded-full ${style.dot}`} />
+              {style.label}
+            </button>
+          );
+        })}
       </div>
 
       {canManageHolidays && (

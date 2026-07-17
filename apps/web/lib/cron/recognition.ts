@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db/prisma";
 import { RecognitionPeriodType, EmployeeStatus } from "@prisma/client";
+import { notifyAllActiveUsers } from "@/lib/notifications/push";
 
 // Track B — Milestone 3.1 core logic, extracted from the cron route so both
 // the CRON_SECRET-gated HTTP route AND the in-process scheduler
@@ -138,6 +139,14 @@ export async function runRecognitionSnapshot(opts?: {
       opts?.periodStart ??
       (periodType === RecognitionPeriodType.weekly ? startOfWeekUTC(now) : startOfMonthUTC(now));
     const rowsWritten = await computeAndReplace(periodType, periodStart);
+    if (rowsWritten > 0) {
+      const label = periodType === RecognitionPeriodType.weekly ? "This week's" : "This month's";
+      await notifyAllActiveUsers(
+        "recognition_snapshot",
+        `${label} recognition results are in — check the leaderboard.`,
+        "Recognition update",
+      );
+    }
     results.push({ periodType, periodStart: periodStart.toISOString().slice(0, 10), rowsWritten });
   }
   return results;

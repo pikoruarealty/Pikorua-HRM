@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db/prisma";
-import type { Notification } from "@prisma/client";
+import { EmployeeStatus, type Notification } from "@prisma/client";
 import { sendPushToUser } from "@/lib/notifications/fcm";
 
 // Track B, Milestone 3.2. Generic notification push service — any module
@@ -46,4 +46,31 @@ export async function pushNotification(
     console.error(`[fcm] unexpected error sending push for user=${userId}:`, err),
   );
   return notification;
+}
+
+/**
+ * Fan a notification out to every active employee's linked user (e.g. a new
+ * company holiday, a recognition snapshot). Mirrors the "everyone" resolution
+ * already used by the announcements route, extracted here since it's now
+ * needed in more than one place. Never throws — a notify failure must never
+ * fail the caller's actual mutation (holiday create, cron run, etc).
+ */
+export async function notifyAllActiveUsers(
+  type: string,
+  message: string,
+  title?: string,
+  excludeUserId?: string,
+): Promise<void> {
+  try {
+    const recipients = await prisma.user.findMany({
+      where: {
+        employee: { status: EmployeeStatus.active },
+        ...(excludeUserId ? { id: { not: excludeUserId } } : {}),
+      },
+      select: { id: true },
+    });
+    await Promise.allSettled(recipients.map((u) => pushNotification(u.id, type, message, title)));
+  } catch (err) {
+    console.error(`[notifications] failed to notify all active users (type=${type}):`, err);
+  }
 }

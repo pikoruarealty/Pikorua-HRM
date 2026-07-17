@@ -17,6 +17,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { apiFetch } from "@/components/_lib/api";
+import { cn } from "@/lib/utils";
 
 type Me = { email: string; role: string; employeeId: string | null };
 type Notification = { id: string; readAt: string | null };
@@ -172,7 +173,7 @@ export function HomeScreen({
 
       {/* Personal stat tiles — shown to anyone with an employee record. */}
       {hasEmployee && (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className={cn("grid gap-4 sm:grid-cols-2", isAdmin ? "lg:grid-cols-3" : "lg:grid-cols-4")}>
           <StatTile
             icon={<CheckSquare className="size-4" />}
             label="Open tasks"
@@ -191,12 +192,14 @@ export function HomeScreen({
             value={unread}
             href="/notifications"
           />
-          <StatTile
-            icon={<Award className="size-4" />}
-            label="Recognition points"
-            value={points}
-            href="/recognition"
-          />
+          {!isAdmin && (
+            <StatTile
+              icon={<Award className="size-4" />}
+              label="Recognition points"
+              value={points}
+              href="/recognition"
+            />
+          )}
         </div>
       )}
 
