@@ -99,7 +99,7 @@ The attendance summary also needs "unpaid leave days," which lives in Track B's 
 
 ## Milestone 3 — Payroll ✅ code complete 2026-07-14 (blocked on Track B for one live end-to-end check)
 
-- [x] `GET /api/v1/payroll/config` — Admin/HR; current flat deduction rates
+- [x] `GET /api/v1/payroll/config` — Admin/HR; current late-deduction percentage (2026-07-17: deductions became salary-proportional, no longer flat rupee rates)
 - [x] `PUT /api/v1/payroll/config` — Admin only; update flat rates, versioned by `effective_from` (never overwrite a historical rate row — insert a new one so past payslips remain reproducible). Verified live: a new row effective `2026-08-01` doesn't change what a `2026-07` period resolves to.
 - [x] `GET /api/v1/payslips/:employee_id/employee-of-month-status` — Admin/HR; calls Track B's `getEmployeeOfMonthStatus(employeeId, month, year)` stub — **reference-only display**, does not affect any calculation. Folder is `[id]` (see attendance/[id] precedent — one dynamic-segment name per path level; this level also serves payslip *id* for the two routes below).
 - [x] `POST /api/v1/payslips/generate` — Admin/HR; `{ employee_id, month, year, incentive_amount, bonus_amount, bonus_reason?, other_addition_amount?, other_addition_reason?, other_deduction_amount?, other_deduction_reason? }`. Server-side:

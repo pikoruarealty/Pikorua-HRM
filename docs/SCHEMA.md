@@ -161,13 +161,15 @@ Reserved for when the biometric device LAN-sync phase is revisited. Raw punches 
 ## 4. Payroll
 
 ### `payroll_config`
-Global flat-rate deduction config (Admin-editable).
+Deduction config (Admin-editable). Since 2026-07-17, deductions are proportional to each
+employee's own salary (`base_salary ÷ 30` = per-day rate) rather than flat company-wide rupee
+amounts, so the only configurable rate left is the late-deduction percentage — half-day (50%),
+unpaid-leave (100%), and absent (100%) are fixed fractions of the per-day rate, computed in
+application code (`lib/payroll/calc.ts`), not stored here.
 | Column | Type | Notes |
 |---|---|---|
 | id | uuid PK | singleton row or versioned by effective date |
-| late_deduction_flat | numeric(10,2) | |
-| unpaid_leave_deduction_flat | numeric(10,2) | |
-| half_day_deduction_flat | numeric(10,2) | |
+| late_deduction_percent | numeric(5,2) | % of one day's pay deducted per late occurrence, e.g. `20.00` = 20% |
 | effective_from | date | supports changing rates over time without breaking historical payslips |
 
 ### `payslips`
@@ -186,12 +188,18 @@ Global flat-rate deduction config (Admin-editable).
 | other_deduction_amount | numeric(12,2)? | manual, ad-hoc one-off negative line item |
 | other_deduction_reason | text? | |
 | late_count | integer | auto-computed from **approved** attendance records only |
-| unpaid_leave_count | integer | auto-computed |
-| half_day_count | integer | auto-computed |
-| standard_deduction_total | numeric(12,2) | auto-computed from counts × payroll_config flat rates |
+| unpaid_leave_count | integer | auto-computed (holiday/Sunday-aware, `lib/attendance/monthly-breakdown.ts`) — informational; excluded from earned_base_pay, not separately deducted |
+| half_day_count | integer | auto-computed; contributes 0.5 day to earned_base_pay |
+| absent_count | integer | auto-computed (added 2026-07-17) — days with no clock-in, no approved leave, no holiday; excluded from earned_base_pay, same treatment as unpaid leave. A Sunday clock-in never counts here (it's a compensation day instead) |
+| present_count | integer | auto-computed (added 2026-07-17) — contributes 1 full day to earned_base_pay |
+| paid_leave_count | integer | auto-computed (added 2026-07-17) — contributes 1 full day to earned_base_pay |
+| holiday_count | integer | auto-computed (added 2026-07-17) — contributes 1 full day to earned_base_pay |
+| compensation_count | integer | auto-computed (added 2026-07-17) — a Sunday clocked in; contributes 1 full day to earned_base_pay (no overtime premium) |
+| earned_base_pay | numeric(12,2) | auto-computed (added 2026-07-17, renamed formula): `(present_count + half_day_count×0.5 + paid_leave_count + holiday_count + compensation_count) × (base_salary ÷ 30)` — what the employee actually earned for the period |
+| late_deduction_total | numeric(12,2) | renamed from `standard_deduction_total` (2026-07-17) — now only the late-arrival penalty: `late_count × late_deduction_percent% × (base_salary ÷ 30)` |
 | reimbursement_total | numeric(12,2) | sum of approved reimbursement requests for the period |
 | employee_of_month_ref | boolean | denormalized flag: was this employee the Employee of the Month for their department this period? shown for reference only, does not affect calculation |
-| net_pay | numeric(12,2) | computed: base + incentive + bonus + other_addition − standard_deduction_total − other_deduction + reimbursement_total |
+| net_pay | numeric(12,2) | computed: earned_base_pay + incentive + bonus + other_addition − late_deduction_total − other_deduction + reimbursement_total |
 | generated_by | uuid FK → users.id | must be role admin/hr |
 | generated_at | timestamptz | |
 | status | enum | `draft`, `finalized` |

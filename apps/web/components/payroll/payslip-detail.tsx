@@ -22,7 +22,13 @@ type PayslipDetail = {
   lateCount: number;
   unpaidLeaveCount: number;
   halfDayCount: number;
-  standardDeductionTotal: string;
+  absentCount: number;
+  presentCount: number;
+  paidLeaveCount: number;
+  holidayCount: number;
+  compensationCount: number;
+  earnedBasePay: string;
+  lateDeductionTotal: string;
   reimbursementTotal: string;
   employeeOfMonthRef: boolean;
   netPay: string;
@@ -35,15 +41,6 @@ const MONTH_NAMES = [
   "July", "August", "September", "October", "November", "December",
 ];
 
-type AttendanceBreakdown = {
-  present_days: number;
-  half_days: number;
-  absent_days: number;
-  paid_leave_days: number;
-  compensation_days: number;
-  holiday_days: number;
-};
-
 async function getJson(res: Response) {
   const json = await res.json();
   if (json.error) throw new Error(json.error.message);
@@ -52,7 +49,6 @@ async function getJson(res: Response) {
 
 export function PayslipDetail({ id, canFinalize }: { id: string; canFinalize: boolean }) {
   const [payslip, setPayslip] = useState<PayslipDetail | null>(null);
-  const [breakdown, setBreakdown] = useState<AttendanceBreakdown | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [finalizing, setFinalizing] = useState(false);
@@ -60,18 +56,8 @@ export function PayslipDetail({ id, canFinalize }: { id: string; canFinalize: bo
   async function load() {
     setLoading(true);
     try {
-      const data: PayslipDetail = await getJson(await fetch(`/api/v1/payslips/${id}`));
+      const data = await getJson(await fetch(`/api/v1/payslips/${id}`));
       setPayslip(data);
-      try {
-        const b = await getJson(
-          await fetch(
-            `/api/v1/attendance/${data.employee.id}/summary?month=${data.periodMonth}&year=${data.periodYear}`,
-          ),
-        );
-        setBreakdown(b);
-      } catch {
-        setBreakdown(null);
-      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load payslip.");
     } finally {
@@ -133,7 +119,11 @@ export function PayslipDetail({ id, canFinalize }: { id: string; canFinalize: bo
         </CardHeader>
         <CardContent>
           <dl className="grid grid-cols-2 gap-x-8 gap-y-3 text-sm sm:grid-cols-3">
-            <Row label="Base salary" value={`₹${payslip.baseSalary}`} />
+            <Row
+              label="Earned base pay"
+              value={`₹${payslip.earnedBasePay}`}
+              sub={`present ${payslip.presentCount} · half-day ${payslip.halfDayCount} · paid leave ${payslip.paidLeaveCount} · holiday ${payslip.holidayCount} · compensation ${payslip.compensationCount} (of ₹${payslip.baseSalary} base salary)`}
+            />
             <Row label="Incentive" value={`+₹${payslip.incentiveAmount}`} />
             <Row
               label="Bonus"
@@ -149,9 +139,9 @@ export function PayslipDetail({ id, canFinalize }: { id: string; canFinalize: bo
             )}
             <Row label="Reimbursement" value={`+₹${payslip.reimbursementTotal}`} />
             <Row
-              label="Standard deductions"
-              value={`−₹${payslip.standardDeductionTotal}`}
-              sub={`late ${payslip.lateCount} · half-day ${payslip.halfDayCount} · unpaid leave ${payslip.unpaidLeaveCount}`}
+              label="Late deduction"
+              value={`−₹${payslip.lateDeductionTotal}`}
+              sub={`${payslip.lateCount} late occurrence(s)`}
             />
             {payslip.otherDeductionAmount && (
               <Row
@@ -160,6 +150,7 @@ export function PayslipDetail({ id, canFinalize }: { id: string; canFinalize: bo
                 sub={payslip.otherDeductionReason ?? undefined}
               />
             )}
+            <Row label="Unpaid leave / absent (unpaid)" value={`${payslip.unpaidLeaveCount} / ${payslip.absentCount}`} />
             <div className="col-span-full mt-2 border-t pt-3">
               <dt className="text-muted-foreground">Net pay</dt>
               <dd className="text-xl font-bold">₹{payslip.netPay}</dd>
@@ -167,29 +158,6 @@ export function PayslipDetail({ id, canFinalize }: { id: string; canFinalize: bo
           </dl>
         </CardContent>
       </Card>
-
-      {breakdown && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Attendance for this period</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-              <Row label="Present" value={String(breakdown.present_days)} />
-              <Row label="Half-day" value={String(breakdown.half_days)} />
-              <Row label="Absent" value={String(breakdown.absent_days)} />
-              <Row label="Paid leave" value={String(breakdown.paid_leave_days)} />
-              <Row label="Compensation" value={String(breakdown.compensation_days)} />
-              <Row label="Holidays" value={String(breakdown.holiday_days)} />
-            </dl>
-            <p className="mt-3 text-xs text-muted-foreground">
-              Informational only — re-derived from current attendance/leave/holiday data, not stored
-              on the payslip itself (the standard-deductions figure above is what was actually used
-              at generation time).
-            </p>
-          </CardContent>
-        </Card>
-      )}
     </div>
   );
 }

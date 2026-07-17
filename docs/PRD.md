@@ -110,16 +110,16 @@ Kept here for context continuity; do not build in v1:
 
 - **Base salary**: entered when an employee is created; editable afterward by HR/Admin.
 - **Incentive** and **Bonus**: entered as a **free-text/manual amount box** by HR/Admin at the time of generating each month's salary slip. Not auto-calculated in v1 (see Section 6.2 for why).
-- **Deductions**: calculated **automatically**, monthly, based on attendance data:
-  - Late-coming: a **flat deduction amount** per late occurrence (amount configured by Admin/HR, not tied to salary %).
-  - Leave (unpaid): flat deduction amount per unpaid leave day.
-  - Half-day: flat deduction amount per half-day occurrence.
-  - These flat amounts are global config values set by Admin (need a settings/config table — see Schema doc).
+- **Pay is earnings-based, not "base salary minus deductions"** (changed 2026-07-17, twice same day — the first pass made deductions salary-proportional, the second fixed a deeper issue: 0 present days must not still net most of a month's salary):
+  - **Per-day rate** = `base_salary ÷ 30` (fixed 30-day-month convention, not the actual days in the calendar month).
+  - **Earned base pay** = `(present_days + half_days×0.5 + paid_leave_days + holiday_days + compensation_days) × per_day_rate`. Present, half-day (at half rate), paid leave, holidays, and compensation days are all **paid**; **absent and unpaid-leave days are simply excluded — not being paid for the day is the only consequence, no separate punitive deduction, and both are treated identically.**
+  - Weekend rule: only **Sunday** is a day off; Saturday is a normal working day. A clock-in on a Sunday is a **compensation day** — paid at the normal per-day rate (no overtime premium), not a normal present day.
+  - **Late-coming** is a separate penalty on top of earned base pay: a **configurable percentage** of one day's pay, per late occurrence (percentage set by Admin, in `payroll_config` — e.g. 20% of a ₹1,000 day-rate = ₹200 per late day).
 - **Reimbursements**: submitted as a Request type, approved by HR/Admin, and once approved, added into the payslip.
 - **Other Additions** and **Other Deductions**: at payslip generation time, HR/Admin can add free-text/free-amount **"Other Addition"** (antonym of deduction — any ad-hoc positive line item not covered by Incentive/Bonus/Reimbursement) and **"Other Deduction"** (any ad-hoc negative line item not covered by the standard late/leave/half-day deductions) entries. These are manual, one-off, per-payslip line items — not recurring config.
 - **Statutory deductions (PF/ESI/TDS) are explicitly out of scope for v1** — not needed right now, confirmed. Do not build automatic statutory calculation; if ever needed later, it would likely fit as another "Other Deduction" line item initially, or a dedicated module if legally required.
 - **Employee of the Month reference:** at payslip generation time, HR/Admin should see the current month's **Employee of the Month per department** (derived from the Recognition aggregation — see Section 5.8) displayed for reference, to help inform the Incentive/Bonus amount they enter manually. This is informational only — it does not auto-populate any amount.
-- **Payslip** = Base + Incentive (manual) + Bonus (manual) + Other Additions (manual) − (Late × flat rate) − (Unpaid leave × flat rate) − (Half-day × flat rate) − Other Deductions (manual) + Approved reimbursements.
+- **Payslip** = Earned base pay (present + half-day×0.5 + paid leave + holiday + compensation days, × the per-day rate) + Incentive (manual) + Bonus (manual) + Other Additions (manual) − Late deduction (late% × per-day rate) − Other Deductions (manual) + Approved reimbursements.
 - Only **Admin and HR** can generate, view, or edit salary slips, incentives, reimbursements, and other additions/deductions for any employee.
 
 ### 5.3 Hierarchy
@@ -226,7 +226,9 @@ This section exists so a new developer/session doesn't re-litigate decisions alr
 - **WorkUnit / SubUnit / WorkItem**: generic tree levels standing in for Project/Feature/Task (Tech) or Campaign/Target Segment/Call (Sales/BD) etc.
 - **Task Point**: a point value assigned by a Team Lead to an Atomic WorkItem, credited to an employee on completion.
 - **Metric Task**: a WorkItem with a numeric target and running count instead of binary completion.
-- **Flat deduction**: a fixed ₹ amount (not % of salary) deducted per late/leave/half-day occurrence.
+- **Per-day rate**: `base_salary ÷ 30` — the fixed-30-day-month figure earned base pay and the late deduction are both computed against (replaced the old flat ₹-amount-per-occurrence model, 2026-07-17).
+- **Earned base pay**: `(present + half-day×0.5 + paid leave + holiday + compensation days) × per_day_rate` — what an employee actually earned for the period, replacing "full base salary minus deductions" (2026-07-17). Absent/unpaid-leave days are excluded from it, not separately deducted.
+- **Compensation day**: a Sunday on which an employee clocks in — paid at the normal per-day rate (counted into earned base pay like a present day, no overtime premium), never netted against absences.
 - **UID (device)**: the biometric device's internal integer identifier for a fingerprint/face profile, mapped to an employee record (relevant only once the deferred device-sync phase, 5.1.1, is built).
 - **Other Addition / Other Deduction**: ad-hoc, manual, one-off ₹ line items entered by HR/Admin at payslip generation time, for anything not covered by the standard Incentive/Bonus/Reimbursement or late/leave/half-day deduction fields.
 - **Employee of the Month**: the top performer per department for a given month, derived from the Recognition aggregation (task points for Tech, target performance for Sales/BD), surfaced as a reference at payslip generation time.

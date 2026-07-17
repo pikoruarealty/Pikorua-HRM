@@ -8,9 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 type PayrollConfig = {
   id: string;
-  lateDeductionFlat: string;
-  unpaidLeaveDeductionFlat: string;
-  halfDayDeductionFlat: string;
+  lateDeductionPercent: string;
   effectiveFrom: string;
 };
 
@@ -25,9 +23,7 @@ export function PayrollConfigScreen({ canEdit }: { canEdit: boolean }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [lateDeduction, setLateDeduction] = useState("");
-  const [halfDayDeduction, setHalfDayDeduction] = useState("");
-  const [unpaidLeaveDeduction, setUnpaidLeaveDeduction] = useState("");
+  const [lateDeductionPercent, setLateDeductionPercent] = useState("");
   const [effectiveFrom, setEffectiveFrom] = useState(new Date().toISOString().slice(0, 10));
   const [submitting, setSubmitting] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -38,9 +34,7 @@ export function PayrollConfigScreen({ canEdit }: { canEdit: boolean }) {
       const data = await getJson(await fetch("/api/v1/payroll/config"));
       setConfig(data);
       if (data) {
-        setLateDeduction(data.lateDeductionFlat);
-        setHalfDayDeduction(data.halfDayDeductionFlat);
-        setUnpaidLeaveDeduction(data.unpaidLeaveDeductionFlat);
+        setLateDeductionPercent(data.lateDeductionPercent);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load payroll config.");
@@ -63,9 +57,7 @@ export function PayrollConfigScreen({ canEdit }: { canEdit: boolean }) {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            late_deduction_flat: lateDeduction,
-            half_day_deduction_flat: halfDayDeduction,
-            unpaid_leave_deduction_flat: unpaidLeaveDeduction,
+            late_deduction_percent: lateDeductionPercent,
             effective_from: effectiveFrom,
           }),
         }),
@@ -83,7 +75,8 @@ export function PayrollConfigScreen({ canEdit }: { canEdit: boolean }) {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Payroll config</h1>
         <p className="text-sm text-muted-foreground">
-          Flat per-occurrence deduction rates used when generating payslips.
+          Deduction rates used when generating payslips — proportional to each employee&apos;s own
+          salary (per-day rate = base salary ÷ 30), not flat company-wide amounts.
         </p>
       </div>
 
@@ -91,9 +84,9 @@ export function PayrollConfigScreen({ canEdit }: { canEdit: boolean }) {
 
       <Card>
         <CardHeader>
-          <CardTitle>Current rates</CardTitle>
+          <CardTitle>Current rate</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="flex flex-col gap-3">
           {loading ? (
             <p className="text-sm text-muted-foreground">Loading…</p>
           ) : !config ? (
@@ -103,16 +96,8 @@ export function PayrollConfigScreen({ canEdit }: { canEdit: boolean }) {
           ) : (
             <dl className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm sm:grid-cols-4">
               <div>
-                <dt className="text-muted-foreground">Late (per day)</dt>
-                <dd className="font-medium">₹{config.lateDeductionFlat}</dd>
-              </div>
-              <div>
-                <dt className="text-muted-foreground">Half-day (per day)</dt>
-                <dd className="font-medium">₹{config.halfDayDeductionFlat}</dd>
-              </div>
-              <div>
-                <dt className="text-muted-foreground">Unpaid leave (per day)</dt>
-                <dd className="font-medium">₹{config.unpaidLeaveDeductionFlat}</dd>
+                <dt className="text-muted-foreground">Late deduction</dt>
+                <dd className="font-medium">{config.lateDeductionPercent}% of a day&apos;s pay</dd>
               </div>
               <div>
                 <dt className="text-muted-foreground">Effective from</dt>
@@ -122,57 +107,37 @@ export function PayrollConfigScreen({ canEdit }: { canEdit: boolean }) {
               </div>
             </dl>
           )}
+          <p className="text-xs text-muted-foreground">
+            Half-day deducts 50% of a day&apos;s pay, and unpaid leave / absent days each deduct a
+            full day&apos;s pay — these are fixed fractions of each employee&apos;s own salary, not
+            separately configurable.
+          </p>
         </CardContent>
       </Card>
 
       {canEdit && (
         <Card>
           <CardHeader>
-            <CardTitle>Set new rates</CardTitle>
+            <CardTitle>Set a new rate</CardTitle>
           </CardHeader>
           <CardContent>
             <p className="mb-4 text-sm text-muted-foreground">
               This inserts a new versioned rate row — it never overwrites the current one, so
-              payslips already generated stay reproducible against the rates that were effective
+              payslips already generated stay reproducible against the rate that was effective
               at the time.
             </p>
             <form onSubmit={onSubmit} className="flex flex-wrap items-end gap-4">
               <div className="flex flex-col gap-2">
-                <Label htmlFor="late">Late deduction (₹/day)</Label>
+                <Label htmlFor="late">Late deduction (% of a day&apos;s pay)</Label>
                 <Input
                   id="late"
                   type="number"
                   min="0"
+                  max="100"
                   step="0.01"
                   required
-                  value={lateDeduction}
-                  onChange={(e) => setLateDeduction(e.target.value)}
-                  className="w-40"
-                />
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="halfday">Half-day deduction (₹/day)</Label>
-                <Input
-                  id="halfday"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  required
-                  value={halfDayDeduction}
-                  onChange={(e) => setHalfDayDeduction(e.target.value)}
-                  className="w-40"
-                />
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="unpaid">Unpaid leave deduction (₹/day)</Label>
-                <Input
-                  id="unpaid"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  required
-                  value={unpaidLeaveDeduction}
-                  onChange={(e) => setUnpaidLeaveDeduction(e.target.value)}
+                  value={lateDeductionPercent}
+                  onChange={(e) => setLateDeductionPercent(e.target.value)}
                   className="w-40"
                 />
               </div>
@@ -189,7 +154,7 @@ export function PayrollConfigScreen({ canEdit }: { canEdit: boolean }) {
               </div>
               {saveError && <p className="w-full text-sm text-destructive">{saveError}</p>}
               <Button type="submit" disabled={submitting}>
-                {submitting ? "Saving…" : "Save new rates"}
+                {submitting ? "Saving…" : "Save new rate"}
               </Button>
             </form>
           </CardContent>
