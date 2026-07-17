@@ -29,6 +29,14 @@ type Summary = {
   half_day_count: number;
   unpaid_leave_count: number | null;
   approved_record_count: number;
+  present_days: number;
+  absent_days: number;
+  half_days: number;
+  paid_leave_days: number;
+  unpaid_leave_days: number;
+  compensation_days: number;
+  holiday_days: number;
+  working_days_elapsed: number;
   notes: { late_tracking_unavailable?: string; unpaid_leave_unavailable?: string };
 };
 
@@ -41,22 +49,6 @@ async function getJson(res: Response) {
 function fmtTime(iso: string | null) {
   if (!iso) return "—";
   return new Date(iso).toLocaleTimeString(undefined, { timeStyle: "short" });
-}
-
-// Working-day assumption for the "Absent" estimate below: Mon-Sat, no
-// holiday calendar (none exists in the schema yet). This is a visible,
-// documented approximation, not an authoritative payroll figure — the
-// late/half-day/unpaid-leave numbers above it come straight from the
-// approved-only summary endpoint and are the ones payroll actually uses.
-function countWorkingDaysSoFar(periodStart: Date, periodEndExclusive: Date): number {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const end = periodEndExclusive < today ? periodEndExclusive : today;
-  let count = 0;
-  for (let d = new Date(periodStart); d < end; d.setDate(d.getDate() + 1)) {
-    if (d.getDay() !== 0) count += 1; // exclude Sundays only
-  }
-  return count;
 }
 
 export function EmployeeAttendancePanel({ employeeId }: { employeeId: string }) {
@@ -103,16 +95,6 @@ export function EmployeeAttendancePanel({ employeeId }: { employeeId: string }) 
     load();
   }, [employeeId, month]);
 
-  const [year, mo] = month.split("-").map(Number);
-  const periodStart = new Date(Date.UTC(year, mo - 1, 1));
-  const periodEndExclusive = new Date(Date.UTC(year, mo, 1));
-  const presentDays = records.length;
-  const workingDaysSoFar = countWorkingDaysSoFar(periodStart, periodEndExclusive);
-  const absentEstimate = Math.max(
-    0,
-    workingDaysSoFar - presentDays - (summary?.unpaid_leave_count ?? 0),
-  );
-
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
@@ -130,22 +112,22 @@ export function EmployeeAttendancePanel({ employeeId }: { employeeId: string }) 
           <p className="text-sm text-muted-foreground">Loading…</p>
         ) : (
           <>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-              <Stat label="Present" value={presentDays} />
-              <Stat label="Absent (est.)" value={absentEstimate} />
-              <Stat label="Half-days" value={summary?.half_day_count ?? 0} />
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-8">
+              <Stat label="Present" value={summary?.present_days ?? 0} />
+              <Stat label="Half-day" value={summary?.half_days ?? 0} />
+              <Stat label="Absent" value={summary?.absent_days ?? 0} />
               <Stat label="Late (approved)" value={summary?.late_count ?? 0} />
-              <Stat
-                label="Unpaid leave"
-                value={summary?.unpaid_leave_count ?? "—"}
-              />
+              <Stat label="Paid leave" value={summary?.paid_leave_days ?? 0} />
+              <Stat label="Unpaid leave" value={summary?.unpaid_leave_days ?? 0} />
+              <Stat label="Compensation" value={summary?.compensation_days ?? 0} />
+              <Stat label="Holidays" value={summary?.holiday_days ?? 0} />
             </div>
             <p className="text-xs text-muted-foreground">
-              &quot;Absent (est.)&quot; = working days so far this month (Mon–Sat) minus
-              present days minus unpaid leave days — there&apos;s no holiday calendar yet,
-              so treat it as an estimate, not a payroll figure.
+              Present/absent/leave/holiday counts are computed from approved attendance, approved
+              leave requests, and the company holiday calendar (Sundays are off unless the employee
+              clocked in, which counts as a compensation day instead).
               {summary?.notes.unpaid_leave_unavailable && (
-                <> Unpaid leave isn&apos;t available yet ({summary.notes.unpaid_leave_unavailable}), so it&apos;s excluded from this estimate.</>
+                <> Unpaid leave isn&apos;t available yet ({summary.notes.unpaid_leave_unavailable}).</>
               )}
               {summary?.notes.late_tracking_unavailable && (
                 <> {summary.notes.late_tracking_unavailable}</>

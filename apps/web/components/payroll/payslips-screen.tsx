@@ -19,6 +19,17 @@ import {
 
 type Employee = { id: string; fullName: string };
 
+type AttendanceBreakdown = {
+  present_days: number;
+  half_days: number;
+  absent_days: number;
+  late_count: number;
+  paid_leave_days: number;
+  unpaid_leave_days: number;
+  compensation_days: number;
+  holiday_days: number;
+};
+
 type Payslip = {
   id: string;
   employeeId: string;
@@ -192,6 +203,7 @@ function GenerateForm({ onGenerated }: { onGenerated: () => void }) {
   const [otherDeductionReason, setOtherDeductionReason] = useState("");
 
   const [eomStatus, setEomStatus] = useState<boolean | null>(null);
+  const [breakdown, setBreakdown] = useState<AttendanceBreakdown | null>(null);
   const [preview, setPreview] = useState<Record<string, unknown> | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -209,6 +221,7 @@ function GenerateForm({ onGenerated }: { onGenerated: () => void }) {
 
   useEffect(() => {
     setEomStatus(null);
+    setBreakdown(null);
     if (!employeeId) return;
     (async () => {
       try {
@@ -218,6 +231,14 @@ function GenerateForm({ onGenerated }: { onGenerated: () => void }) {
         setEomStatus(data.is_employee_of_month);
       } catch {
         setEomStatus(null);
+      }
+      try {
+        const data = await getJson(
+          await fetch(`/api/v1/attendance/${employeeId}/summary?month=${month}&year=${year}`),
+        );
+        setBreakdown(data);
+      } catch {
+        setBreakdown(null);
       }
     })();
   }, [employeeId, month, year]);
@@ -260,136 +281,146 @@ function GenerateForm({ onGenerated }: { onGenerated: () => void }) {
       <CardHeader>
         <CardTitle>Generate payslip</CardTitle>
       </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-        <form onSubmit={onSubmit} className="flex flex-col gap-4">
-          <div className="flex flex-wrap items-end gap-4">
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="employee">Employee</Label>
-              <Select value={employeeId || undefined} onValueChange={setEmployeeId}>
-                <SelectTrigger id="employee" className="w-56">
-                  <SelectValue placeholder="Select…" />
-                </SelectTrigger>
-                <SelectContent>
-                  {employees.map((e) => (
-                    <SelectItem key={e.id} value={e.id}>
-                      {e.fullName}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="month">Month</Label>
-              <Select value={String(month)} onValueChange={(v) => setMonth(Number(v))}>
-                <SelectTrigger id="month" className="w-28">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {MONTH_NAMES.map((m, i) => (
-                    <SelectItem key={m} value={String(i + 1)}>
-                      {m}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="year">Year</Label>
-              <Input
-                id="year"
-                type="number"
-                className="w-24"
-                value={year}
-                onChange={(e) => setYear(Number(e.target.value))}
-              />
+      <CardContent className="flex flex-col gap-6">
+        <form onSubmit={onSubmit} className="flex flex-col gap-6">
+          <section className="flex flex-col gap-3">
+            <h3 className="text-sm font-semibold text-muted-foreground">Employee &amp; period</h3>
+            <div className="grid gap-4 sm:grid-cols-3">
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="employee">Employee</Label>
+                <Select value={employeeId || undefined} onValueChange={setEmployeeId}>
+                  <SelectTrigger id="employee">
+                    <SelectValue placeholder="Select…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {employees.map((e) => (
+                      <SelectItem key={e.id} value={e.id}>
+                        {e.fullName}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="month">Month</Label>
+                <Select value={String(month)} onValueChange={(v) => setMonth(Number(v))}>
+                  <SelectTrigger id="month">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {MONTH_NAMES.map((m, i) => (
+                      <SelectItem key={m} value={String(i + 1)}>
+                        {m}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="year">Year</Label>
+                <Input
+                  id="year"
+                  type="number"
+                  value={year}
+                  onChange={(e) => setYear(Number(e.target.value))}
+                />
+              </div>
             </div>
             {eomStatus !== null && (
-              <Badge variant={eomStatus ? "default" : "secondary"}>
+              <Badge variant={eomStatus ? "default" : "secondary"} className="w-fit">
                 {eomStatus ? "🏆 Employee of the Month" : "Not EoM this period"}
               </Badge>
             )}
-          </div>
+          </section>
 
-          <div className="flex flex-wrap items-end gap-4">
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="incentive">Incentive (₹)</Label>
-              <Input
-                id="incentive"
-                type="number"
-                min="0"
-                step="0.01"
-                className="w-32"
-                value={incentive}
-                onChange={(e) => setIncentive(e.target.value)}
-              />
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="bonus">Bonus (₹)</Label>
-              <Input
-                id="bonus"
-                type="number"
-                min="0"
-                step="0.01"
-                className="w-32"
-                value={bonus}
-                onChange={(e) => setBonus(e.target.value)}
-              />
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="bonusReason">Bonus reason</Label>
-              <Input
-                id="bonusReason"
-                className="w-48"
-                value={bonusReason}
-                onChange={(e) => setBonusReason(e.target.value)}
-              />
-            </div>
-          </div>
+          {employeeId && (
+            <section className="flex flex-col gap-3 rounded-lg border p-4">
+              <h3 className="text-sm font-semibold text-muted-foreground">Attendance breakdown</h3>
+              {breakdown ? (
+                <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
+                  <BreakdownStat label="Present" value={breakdown.present_days} />
+                  <BreakdownStat label="Half-day" value={breakdown.half_days} />
+                  <BreakdownStat label="Absent" value={breakdown.absent_days} />
+                  <BreakdownStat label="Paid leave" value={breakdown.paid_leave_days} />
+                  <BreakdownStat label="Unpaid leave" value={breakdown.unpaid_leave_days} />
+                  <BreakdownStat label="Compensation" value={breakdown.compensation_days} />
+                  <BreakdownStat label="Holidays" value={breakdown.holiday_days} />
+                </dl>
+              ) : (
+                <p className="text-sm text-muted-foreground">Loading…</p>
+              )}
+            </section>
+          )}
 
-          <div className="flex flex-wrap items-end gap-4">
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="otherAddition">Other addition (₹)</Label>
-              <Input
-                id="otherAddition"
-                type="number"
-                min="0"
-                step="0.01"
-                className="w-32"
-                value={otherAddition}
-                onChange={(e) => setOtherAddition(e.target.value)}
-              />
+          <section className="flex flex-col gap-3">
+            <h3 className="text-sm font-semibold text-muted-foreground">Manual adjustments</h3>
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="flex flex-col gap-2 rounded-lg border p-3">
+                <Label htmlFor="incentive">Incentive (₹)</Label>
+                <Input
+                  id="incentive"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={incentive}
+                  onChange={(e) => setIncentive(e.target.value)}
+                />
+              </div>
+              <div className="flex flex-col gap-2 rounded-lg border p-3">
+                <Label htmlFor="bonus">Bonus (₹)</Label>
+                <Input
+                  id="bonus"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={bonus}
+                  onChange={(e) => setBonus(e.target.value)}
+                />
+                <Label htmlFor="bonusReason" className="text-xs text-muted-foreground">
+                  Reason
+                </Label>
+                <Input id="bonusReason" value={bonusReason} onChange={(e) => setBonusReason(e.target.value)} />
+              </div>
+              <div className="flex flex-col gap-2 rounded-lg border p-3">
+                <Label htmlFor="otherAddition">Other addition (₹)</Label>
+                <Input
+                  id="otherAddition"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={otherAddition}
+                  onChange={(e) => setOtherAddition(e.target.value)}
+                />
+                <Label htmlFor="otherAdditionReason" className="text-xs text-muted-foreground">
+                  Reason
+                </Label>
+                <Input
+                  id="otherAdditionReason"
+                  value={otherAdditionReason}
+                  onChange={(e) => setOtherAdditionReason(e.target.value)}
+                />
+              </div>
+              <div className="flex flex-col gap-2 rounded-lg border p-3">
+                <Label htmlFor="otherDeduction">Other deduction (₹)</Label>
+                <Input
+                  id="otherDeduction"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={otherDeduction}
+                  onChange={(e) => setOtherDeduction(e.target.value)}
+                />
+                <Label htmlFor="otherDeductionReason" className="text-xs text-muted-foreground">
+                  Reason
+                </Label>
+                <Input
+                  id="otherDeductionReason"
+                  value={otherDeductionReason}
+                  onChange={(e) => setOtherDeductionReason(e.target.value)}
+                />
+              </div>
             </div>
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="otherAdditionReason">Reason</Label>
-              <Input
-                id="otherAdditionReason"
-                className="w-48"
-                value={otherAdditionReason}
-                onChange={(e) => setOtherAdditionReason(e.target.value)}
-              />
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="otherDeduction">Other deduction (₹)</Label>
-              <Input
-                id="otherDeduction"
-                type="number"
-                min="0"
-                step="0.01"
-                className="w-32"
-                value={otherDeduction}
-                onChange={(e) => setOtherDeduction(e.target.value)}
-              />
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="otherDeductionReason">Reason</Label>
-              <Input
-                id="otherDeductionReason"
-                className="w-48"
-                value={otherDeductionReason}
-                onChange={(e) => setOtherDeductionReason(e.target.value)}
-              />
-            </div>
-          </div>
+          </section>
 
           {error && <p className="text-sm text-destructive">{error}</p>}
           <div>
@@ -418,5 +449,14 @@ function GenerateForm({ onGenerated }: { onGenerated: () => void }) {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function BreakdownStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-md border p-3">
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className="text-xl font-semibold tabular-nums">{value}</dd>
+    </div>
   );
 }

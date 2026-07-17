@@ -95,12 +95,32 @@ export async function GET(req: Request) {
 
   const role = session.role;
 
+  // Admin/HR/Lead get a lightweight completed/total WorkItem count per
+  // WorkUnit for the list's progress bar (2026-07-17) — the nested tree
+  // itself isn't returned here, only the counts, to keep the list payload
+  // light (the full tree is fetched by the detail screen instead).
+  const progressInclude = {
+    subUnits: { include: { workItems: { select: { status: true } } } },
+  } as const;
+
+  function withProgress<T extends { subUnits: { workItems: { status: string }[] }[] }>(
+    wu: T,
+  ) {
+    const { subUnits, ...rest } = wu;
+    const items = subUnits.flatMap((su) => su.workItems);
+    return {
+      ...rest,
+      progress: { completed: items.filter((wi) => wi.status === "completed").length, total: items.length },
+    };
+  }
+
   if (isFinanceRole(role)) {
     const workUnits = await prisma.workUnit.findMany({
       where: departmentIdFilter ? { departmentId: departmentIdFilter } : undefined,
+      include: progressInclude,
       orderBy: { createdAt: "desc" },
     });
-    return ok(workUnits);
+    return ok(workUnits.map(withProgress));
   }
 
   if (!session.employeeId) {
@@ -115,9 +135,10 @@ export async function GET(req: Request) {
     // Leads are scoped to their own department regardless of a filter override.
     const workUnits = await prisma.workUnit.findMany({
       where: { departmentId: self.departmentId },
+      include: progressInclude,
       orderBy: { createdAt: "desc" },
     });
-    return ok(workUnits);
+    return ok(workUnits.map(withProgress));
   }
 
   // Employee: own-department, status-only view (assigned WorkItems will

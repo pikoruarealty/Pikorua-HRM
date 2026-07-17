@@ -1,0 +1,29 @@
+import * as React from "react";
+import { cn } from "@/lib/utils";
+
+// SHARED shadcn-style primitive (2026-07-17): a plain determinate progress
+// bar, no dependency added. `value` is a percentage 0-100.
+export interface ProgressProps extends React.HTMLAttributes<HTMLDivElement> {
+  value: number;
+}
+
+function Progress({ value, className, ...props }: ProgressProps) {
+  const clamped = Math.min(100, Math.max(0, value));
+  return (
+    <div
+      role="progressbar"
+      aria-valuenow={clamped}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      className={cn("h-2 w-full overflow-hidden rounded-full bg-muted", className)}
+      {...props}
+    >
+      <div
+        className="h-full rounded-full bg-brand transition-all"
+        style={{ width: `${clamped}%` }}
+      />
+    </div>
+  );
+}
+
+export { Progress };

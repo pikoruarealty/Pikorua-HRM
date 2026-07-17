@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { Progress } from "@/components/ui/progress";
 import { apiFetch } from "@/components/_lib/api";
 
 type WorkItem = {
@@ -21,6 +22,7 @@ type WorkItem = {
   currentValue?: string | null;
   periodMonth?: number | null;
   periodYear?: number | null;
+  assignee?: { id: string; fullName: string } | null;
 };
 type SubUnit = { id: string; name: string; workItems: WorkItem[] };
 type WorkUnitDetail = {
@@ -322,6 +324,10 @@ export function WorkUnitDetailScreen({ workUnitId }: { workUnitId: string }) {
   if (error) return <p className="text-sm text-destructive">{error}</p>;
   if (!workUnit) return <p className="text-sm text-muted-foreground">Loading…</p>;
 
+  const allItems = (workUnit.subUnits ?? []).flatMap((su) => su.workItems ?? []);
+  const completedCount = allItems.filter((wi) => wi.status === "completed").length;
+  const progressPercent = allItems.length > 0 ? Math.round((completedCount / allItems.length) * 100) : 0;
+
   return (
     <div className="flex flex-col gap-6">
       <div>
@@ -336,6 +342,14 @@ export function WorkUnitDetailScreen({ workUnitId }: { workUnitId: string }) {
           <p className="mt-2 whitespace-pre-wrap text-sm text-muted-foreground">
             {workUnit.description}
           </p>
+        )}
+        {allItems.length > 0 && (
+          <div className="mt-3 flex max-w-sm items-center gap-2">
+            <Progress value={progressPercent} />
+            <span className="whitespace-nowrap text-xs text-muted-foreground">
+              {completedCount}/{allItems.length} done
+            </span>
+          </div>
         )}
       </div>
 
@@ -365,6 +379,9 @@ export function WorkUnitDetailScreen({ workUnitId }: { workUnitId: string }) {
                     )}
                     {wi.mode === "atomic" && (
                       <span className="text-muted-foreground"> · {wi.taskPoints} pts</span>
+                    )}
+                    {wi.assignee && (
+                      <span className="text-muted-foreground"> · assigned to {wi.assignee.fullName}</span>
                     )}
                   </span>
                   <Badge variant="outline">{wi.status}</Badge>

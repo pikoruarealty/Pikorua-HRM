@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -34,6 +35,15 @@ const MONTH_NAMES = [
   "July", "August", "September", "October", "November", "December",
 ];
 
+type AttendanceBreakdown = {
+  present_days: number;
+  half_days: number;
+  absent_days: number;
+  paid_leave_days: number;
+  compensation_days: number;
+  holiday_days: number;
+};
+
 async function getJson(res: Response) {
   const json = await res.json();
   if (json.error) throw new Error(json.error.message);
@@ -42,6 +52,7 @@ async function getJson(res: Response) {
 
 export function PayslipDetail({ id, canFinalize }: { id: string; canFinalize: boolean }) {
   const [payslip, setPayslip] = useState<PayslipDetail | null>(null);
+  const [breakdown, setBreakdown] = useState<AttendanceBreakdown | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [finalizing, setFinalizing] = useState(false);
@@ -49,8 +60,18 @@ export function PayslipDetail({ id, canFinalize }: { id: string; canFinalize: bo
   async function load() {
     setLoading(true);
     try {
-      const data = await getJson(await fetch(`/api/v1/payslips/${id}`));
+      const data: PayslipDetail = await getJson(await fetch(`/api/v1/payslips/${id}`));
       setPayslip(data);
+      try {
+        const b = await getJson(
+          await fetch(
+            `/api/v1/attendance/${data.employee.id}/summary?month=${data.periodMonth}&year=${data.periodYear}`,
+          ),
+        );
+        setBreakdown(b);
+      } catch {
+        setBreakdown(null);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load payslip.");
     } finally {
@@ -82,6 +103,11 @@ export function PayslipDetail({ id, canFinalize }: { id: string; canFinalize: bo
 
   return (
     <div className="flex flex-col gap-6">
+      <div>
+        <Link href="/payslips" className="text-sm text-muted-foreground hover:underline">
+          ← Payslips
+        </Link>
+      </div>
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">
@@ -141,6 +167,29 @@ export function PayslipDetail({ id, canFinalize }: { id: string; canFinalize: bo
           </dl>
         </CardContent>
       </Card>
+
+      {breakdown && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Attendance for this period</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+              <Row label="Present" value={String(breakdown.present_days)} />
+              <Row label="Half-day" value={String(breakdown.half_days)} />
+              <Row label="Absent" value={String(breakdown.absent_days)} />
+              <Row label="Paid leave" value={String(breakdown.paid_leave_days)} />
+              <Row label="Compensation" value={String(breakdown.compensation_days)} />
+              <Row label="Holidays" value={String(breakdown.holiday_days)} />
+            </dl>
+            <p className="mt-3 text-xs text-muted-foreground">
+              Informational only — re-derived from current attendance/leave/holiday data, not stored
+              on the payslip itself (the standard-deductions figure above is what was actually used
+              at generation time).
+            </p>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

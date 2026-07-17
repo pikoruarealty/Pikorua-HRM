@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -70,7 +70,6 @@ export function EmployeeDetail({
   canViewAttendance: boolean;
   isSelf: boolean;
 }) {
-  const router = useRouter();
   const [employee, setEmployee] = useState<Employee | null>(null);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
@@ -181,6 +180,11 @@ export function EmployeeDetail({
 
   return (
     <div className="flex flex-col gap-6">
+      <div>
+        <Link href="/employees" className="text-sm text-muted-foreground hover:underline">
+          ← Employees
+        </Link>
+      </div>
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
           <EmployeeAvatar fullName={employee.fullName} photoUrl={employee.photoUrl} size="lg" />
@@ -366,10 +370,6 @@ export function EmployeeDetail({
           </Button>
         )}
       </div>
-
-      <Button variant="outline" className="w-fit" onClick={() => router.push("/employees")}>
-        Back to list
-      </Button>
     </div>
   );
 }
