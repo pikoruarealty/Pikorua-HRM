@@ -25,12 +25,14 @@ function NavContent({
   dark,
   toggleTheme,
   onNavigate,
+  navRef,
 }: {
   ctx: NavCtx;
   unread: number;
   dark: boolean;
   toggleTheme: () => void;
   onNavigate?: () => void;
+  navRef?: React.RefObject<HTMLElement>;
 }) {
   const pathname = usePathname();
   const groups = visibleGroups(ctx);
@@ -43,7 +45,10 @@ function NavContent({
   }
 
   return (
-    <nav className="scrollbar-thin flex flex-1 flex-col gap-6 overflow-y-auto px-3 py-4">
+    <nav
+      ref={navRef as React.RefObject<HTMLElement>}
+      className="scrollbar-thin flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-3 py-4"
+    >
       {groups.map((group, gi) => (
         <div key={gi} className="flex flex-col gap-1">
           {group.label && (
@@ -119,6 +124,7 @@ function SidebarInner({
   const [dark, toggleTheme] = useTheme();
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const navRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -133,16 +139,30 @@ function SidebarInner({
 
   return (
     <div className="flex h-full flex-col bg-sidebar">
-      <div className="flex h-16 items-center gap-2.5 border-b border-sidebar-border px-5">
+      <Link
+        href="/"
+        onClick={() => {
+          navRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+          onNavigate?.();
+        }}
+        className="flex h-16 shrink-0 items-center gap-2.5 border-b border-sidebar-border px-5"
+      >
         <span className="flex size-8 items-center justify-center rounded-lg bg-brand text-brand-foreground">
           <Hexagon className="size-5" strokeWidth={2.25} />
         </span>
         <span className="text-[15px] font-semibold tracking-tight text-white">Pikorua HRM</span>
-      </div>
+      </Link>
 
-      <NavContent ctx={ctx} unread={unread} dark={dark} toggleTheme={toggleTheme} onNavigate={onNavigate} />
+      <NavContent
+        ctx={ctx}
+        unread={unread}
+        dark={dark}
+        toggleTheme={toggleTheme}
+        onNavigate={onNavigate}
+        navRef={navRef}
+      />
 
-      <div ref={menuRef} className="relative border-t border-sidebar-border p-3">
+      <div ref={menuRef} className="relative shrink-0 border-t border-sidebar-border p-3">
         {menuOpen && (
           <div className="animate-in fade-in slide-in-from-bottom-2 absolute inset-x-3 bottom-[calc(100%+0.5rem)] z-10 overflow-hidden rounded-xl border border-white/10 bg-sidebar-accent p-1.5 shadow-2xl shadow-black/50 ring-1 ring-white/10 duration-150">
             <Link
@@ -232,7 +252,7 @@ export function AppShell({
   return (
     <div className="min-h-[100dvh]">
       {/* Desktop sidebar */}
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 border-r border-sidebar-border md:block">
+      <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 overflow-hidden border-r border-sidebar-border md:block">
         <SidebarInner ctx={ctx} unread={unread} email={email} role={role} onLogout={logout} />
       </aside>
 
@@ -243,7 +263,7 @@ export function AppShell({
             className="absolute inset-0 bg-slate-950/60 backdrop-blur-sm"
             onClick={() => setOpen(false)}
           />
-          <aside className="absolute inset-y-0 left-0 w-72 border-r border-sidebar-border shadow-xl">
+          <aside className="absolute inset-y-0 left-0 w-72 overflow-hidden border-r border-sidebar-border shadow-xl">
             <button
               onClick={() => setOpen(false)}
               className="absolute right-3 top-4 z-10 rounded-md p-1.5 text-sidebar-muted hover:text-white"

@@ -19,9 +19,11 @@ function Progress({ value, className, ...props }: ProgressProps) {
       {...props}
     >
       <div
-        className="h-full rounded-full bg-brand transition-all"
+        className="h-full overflow-hidden rounded-full bg-brand transition-all"
         style={{ width: `${clamped}%` }}
-      />
+      >
+        <div className="h-full w-full animate-shimmer bg-[linear-gradient(110deg,transparent_30%,rgba(255,255,255,0.4)_50%,transparent_70%)] bg-[length:200%_100%]" />
+      </div>
     </div>
   );
 }

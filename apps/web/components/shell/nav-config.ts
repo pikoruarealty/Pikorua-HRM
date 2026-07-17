@@ -50,7 +50,7 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    label: "Money",
+    label: "Finance",
     items: [
       { href: "/payslips", label: "Payslips", icon: ReceiptText },
       { href: "/payroll/config", label: "Payroll Config", icon: Settings2, show: (c) => c.isFinance },
