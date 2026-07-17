@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 type PayrollConfig = {
   id: string;
   lateDeductionPercent: string;
+  lateGraceMinutes: number;
   effectiveFrom: string;
 };
 
@@ -24,6 +25,7 @@ export function PayrollConfigScreen({ canEdit }: { canEdit: boolean }) {
   const [error, setError] = useState<string | null>(null);
 
   const [lateDeductionPercent, setLateDeductionPercent] = useState("");
+  const [lateGraceMinutes, setLateGraceMinutes] = useState("0");
   const [effectiveFrom, setEffectiveFrom] = useState(new Date().toISOString().slice(0, 10));
   const [submitting, setSubmitting] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -35,6 +37,7 @@ export function PayrollConfigScreen({ canEdit }: { canEdit: boolean }) {
       setConfig(data);
       if (data) {
         setLateDeductionPercent(data.lateDeductionPercent);
+        setLateGraceMinutes(String(data.lateGraceMinutes ?? 0));
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load payroll config.");
@@ -58,6 +61,7 @@ export function PayrollConfigScreen({ canEdit }: { canEdit: boolean }) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             late_deduction_percent: lateDeductionPercent,
+            late_grace_minutes: lateGraceMinutes,
             effective_from: effectiveFrom,
           }),
         }),
@@ -100,6 +104,13 @@ export function PayrollConfigScreen({ canEdit }: { canEdit: boolean }) {
                 <dd className="font-medium">{config.lateDeductionPercent}% of a day&apos;s pay</dd>
               </div>
               <div>
+                <dt className="text-muted-foreground">Late grace</dt>
+                <dd className="font-medium">
+                  {config.lateGraceMinutes} min
+                  {config.lateGraceMinutes === 0 ? " (exact)" : ""}
+                </dd>
+              </div>
+              <div>
                 <dt className="text-muted-foreground">Effective from</dt>
                 <dd className="font-medium">
                   {new Date(config.effectiveFrom).toLocaleDateString()}
@@ -108,9 +119,11 @@ export function PayrollConfigScreen({ canEdit }: { canEdit: boolean }) {
             </dl>
           )}
           <p className="text-xs text-muted-foreground">
-            Half-day deducts 50% of a day&apos;s pay, and unpaid leave / absent days each deduct a
-            full day&apos;s pay — these are fixed fractions of each employee&apos;s own salary, not
-            separately configurable.
+            Late grace is how many minutes after a team&apos;s expected start time a clock-in is still
+            on time — a clock-in within the grace window isn&apos;t counted late (0 = exact to the
+            minute). Half-day deducts 50% of a day&apos;s pay, and unpaid leave / absent days each
+            deduct a full day&apos;s pay — these are fixed fractions of each employee&apos;s own
+            salary, not separately configurable.
           </p>
         </CardContent>
       </Card>
@@ -138,6 +151,20 @@ export function PayrollConfigScreen({ canEdit }: { canEdit: boolean }) {
                   required
                   value={lateDeductionPercent}
                   onChange={(e) => setLateDeductionPercent(e.target.value)}
+                  className="w-40"
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="grace">Late grace (minutes)</Label>
+                <Input
+                  id="grace"
+                  type="number"
+                  min="0"
+                  max="120"
+                  step="1"
+                  required
+                  value={lateGraceMinutes}
+                  onChange={(e) => setLateGraceMinutes(e.target.value)}
                   className="w-40"
                 />
               </div>

@@ -87,7 +87,7 @@ export async function computePayslipPreview(
   // from the day-by-day monthly breakdown, which is holiday- and
   // Sunday-compensation-aware.
   const [summary, breakdown] = await Promise.all([
-    getAttendanceSummary(employeeId, month, year),
+    getAttendanceSummary(employeeId, month, year, config.lateGraceMinutes),
     getMonthlyAttendanceBreakdown(employeeId, month, year),
   ]);
 

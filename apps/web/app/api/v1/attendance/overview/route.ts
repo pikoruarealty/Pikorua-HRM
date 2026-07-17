@@ -3,6 +3,7 @@ import { getSession } from "@/lib/auth";
 import { FINANCE_ROLES, requireRole, AuthzError } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { isLateArrival, todayDateOnly } from "@/lib/attendance/time";
+import { getLatestPayrollConfig } from "@/lib/payroll/config";
 import { EmployeeStatus, RequestStatus, RequestType } from "@prisma/client";
 
 // Track A (2026-07-15). GET /api/v1/attendance/overview?date=YYYY-MM-DD —
@@ -61,6 +62,9 @@ export async function GET(req: Request) {
     prisma.holiday.findUnique({ where: { date } }),
   ]);
 
+  // Today's live view uses the current (latest) late-grace policy.
+  const lateGraceMinutes = (await getLatestPayrollConfig())?.lateGraceMinutes ?? 0;
+
   const recordByEmployee = new Map(records.map((r) => [r.employeeId, r]));
   const leaveByEmployee = new Map(leaves.map((l) => [l.employeeId, l.type]));
 
@@ -73,7 +77,7 @@ export async function GET(req: Request) {
     if (record?.clockInRaw) {
       status = record.isHalfDay ? "half_day" : "present";
       const effectiveClockIn = record.clockInApproved ?? record.clockInRaw;
-      late = isLateArrival(effectiveClockIn, e.team?.expectedStartTime ?? null);
+      late = isLateArrival(effectiveClockIn, e.team?.expectedStartTime ?? null, lateGraceMinutes);
     } else if (leaveType) {
       status = "on_leave";
     } else if (holiday) {

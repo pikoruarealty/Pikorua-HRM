@@ -32,6 +32,13 @@ describe("isLateArrival", () => {
   test("no configured start time means never late (explicit unavailable-note path)", () => {
     expect(isLateArrival(at(23, 59), null)).toBe(false);
   });
+
+  test("grace window: within grace is not late, past it is", () => {
+    expect(isLateArrival(at(9, 15), "09:00", 15)).toBe(false);
+    expect(isLateArrival(at(9, 16), "09:00", 15)).toBe(true);
+    // grace defaults to 0 → exact-to-the-minute
+    expect(isLateArrival(at(9, 1), "09:00")).toBe(true);
+  });
 });
 
 describe("computeHours", () => {
@@ -41,16 +48,22 @@ describe("computeHours", () => {
     expect(computeHours(t(9), t(18))).toEqual({ totalHours: 9, isHalfDay: false });
   });
 
-  test("under 5 hours is a half-day (PRD §5.1)", () => {
+  test("within the (1.5h, 5h) band is a half-day", () => {
     expect(computeHours(t(9), t(13, 30))).toEqual({ totalHours: 4.5, isHalfDay: true });
+    expect(computeHours(t(9), t(11))).toEqual({ totalHours: 2, isHalfDay: true });
   });
 
   test("exactly 5 hours is NOT a half-day", () => {
     expect(computeHours(t(9), t(14))).toEqual({ totalHours: 5, isHalfDay: false });
   });
 
-  test("clock-out before clock-in clamps to 0 instead of going negative", () => {
-    expect(computeHours(t(18), t(9))).toEqual({ totalHours: 0, isHalfDay: true });
+  test("at or below the 1.5h floor is NOT a half-day", () => {
+    expect(computeHours(t(9), t(10, 30))).toEqual({ totalHours: 1.5, isHalfDay: false });
+    expect(computeHours(t(9), t(10))).toEqual({ totalHours: 1, isHalfDay: false });
+  });
+
+  test("clock-out before clock-in clamps to 0 (not a half-day)", () => {
+    expect(computeHours(t(18), t(9))).toEqual({ totalHours: 0, isHalfDay: false });
   });
 
   test("rounds to 2 decimals", () => {

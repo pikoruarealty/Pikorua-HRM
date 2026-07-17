@@ -43,6 +43,9 @@ async function main() {
         // the pre-existing row, so no surprise deduction until an Admin sets
         // a real rate via PUT /payroll/config.
         lateDeductionPercent: 0,
+        // 0 = exact-to-the-minute lateness (prior behaviour) until an Admin
+        // sets a grace window via PUT /payroll/config.
+        lateGraceMinutes: 0,
         effectiveFrom: new Date("2026-01-01"),
       },
     });

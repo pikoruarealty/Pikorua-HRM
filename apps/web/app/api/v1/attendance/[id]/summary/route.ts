@@ -5,6 +5,7 @@ import { FINANCE_ROLES, isLeadRole } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { getAttendanceSummary } from "@/lib/attendance/summary";
 import { getMonthlyAttendanceBreakdown } from "@/lib/attendance/monthly-breakdown";
+import { getEffectivePayrollConfig } from "@/lib/payroll/config";
 
 // Track A. GET /api/v1/attendance/:employee_id/summary?month=&year=
 // (folder is named [id], not [employee_id], only because Next.js requires
@@ -61,8 +62,9 @@ export async function GET(
     return failFor(ErrorCode.NOT_FOUND, "Employee not found.");
   }
 
+  const effectiveConfig = await getEffectivePayrollConfig(month, year);
   const [summary, breakdown] = await Promise.all([
-    getAttendanceSummary(employeeId, month, year),
+    getAttendanceSummary(employeeId, month, year, effectiveConfig?.lateGraceMinutes ?? 0),
     getMonthlyAttendanceBreakdown(employeeId, month, year),
   ]);
 

@@ -30,6 +30,7 @@ export async function GET() {
 // generated (SCHEMA.md §4).
 const putSchema = z.object({
   late_deduction_percent: z.coerce.number().min(0).max(100),
+  late_grace_minutes: z.coerce.number().int().min(0).max(120),
   effective_from: z.coerce.date(),
 });
 
@@ -51,6 +52,7 @@ export async function PUT(req: Request) {
   const created = await prisma.payrollConfig.create({
     data: {
       lateDeductionPercent: parsed.data.late_deduction_percent,
+      lateGraceMinutes: parsed.data.late_grace_minutes,
       effectiveFrom: parsed.data.effective_from,
     },
   });
@@ -63,6 +65,7 @@ export async function PUT(req: Request) {
     entityId: created.id,
     metadata: {
       late_deduction_percent: parsed.data.late_deduction_percent,
+      late_grace_minutes: parsed.data.late_grace_minutes,
       effective_from: parsed.data.effective_from.toISOString().slice(0, 10),
     },
     ip: clientIp(req),

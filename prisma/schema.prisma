@@ -384,6 +384,11 @@ model PayrollConfig {
   // they're fixed fractions of a day's pay, derived directly from
   // base_salary, not a policy knob (see lib/payroll/calc.ts).
   lateDeductionPercent Decimal  @map("late_deduction_percent") @db.Decimal(5, 2)
+  // Grace window (minutes) after a team's expected_start_time within which a
+  // clock-in is NOT counted late (2026-07-17). 0 = exact-to-the-minute, the
+  // prior behaviour. Snapshotted per effective_from like the deduction rate,
+  // so past payslips reproduce the grace that was in force.
+  lateGraceMinutes     Int      @default(0) @map("late_grace_minutes")
   effectiveFrom        DateTime @map("effective_from") @db.Date
 
   @@map("payroll_config")

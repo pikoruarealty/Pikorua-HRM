@@ -171,15 +171,20 @@ export function HomeScreen({
         </Card>
       )}
 
+      {/* Clock status — employees/leads/HR who clock in; not admin. */}
+      {hasEmployee && !isAdmin && <ClockCard />}
+
       {/* Personal stat tiles — shown to anyone with an employee record. */}
       {hasEmployee && (
-        <div className={cn("grid gap-4 sm:grid-cols-2", isAdmin ? "lg:grid-cols-3" : "lg:grid-cols-4")}>
-          <StatTile
-            icon={<CheckSquare className="size-4" />}
-            label="Open tasks"
-            value={openTasks}
-            href="/my-tasks"
-          />
+        <div className={cn("grid gap-4 sm:grid-cols-2", isAdmin ? "lg:grid-cols-2" : "lg:grid-cols-4")}>
+          {!isAdmin && (
+            <StatTile
+              icon={<CheckSquare className="size-4" />}
+              label="Open tasks"
+              value={openTasks}
+              href="/my-tasks"
+            />
+          )}
           <StatTile
             icon={<Clock className="size-4" />}
             label="Pending requests"
@@ -338,7 +343,7 @@ export function HomeScreen({
       <div>
         <h2 className="mb-3 text-sm font-semibold text-muted-foreground">Quick links</h2>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {QUICK_LINKS.filter((l) => hasEmployee || l.href === "/recognition").map((l) => (
+          {QUICK_LINKS.filter((l) => (hasEmployee || l.href === "/recognition") && !(isAdmin && l.href === "/my-tasks")).map((l) => (
             <Link key={l.href} href={l.href}>
               <Card className="h-full transition-colors hover:border-primary/50">
                 <CardHeader>
@@ -359,6 +364,96 @@ function greeting() {
   if (h < 12) return "Good morning";
   if (h < 18) return "Good afternoon";
   return "Good evening";
+}
+
+type TodayAttendance = { date: string; clockInRaw: string | null; clockOutRaw: string | null };
+
+function fmtDuration(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  return `${h}h ${String(m).padStart(2, "0")}m ${String(sec).padStart(2, "0")}s`;
+}
+
+/** Employee clock-status card: clocked in/out, live elapsed, total today +
+ *  current session (equal until breaks land — the split is wired now). */
+function ClockCard() {
+  const [rec, setRec] = useState<TodayAttendance | null | undefined>(undefined);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    apiFetch<TodayAttendance[]>("/attendance").then((r) => {
+      const today = new Date().toISOString().slice(0, 10);
+      setRec((r.data ?? []).find((a) => a.date.slice(0, 10) === today) ?? null);
+    });
+  }, []);
+
+  const clockedIn = !!rec?.clockInRaw;
+  const clockedOut = !!rec?.clockOutRaw;
+  const ticking = clockedIn && !clockedOut;
+
+  // Only tick while actively clocked in.
+  useEffect(() => {
+    if (!ticking) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [ticking]);
+
+  const elapsedMs =
+    rec?.clockInRaw != null
+      ? (rec.clockOutRaw ? new Date(rec.clockOutRaw).getTime() : now) -
+        new Date(rec.clockInRaw).getTime()
+      : 0;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Clock className="size-4" />
+          Attendance
+          <Badge variant={ticking ? "default" : "outline"}>
+            {rec === undefined
+              ? "…"
+              : clockedOut
+                ? "clocked out"
+                : clockedIn
+                  ? "clocked in"
+                  : "not clocked in"}
+          </Badge>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="text-sm">
+        {rec === undefined ? (
+          <p className="text-muted-foreground">Loading…</p>
+        ) : !clockedIn ? (
+          <p className="text-muted-foreground">
+            You haven&apos;t clocked in today. Head to Daily Planning to clock in.
+          </p>
+        ) : (
+          <div className="flex flex-col gap-3">
+            <p className="text-muted-foreground">
+              {clockedOut
+                ? `Clocked out at ${new Date(rec.clockOutRaw!).toLocaleTimeString()}.`
+                : `Clocked in at ${new Date(rec.clockInRaw!).toLocaleTimeString()}.`}
+            </p>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <div className="text-xs text-muted-foreground">Total today</div>
+                <div className="text-2xl font-bold tabular-nums">{fmtDuration(elapsedMs)}</div>
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground">Current session</div>
+                <div className="text-2xl font-bold tabular-nums">
+                  {clockedOut ? "—" : fmtDuration(elapsedMs)}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
 }
 
 /** Compact metric tile. `value === null` renders a dash (loading / N/A). */

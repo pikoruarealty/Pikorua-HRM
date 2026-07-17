@@ -18,11 +18,13 @@ export type AttendanceSummary = {
   unpaidLeaveUnavailable: boolean;
 };
 
-/** employee must already be known to exist; month is 1-12. */
+/** employee must already be known to exist; month is 1-12. `lateGraceMinutes`
+ *  is the period-effective PayrollConfig grace window (default 0). */
 export async function getAttendanceSummary(
   employeeId: string,
   month: number,
   year: number,
+  lateGraceMinutes = 0,
 ): Promise<AttendanceSummary> {
   const employee = await prisma.employee.findUnique({
     where: { id: employeeId },
@@ -51,7 +53,7 @@ export async function getAttendanceSummary(
       lateTrackingUnavailable = true;
       continue;
     }
-    if (r.clockInApproved && isLateArrival(r.clockInApproved, expectedStartTime)) {
+    if (r.clockInApproved && isLateArrival(r.clockInApproved, expectedStartTime, lateGraceMinutes)) {
       lateCount += 1;
     }
   }

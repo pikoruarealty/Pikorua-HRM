@@ -16,17 +16,27 @@ function parseHHMM(value: string): number {
   return h * 60 + m;
 }
 
-/** True if `clockIn` is later than the team's "HH:MM" expected start time. */
-export function isLateArrival(clockIn: Date, expectedStartTime: string | null): boolean {
+/**
+ * True if `clockIn` is later than the team's "HH:MM" expected start time plus
+ * an optional grace window (minutes, from PayrollConfig.lateGraceMinutes).
+ * graceMinutes 0 = exact-to-the-minute (the prior behaviour).
+ */
+export function isLateArrival(
+  clockIn: Date,
+  expectedStartTime: string | null,
+  graceMinutes = 0,
+): boolean {
   if (!expectedStartTime) return false;
   const arrivalMinutes = clockIn.getHours() * 60 + clockIn.getMinutes();
-  return arrivalMinutes > parseHHMM(expectedStartTime);
+  return arrivalMinutes > parseHHMM(expectedStartTime) + graceMinutes;
 }
 
 export function computeHours(clockIn: Date, clockOut: Date): { totalHours: number; isHalfDay: boolean } {
   const ms = clockOut.getTime() - clockIn.getTime();
   const totalHours = Math.max(0, Math.round((ms / 3_600_000) * 100) / 100);
-  return { totalHours, isHalfDay: totalHours < 5 };
+  // Half-day is the band (1.5h, 5h): a very short day (<=1.5h) is not a
+  // half-day, and >=5h is a full day.
+  return { totalHours, isHalfDay: totalHours > 1.5 && totalHours < 5 };
 }
 
 /** Server-local "today" as a Date at UTC midnight, matching the @db.Date column. */

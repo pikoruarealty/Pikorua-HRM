@@ -17,6 +17,44 @@ type WorkItem = {
   currentValue?: string | null;
 };
 
+function ExplainBlock({ workItemId }: { workItemId: string }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function toggle() {
+    const next = !open;
+    setOpen(next);
+    // Fetch once, then cache — re-toggling doesn't re-call the AI.
+    if (next && text === null && !loading) {
+      setLoading(true);
+      setErr(null);
+      const res = await apiFetch<{ explanation: string }>(`/work-items/${workItemId}/explain`, {
+        method: "POST",
+      });
+      setLoading(false);
+      if (res.error) setErr(`${res.error.code}: ${res.error.message}`);
+      else setText(res.data?.explanation ?? "");
+    }
+  }
+
+  return (
+    <div className="mt-2">
+      <Button size="sm" variant="outline" onClick={toggle}>
+        {open ? "Hide explanation" : "Explain"}
+      </Button>
+      {open && (
+        <div className="mt-2 rounded border bg-muted/30 p-3 text-sm">
+          {loading && <p className="text-muted-foreground">Thinking…</p>}
+          {err && <p className="text-destructive">{err}</p>}
+          {text !== null && <p className="whitespace-pre-wrap">{text}</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function WorkItemRow({
   wi,
   onComplete,
@@ -31,35 +69,38 @@ function WorkItemRow({
   onDraftChange: (v: string) => void;
 }) {
   return (
-    <div className="flex items-center justify-between gap-3 rounded border p-3 text-sm">
-      <div>
-        <span className="font-medium">{wi.title}</span>{" "}
-        <span className="text-muted-foreground">({wi.mode})</span>
-        <div className="text-muted-foreground">
-          {wi.mode === "atomic" ? `${wi.taskPoints} pts` : `${wi.currentValue}/${wi.targetValue}`}
+    <div className="rounded border p-3 text-sm">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <span className="font-medium">{wi.title}</span>{" "}
+          <span className="text-muted-foreground">({wi.mode})</span>
+          <div className="text-muted-foreground">
+            {wi.mode === "atomic" ? `${wi.taskPoints} pts` : `${wi.currentValue}/${wi.targetValue}`}
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <Badge variant="outline">{wi.status}</Badge>
+          {wi.status !== "completed" &&
+            (wi.mode === "atomic" ? (
+              <Button size="sm" onClick={() => onComplete(wi.id)}>
+                Complete
+              </Button>
+            ) : (
+              <>
+                <Input
+                  className="w-24"
+                  placeholder="new value"
+                  value={draft}
+                  onChange={(e) => onDraftChange(e.target.value)}
+                />
+                <Button size="sm" onClick={() => onUpdateProgress(wi.id)}>
+                  Update
+                </Button>
+              </>
+            ))}
         </div>
       </div>
-      <div className="flex items-center gap-2">
-        <Badge variant="outline">{wi.status}</Badge>
-        {wi.status !== "completed" &&
-          (wi.mode === "atomic" ? (
-            <Button size="sm" onClick={() => onComplete(wi.id)}>
-              Complete
-            </Button>
-          ) : (
-            <>
-              <Input
-                className="w-24"
-                placeholder="new value"
-                value={draft}
-                onChange={(e) => onDraftChange(e.target.value)}
-              />
-              <Button size="sm" onClick={() => onUpdateProgress(wi.id)}>
-                Update
-              </Button>
-            </>
-          ))}
-      </div>
+      <ExplainBlock workItemId={wi.id} />
     </div>
   );
 }

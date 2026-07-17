@@ -2,8 +2,9 @@ import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { todayDateOnly, computeHours } from "@/lib/attendance/time";
-import { buildEodSummary } from "@/lib/eod/summary";
+import { buildEodSummary, type EodSummary } from "@/lib/eod/summary";
 import { pushNotification } from "@/lib/notifications/push";
+import { Role } from "@prisma/client";
 
 // Track A. POST /api/v1/attendance/clock-out — server-timestamped. Computes
 // a preliminary total_hours/is_half_day from the raw times immediately (best
@@ -46,9 +47,11 @@ export async function POST() {
     data: { clockOutRaw: now, totalHours, isHalfDay },
   });
 
-  // EOD wrap-up. Best-effort notification — never fail the clock-out itself if
+  // EOD wrap-up. Best-effort notifications — never fail the clock-out itself if
   // the summary/notification has trouble.
   const eod = await buildEodSummary(employeeId, date);
+
+  // Self gets their own wrap-up.
   if (session.userId) {
     await pushNotification(
       session.userId,
@@ -58,5 +61,44 @@ export async function POST() {
     ).catch(() => {});
   }
 
+  // Management gets the report: all Admin + HR, plus the clocker's team lead —
+  // minus the clocker themselves. (A lead's own team-lead is themselves, so a
+  // lead's EOD reaches only Admin + HR; an employee's reaches Admin + HR + lead.)
+  await notifyEodToManagement(employeeId, session.userId, eod).catch(() => {});
+
   return ok({ record, eod });
+}
+
+async function notifyEodToManagement(
+  employeeId: string,
+  selfUserId: string | undefined,
+  eod: EodSummary,
+): Promise<void> {
+  const employee = await prisma.employee.findUnique({
+    where: { id: employeeId },
+    select: { fullName: true, team: { select: { teamLeadId: true } } },
+  });
+  if (!employee) return;
+
+  const leadEmployeeId = employee.team?.teamLeadId ?? null;
+
+  const recipients = await prisma.user.findMany({
+    where: {
+      OR: [
+        { role: { in: [Role.admin, Role.hr] } },
+        ...(leadEmployeeId ? [{ employeeId: leadEmployeeId }] : []),
+      ],
+      ...(selfUserId ? { id: { not: selfUserId } } : {}),
+    },
+    select: { id: true },
+  });
+  if (recipients.length === 0) return;
+
+  const message =
+    `${employee.fullName}'s EOD: completed ${eod.completedCount}/${eod.plannedCount} planned task(s)` +
+    (eod.pointsEarnedToday > 0 ? `, +${eod.pointsEarnedToday} pts today.` : ".");
+
+  await Promise.allSettled(
+    recipients.map((u) => pushNotification(u.id, "eod_report", message, "EOD report")),
+  );
 }

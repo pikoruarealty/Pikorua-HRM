@@ -33,7 +33,7 @@ function todayUtc(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-export function PlanningScreen() {
+export function PlanningScreen({ isAdmin = false }: { isAdmin?: boolean }) {
   const [mine, setMine] = useState<WorkItem[]>([]);
   const [today, setToday] = useState<Selection[]>([]);
   const [attendance, setAttendance] = useState<AttendanceRecord | null>(null);
@@ -65,6 +65,9 @@ export function PlanningScreen() {
   const activeItems = mine.filter((wi) => wi.status !== "completed");
   const clockedIn = !!attendance?.clockInRaw;
   const clockedOut = !!attendance?.clockOutRaw;
+  // Must pick ≥1 task to clock in when there are active tasks to pick from
+  // (mirrors the server rule); someone with nothing assigned can still clock in.
+  const clockInBlocked = activeItems.length > 0 && Object.values(checked).every((v) => !v);
 
   const selectedIds = () =>
     Object.entries(checked)
@@ -123,6 +126,7 @@ export function PlanningScreen() {
       </div>
       {error && <p className="text-sm text-destructive">{error}</p>}
 
+      {!isAdmin && (
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -136,8 +140,9 @@ export function PlanningScreen() {
           {!clockedIn && (
             <>
               <p className="text-sm text-muted-foreground">
-                Pick today&apos;s tasks, then clock in. (You can also clock in with no tasks and add
-                them later.)
+                {activeItems.length > 0
+                  ? "Select at least one task for today, then clock in."
+                  : "You have no active tasks to plan — you can clock in directly."}
               </p>
               <div className="flex flex-col gap-2">
                 {activeItems.length === 0 && (
@@ -154,9 +159,14 @@ export function PlanningScreen() {
                   </label>
                 ))}
               </div>
-              <Button className="w-fit" onClick={clockIn} disabled={busy}>
+              <Button className="w-fit" onClick={clockIn} disabled={busy || clockInBlocked}>
                 Clock in{selectedIds().length ? ` with ${selectedIds().length} task(s)` : ""}
               </Button>
+              {clockInBlocked && (
+                <p className="text-xs text-muted-foreground">
+                  Select at least one task above to clock in.
+                </p>
+              )}
             </>
           )}
 
@@ -199,6 +209,7 @@ export function PlanningScreen() {
           )}
         </CardContent>
       </Card>
+      )}
 
       <Card>
         <CardHeader>
