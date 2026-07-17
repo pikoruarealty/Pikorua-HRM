@@ -371,19 +371,6 @@ function GenerateForm({ onGenerated }: { onGenerated: () => void }) {
                     <BreakdownStat label="Compensation" value={preview.compensationDays} />
                     <BreakdownStat label="Holidays" value={preview.holidayDays} />
                   </dl>
-                  <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                    <Row label="Earned base pay" value={`₹${preview.earnedBasePay.toFixed(2)}`} />
-                    <Row
-                      label="Late deduction"
-                      value={`−₹${preview.lateDeductionTotal.toFixed(2)}`}
-                      sub={`${preview.lateCount} late occurrence(s)`}
-                    />
-                    <Row label="Reimbursement" value={`+₹${preview.reimbursementTotal.toFixed(2)}`} />
-                  </dl>
-                  <div className="border-t pt-3">
-                    <p className="text-xs text-muted-foreground">Net payable</p>
-                    <p className="text-2xl font-bold tabular-nums">₹{preview.netPay.toFixed(2)}</p>
-                  </div>
                   {preview.notes.late_tracking_unavailable && (
                     <p className="text-xs text-muted-foreground">{preview.notes.late_tracking_unavailable}</p>
                   )}
@@ -394,6 +381,16 @@ function GenerateForm({ onGenerated }: { onGenerated: () => void }) {
                 </p>
               )}
             </section>
+          )}
+
+          {preview && (
+            <PayslipComputation
+              preview={preview}
+              incentive={incentive}
+              bonus={bonus}
+              otherAddition={otherAddition}
+              otherDeduction={otherDeduction}
+            />
           )}
 
           <section className="flex flex-col gap-3">
@@ -506,5 +503,142 @@ function Row({ label, value, sub }: { label: string; value: string; sub?: string
       <dd className="font-medium">{value}</dd>
       {sub && <p className="text-xs text-muted-foreground">{sub}</p>}
     </div>
+  );
+}
+
+function rupees(n: number) {
+  return n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+/** Shows exactly where the net payable figure comes from: how each
+ *  attendance category converts to "payable days", how that becomes earned
+ *  base pay, and every addition/deduction on top of it down to net pay.
+ *  Separate from the raw day-count tiles above (per Umang's ask) — this is
+ *  the "show your work" section. */
+function PayslipComputation({
+  preview,
+  incentive,
+  bonus,
+  otherAddition,
+  otherDeduction,
+}: {
+  preview: PayslipPreview;
+  incentive: string;
+  bonus: string;
+  otherAddition: string;
+  otherDeduction: string;
+}) {
+  const incentiveNum = Number(incentive) || 0;
+  const bonusNum = Number(bonus) || 0;
+  const otherAdditionNum = Number(otherAddition) || 0;
+  const otherDeductionNum = Number(otherDeduction) || 0;
+
+  const payableRows = [
+    { label: "Present days", days: preview.presentDays, weight: 1 },
+    { label: "Half-days", days: preview.halfDays, weight: 0.5 },
+    { label: "Paid leave", days: preview.paidLeaveDays, weight: 1 },
+    { label: "Holidays", days: preview.holidayDays, weight: 1 },
+    { label: "Compensation days", days: preview.compensationDays, weight: 1 },
+  ];
+  const totalPayableDays = payableRows.reduce((sum, r) => sum + r.days * r.weight, 0);
+
+  // Earned base pay always shows (it's the anchor figure) even when zero;
+  // every other line is only shown when it actually affects the total, so a
+  // plain payslip with no manual amounts/late/reimbursement isn't cluttered
+  // with a wall of "+₹0.00" rows.
+  const allLedgerRows: { label: string; amount: number; sign: "+" | "−" }[] = [
+    { label: "Earned base pay", amount: preview.earnedBasePay, sign: "+" },
+    { label: "Incentive", amount: incentiveNum, sign: "+" },
+    { label: "Bonus", amount: bonusNum, sign: "+" },
+    { label: "Other addition", amount: otherAdditionNum, sign: "+" },
+    { label: "Late deduction", amount: preview.lateDeductionTotal, sign: "−" },
+    { label: "Other deduction", amount: otherDeductionNum, sign: "−" },
+    { label: "Reimbursement", amount: preview.reimbursementTotal, sign: "+" },
+  ];
+  const ledgerRows = allLedgerRows.filter((r) => r.label === "Earned base pay" || r.amount !== 0);
+
+  return (
+    <section className="flex flex-col gap-4 rounded-lg border p-4">
+      <div>
+        <h3 className="text-sm font-semibold text-muted-foreground">How this is calculated</h3>
+        <p className="text-xs text-muted-foreground">
+          Every present/half-day/paid-leave/holiday/compensation day is paid; absent and unpaid-leave
+          days are simply not paid (no separate deduction for them).
+        </p>
+      </div>
+
+      <div>
+        <p className="mb-2 text-xs font-medium text-muted-foreground">Payable days</p>
+
+        {/* Below sm: a stacked list — a 4-column table gets cramped/needs
+            horizontal scroll on phone widths, so avoid it entirely there. */}
+        <div className="flex flex-col divide-y rounded-md border text-sm sm:hidden">
+          {payableRows.map((r) => (
+            <div key={r.label} className="flex items-center justify-between px-3 py-2">
+              <span className="text-muted-foreground">{r.label}</span>
+              <span className="tabular-nums">
+                {r.days} × {r.weight} = {r.days * r.weight}
+              </span>
+            </div>
+          ))}
+          <div className="flex items-center justify-between bg-muted/50 px-3 py-2">
+            <span className="font-medium">Total payable days</span>
+            <span className="font-medium tabular-nums">{totalPayableDays}</span>
+          </div>
+        </div>
+
+        {/* sm and up: the full table. */}
+        <div className="hidden sm:block">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="h-9 px-3">Category</TableHead>
+                <TableHead className="h-9 px-3 text-right">Days</TableHead>
+                <TableHead className="h-9 px-3 text-right">Weight</TableHead>
+                <TableHead className="h-9 px-3 text-right">Payable</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {payableRows.map((r) => (
+                <TableRow key={r.label}>
+                  <TableCell className="p-3">{r.label}</TableCell>
+                  <TableCell className="p-3 text-right tabular-nums">{r.days}</TableCell>
+                  <TableCell className="p-3 text-right tabular-nums">×{r.weight}</TableCell>
+                  <TableCell className="p-3 text-right tabular-nums">{r.days * r.weight}</TableCell>
+                </TableRow>
+              ))}
+              <TableRow>
+                <TableCell className="p-3 font-medium" colSpan={3}>
+                  Total payable days
+                </TableCell>
+                <TableCell className="p-3 text-right font-medium tabular-nums">{totalPayableDays}</TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">
+          Earned base pay = {totalPayableDays} payable days × ₹{rupees(preview.perDayRate)}/day (base
+          salary ₹{rupees(preview.baseSalary)} ÷ 30) = ₹{rupees(preview.earnedBasePay)}
+        </p>
+      </div>
+
+      <div>
+        <p className="mb-2 text-xs font-medium text-muted-foreground">From earned pay to net payable</p>
+        <div className="flex flex-col divide-y rounded-md border text-sm">
+          {ledgerRows.map((r) => (
+            <div key={r.label} className="flex items-center justify-between px-3 py-2">
+              <span className="text-muted-foreground">{r.label}</span>
+              <span className="tabular-nums">
+                {r.sign}₹{rupees(r.amount)}
+              </span>
+            </div>
+          ))}
+          <div className="flex items-center justify-between bg-muted/50 px-3 py-2.5">
+            <span className="font-semibold">Net payable</span>
+            <span className="text-lg font-bold tabular-nums">₹{rupees(preview.netPay)}</span>
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }
