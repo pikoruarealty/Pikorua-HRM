@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { WorkItemStatus } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
@@ -9,11 +10,11 @@ import { todayDateOnly } from "@/lib/attendance/time";
 // not just "employee"-role individual contributors — Leads/Admin/HR are
 // employees too). Server-timestamped; never trust a client-supplied time.
 //
-// PRD §5.4: at clock-in the employee also selects the WorkItems they intend to
-// work on today. An optional `workItemIds` body captures that in the same
-// action — validated to be assigned to the caller and written into today's
-// DailyTaskSelection (same additive/skipDuplicates semantics as
-// POST /daily-selections, which still exists for adding more later in the day).
+// PRD §5.4: at clock-in the employee selects the WorkItems they intend to work
+// on today, written into today's DailyTaskSelection (same additive/skipDuplicates
+// semantics as POST /daily-selections). Selecting at least one task is REQUIRED
+// when the employee has any active (non-completed) assigned tasks; an employee
+// with nothing assigned can still clock in (they have nothing to pick).
 const bodySchema = z
   .object({ workItemIds: z.array(z.string().uuid()).optional() })
   .optional();
@@ -54,6 +55,19 @@ export async function POST(req: Request) {
       workItems.some((w) => w.assignedTo !== employeeId)
     ) {
       return failFor(ErrorCode.VALIDATION, "All workItemIds must reference WorkItems assigned to you.");
+    }
+  } else {
+    // No tasks picked: require at least one IF the employee has active tasks to
+    // pick from. Someone with nothing assigned can still clock in.
+    const activeCount = await prisma.workItem.count({
+      where: { assignedTo: employeeId, status: { not: WorkItemStatus.completed } },
+    });
+    if (activeCount > 0) {
+      return fail(
+        ErrorCode.VALIDATION,
+        "Select at least one task for today before clocking in.",
+        422,
+      );
     }
   }
 

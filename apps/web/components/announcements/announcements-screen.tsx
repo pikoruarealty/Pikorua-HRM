@@ -37,10 +37,41 @@ export function AnnouncementsScreen({
   const [scopeType, setScopeType] = useState<"all" | "specific_teams">("all");
   const [teamIds, setTeamIds] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [deleting, setDeleting] = useState(false);
 
   async function refresh() {
     const res = await apiFetch<Announcement[]>("/announcements");
     if (res.data) setAnnouncements(res.data);
+  }
+
+  function toggleSelected(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    setSelected((prev) =>
+      prev.size === announcements.length ? new Set() : new Set(announcements.map((a) => a.id)),
+    );
+  }
+
+  async function deleteSelected() {
+    if (selected.size === 0) return;
+    if (!confirm(`Delete ${selected.size} announcement${selected.size === 1 ? "" : "s"}?`)) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      await Promise.all([...selected].map((id) => apiFetch(`/announcements/${id}`, { method: "DELETE" })));
+      setSelected(new Set());
+      refresh();
+    } finally {
+      setDeleting(false);
+    }
   }
 
   useEffect(() => {
@@ -158,28 +189,57 @@ export function AnnouncementsScreen({
       )}
 
       <Card>
-        <CardHeader>
+        <CardHeader className="flex flex-row items-center justify-between gap-3">
           <CardTitle>Announcements</CardTitle>
+          {isAdmin && announcements.length > 0 && (
+            <div className="flex items-center gap-3">
+              {selected.size > 0 && (
+                <Button size="sm" variant="destructive" disabled={deleting} onClick={deleteSelected}>
+                  {deleting ? "Deleting…" : `Delete (${selected.size})`}
+                </Button>
+              )}
+              <label className="flex items-center gap-2 text-xs font-normal text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={selected.size === announcements.length}
+                  onChange={toggleSelectAll}
+                  className="size-3.5"
+                />
+                Select all
+              </label>
+            </div>
+          )}
         </CardHeader>
         <CardContent className="flex flex-col gap-2">
           {announcements.length === 0 && <p className="text-sm text-muted-foreground">None visible.</p>}
           {announcements.map((a) => (
-            <div key={a.id} className="flex flex-col gap-1 rounded border p-3 text-sm">
-              <div className="flex items-center justify-between">
-                <span className="font-medium">{a.title}</span>
-                <span className="flex items-center gap-2">
-                  <Badge variant="outline">{a.scopeType}</Badge>
+            <div key={a.id} className="flex gap-3 rounded border p-3 text-sm">
+              {isAdmin && (
+                <input
+                  type="checkbox"
+                  checked={selected.has(a.id)}
+                  onChange={() => toggleSelected(a.id)}
+                  className="mt-1 size-3.5 shrink-0"
+                  aria-label={`Select announcement: ${a.title}`}
+                />
+              )}
+              <div className="flex min-w-0 flex-1 flex-col gap-1">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-2">
+                    <span className="font-medium">{a.title}</span>
+                    <Badge variant="outline">{a.scopeType}</Badge>
+                  </span>
                   {isAdmin && (
-                    <Button size="sm" variant="ghost" onClick={() => remove(a.id, a.title)}>
+                    <Button size="sm" variant="destructive" onClick={() => remove(a.id, a.title)}>
                       Delete
                     </Button>
                   )}
+                </div>
+                <p className="text-muted-foreground">{a.body}</p>
+                <span className="text-xs text-muted-foreground">
+                  {new Date(a.createdAt).toLocaleString()}
                 </span>
               </div>
-              <p className="text-muted-foreground">{a.body}</p>
-              <span className="text-xs text-muted-foreground">
-                {new Date(a.createdAt).toLocaleString()}
-              </span>
             </div>
           ))}
         </CardContent>

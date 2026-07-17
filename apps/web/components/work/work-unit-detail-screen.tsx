@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -31,11 +31,10 @@ type WorkUnitDetail = {
   status: string;
   description?: string | null;
   departmentId: string;
+  teamLeadId?: string | null;
   subUnits: SubUnit[];
 };
-// `/employees` is already role-scoped server-side (Leads get their own team),
-// so the assignment dropdown needs no client-side team filtering.
-type Employee = { id: string; fullName: string; role: string };
+type Member = { id: string; fullName: string; role: string };
 
 type DraftWorkItem = { title: string; taskPoints?: number; targetValue?: number };
 type DraftSubUnit = { name: string; workItems: DraftWorkItem[] };
@@ -45,127 +44,255 @@ type GenerateResult = {
   subUnits: DraftSubUnit[];
 };
 
-function GenerateTasksPanel({
+/** Two-step AI planning: draft the expected outcome, approve it, generate the
+ *  task tree, assign each task to a team member, then persist. */
+function PlanTasksPanel({
   workUnit,
-  employees,
+  members,
   onPersisted,
 }: {
   workUnit: WorkUnitDetail;
-  employees: Employee[];
+  members: Member[];
   onPersisted: () => void;
 }) {
   const [description, setDescription] = useState(workUnit.description ?? "");
+  const [outcome, setOutcome] = useState<string | null>(null);
   const [draft, setDraft] = useState<GenerateResult | null>(null);
-  const [defaultAssigneeId, setDefaultAssigneeId] = useState("");
-  const [loading, setLoading] = useState<"draft" | "persist" | null>(null);
+  // Per-task assignee, keyed "subUnitIndex-itemIndex".
+  const [assignees, setAssignees] = useState<Record<string, string>>({});
+  const [assignAll, setAssignAll] = useState("");
+  const [loading, setLoading] = useState<"outcome" | "tasks" | "assign" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function handleGenerate(e: React.FormEvent) {
+  const key = (si: number, wi: number) => `${si}-${wi}`;
+
+  async function draftOutcome(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setDraft(null);
-    setLoading("draft");
-    const res = await apiFetch<GenerateResult>(`/work-units/${workUnit.id}/generate-tasks`, {
+    setLoading("outcome");
+    const res = await apiFetch<{ expectedOutcome: string }>(`/work-units/${workUnit.id}/generate-tasks`, {
       method: "POST",
-      body: JSON.stringify({ description: description || undefined }),
+      body: JSON.stringify({ stage: "outcome", description: description || undefined }),
     });
     setLoading(null);
-    if (res.error) {
-      setError(`${res.error.code}: ${res.error.message}`);
-      return;
-    }
-    setDraft(res.data);
+    if (res.error) return setError(`${res.error.code}: ${res.error.message}`);
+    setOutcome(res.data?.expectedOutcome ?? "");
   }
 
-  async function handlePersist() {
-    if (!defaultAssigneeId) {
-      setError("Pick a default assignee before persisting.");
-      return;
-    }
+  async function generateTasks() {
+    if (!outcome?.trim()) return setError("Draft and confirm the expected outcome first.");
     setError(null);
-    setLoading("persist");
-    const res = await apiFetch(`/work-units/${workUnit.id}/generate-tasks`, {
+    setLoading("tasks");
+    const res = await apiFetch<GenerateResult>(`/work-units/${workUnit.id}/generate-tasks`, {
       method: "POST",
-      body: JSON.stringify({ description: description || undefined, persist: true, defaultAssigneeId }),
+      body: JSON.stringify({ stage: "tasks", description: description || undefined, expectedOutcome: outcome }),
     });
     setLoading(null);
-    if (res.error) {
-      setError(`${res.error.code}: ${res.error.message}`);
-      return;
-    }
+    if (res.error) return setError(`${res.error.code}: ${res.error.message}`);
+    setDraft(res.data);
+    setAssignees({});
+    setAssignAll("");
+  }
+
+  function setAssignAllTo(memberId: string) {
+    setAssignAll(memberId);
+    if (!draft) return;
+    const next: Record<string, string> = {};
+    draft.subUnits.forEach((su, si) => su.workItems.forEach((_, wi) => (next[key(si, wi)] = memberId)));
+    setAssignees(next);
+  }
+
+  const allAssigned =
+    draft?.subUnits.every((su, si) => su.workItems.every((_, wi) => assignees[key(si, wi)])) ?? false;
+  const totalItems = draft?.subUnits.reduce((n, su) => n + su.workItems.length, 0) ?? 0;
+
+  async function assign() {
+    if (!draft) return;
+    if (!allAssigned) return setError("Assign every task to a team member before assigning.");
+    setError(null);
+    setLoading("assign");
+    const payload = {
+      persist: true,
+      subUnits: draft.subUnits.map((su, si) => ({
+        name: su.name,
+        workItems: su.workItems.map((wi, wj) => ({
+          title: wi.title,
+          ...(draft.mode === "atomic"
+            ? { taskPoints: wi.taskPoints }
+            : { targetValue: wi.targetValue }),
+          assignedTo: assignees[key(si, wj)],
+        })),
+      })),
+    };
+    const res = await apiFetch(`/work-units/${workUnit.id}/generate-tasks`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    setLoading(null);
+    if (res.error) return setError(`${res.error.code}: ${res.error.message}`);
     setDraft(null);
+    setOutcome(null);
     onPersisted();
   }
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Generate tasks with AI</CardTitle>
+        <CardTitle>Plan tasks with AI</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
-        <form onSubmit={handleGenerate} className="flex flex-col gap-2">
+        <form onSubmit={draftOutcome} className="flex flex-col gap-2">
           <Label>Project description (falls back to the saved description)</Label>
           <Textarea
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            placeholder="Describe the project/campaign so the LLM can break it into sub-units and tasks…"
+            placeholder="Describe the project/campaign so the AI can plan the expected outcome and tasks…"
           />
           <Button type="submit" size="sm" className="w-fit" disabled={loading !== null}>
-            {loading === "draft" ? "Generating…" : "Preview draft"}
+            {loading === "outcome" ? "Drafting…" : outcome !== null ? "Re-draft outcome" : "1. Draft expected outcome"}
           </Button>
         </form>
 
         {error && <p className="text-sm text-destructive">{error}</p>}
 
+        {outcome !== null && (
+          <div className="flex flex-col gap-2 rounded border p-3">
+            <Label>Expected outcome — review &amp; edit, then confirm</Label>
+            <Textarea value={outcome} onChange={(e) => setOutcome(e.target.value)} rows={5} />
+            <Button
+              type="button"
+              size="sm"
+              className="w-fit"
+              onClick={generateTasks}
+              disabled={loading !== null || !outcome.trim()}
+            >
+              {loading === "tasks" ? "Generating…" : "2. Generate tasks from this outcome"}
+            </Button>
+          </div>
+        )}
+
         {draft && (
           <div className="flex flex-col gap-3 rounded border p-3">
-            <p className="text-sm text-muted-foreground">
-              Mode: <Badge variant="outline">{draft.mode}</Badge> — {draft.subUnits.length}{" "}
-              {draft.labels?.subUnit ?? "sub-unit"}(s) proposed. Nothing has been saved yet.
-            </p>
-            {draft.subUnits.map((su, i) => (
-              <div key={i} className="rounded border p-2">
-                <p className="text-sm font-medium">{su.name}</p>
-                <ul className="ml-4 list-disc text-sm text-muted-foreground">
-                  {su.workItems.map((wi, j) => (
-                    <li key={j}>
-                      {wi.title}
-                      {draft.mode === "atomic"
-                        ? ` — ${wi.taskPoints ?? "?"} pts`
-                        : ` · target ${wi.targetValue ?? "?"}`}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
-
-            <div className="flex items-end gap-2">
-              <div className="flex flex-col gap-1.5">
-                <Label>Assign every generated WorkItem to</Label>
-                <Select
-                  value={defaultAssigneeId || undefined}
-                  onValueChange={setDefaultAssigneeId}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select an employee…" />
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm text-muted-foreground">
+                Mode: <Badge variant="outline">{draft.mode}</Badge> — {draft.subUnits.length}{" "}
+                {draft.labels?.subUnit ?? "sub-unit"}(s), {totalItems} task(s). Nothing saved yet.
+              </p>
+              <div className="flex items-center gap-2">
+                <Label className="text-xs">Assign all to</Label>
+                <Select value={assignAll || undefined} onValueChange={setAssignAllTo}>
+                  <SelectTrigger className="h-8 w-48">
+                    <SelectValue placeholder="team member…" />
                   </SelectTrigger>
                   <SelectContent>
-                    {employees.map((emp) => (
-                      <SelectItem key={emp.id} value={emp.id}>
-                        {emp.fullName} ({emp.role})
+                    {members.map((m) => (
+                      <SelectItem key={m.id} value={m.id}>
+                        {m.fullName} ({m.role})
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
-              <Button type="button" size="sm" onClick={handlePersist} disabled={loading !== null}>
-                {loading === "persist" ? "Saving…" : "Persist to DB"}
-              </Button>
             </div>
+
+            {draft.subUnits.map((su, si) => (
+              <div key={si} className="rounded border p-2">
+                <p className="text-sm font-medium">{su.name}</p>
+                <div className="mt-1 flex flex-col gap-1.5">
+                  {su.workItems.map((wi, wj) => (
+                    <div key={wj} className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                      <span className="min-w-0 flex-1">
+                        {wi.title}
+                        <span className="text-muted-foreground">
+                          {draft.mode === "atomic"
+                            ? ` — ${wi.taskPoints ?? "?"} pts`
+                            : ` · target ${wi.targetValue ?? "?"}`}
+                        </span>
+                      </span>
+                      <Select
+                        value={assignees[key(si, wj)] || undefined}
+                        onValueChange={(v) => setAssignees((a) => ({ ...a, [key(si, wj)]: v }))}
+                      >
+                        <SelectTrigger className="h-8 w-48">
+                          <SelectValue placeholder="assign to…" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {members.map((m) => (
+                            <SelectItem key={m.id} value={m.id}>
+                              {m.fullName} ({m.role})
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+
+            <Button
+              type="button"
+              size="sm"
+              className="w-fit"
+              onClick={assign}
+              disabled={loading !== null || !allAssigned}
+            >
+              {loading === "assign" ? "Assigning…" : "3. Assign"}
+            </Button>
           </div>
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function CollapsibleForm({ label, children }: { label: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="flex flex-col gap-2">
+      <Button type="button" variant="outline" size="sm" className="w-fit" onClick={() => setOpen((o) => !o)}>
+        {open ? "− Close" : `+ ${label}`}
+      </Button>
+      {open && children}
+    </div>
+  );
+}
+
+function ReassignControl({
+  workItemId,
+  members,
+  currentId,
+  onReassigned,
+}: {
+  workItemId: string;
+  members: Member[];
+  currentId?: string | null;
+  onReassigned: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  async function reassign(assignedTo: string) {
+    setBusy(true);
+    await apiFetch(`/work-items/${workItemId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ assignedTo }),
+    });
+    setBusy(false);
+    onReassigned();
+  }
+  return (
+    <Select value={currentId || undefined} onValueChange={reassign} disabled={busy}>
+      <SelectTrigger className="h-8 w-44">
+        <SelectValue placeholder="reassign…" />
+      </SelectTrigger>
+      <SelectContent>
+        {members.map((m) => (
+          <SelectItem key={m.id} value={m.id}>
+            {m.fullName}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }
 
@@ -180,10 +307,7 @@ function NewSubUnitForm({ workUnitId, onCreated }: { workUnitId: string; onCreat
       method: "POST",
       body: JSON.stringify({ name }),
     });
-    if (res.error) {
-      setError(`${res.error.code}: ${res.error.message}`);
-      return;
-    }
+    if (res.error) return setError(`${res.error.code}: ${res.error.message}`);
     setName("");
     onCreated();
   }
@@ -204,11 +328,11 @@ function NewSubUnitForm({ workUnitId, onCreated }: { workUnitId: string; onCreat
 
 function NewWorkItemForm({
   subUnitId,
-  employees,
+  members,
   onCreated,
 }: {
   subUnitId: string;
-  employees: Employee[];
+  members: Member[];
   onCreated: () => void;
 }) {
   const [title, setTitle] = useState("");
@@ -234,10 +358,7 @@ function NewWorkItemForm({
       method: "POST",
       body: JSON.stringify(body),
     });
-    if (res.error) {
-      setError(`${res.error.code}: ${res.error.message}`);
-      return;
-    }
+    if (res.error) return setError(`${res.error.code}: ${res.error.message}`);
     setTitle("");
     onCreated();
   }
@@ -252,12 +373,12 @@ function NewWorkItemForm({
         <Label>Assigned employee</Label>
         <Select value={assignedTo || undefined} onValueChange={setAssignedTo}>
           <SelectTrigger>
-            <SelectValue placeholder="Select an employee…" />
+            <SelectValue placeholder="Select a team member…" />
           </SelectTrigger>
           <SelectContent>
-            {employees.map((emp) => (
-              <SelectItem key={emp.id} value={emp.id}>
-                {emp.fullName} ({emp.role})
+            {members.map((m) => (
+              <SelectItem key={m.id} value={m.id}>
+                {m.fullName} ({m.role})
               </SelectItem>
             ))}
           </SelectContent>
@@ -304,22 +425,40 @@ function NewWorkItemForm({
   );
 }
 
-export function WorkUnitDetailScreen({ workUnitId }: { workUnitId: string }) {
+export function WorkUnitDetailScreen({
+  workUnitId,
+  isFinance,
+  isLead,
+  employeeId,
+}: {
+  workUnitId: string;
+  isFinance: boolean;
+  isLead: boolean;
+  employeeId: string | null;
+}) {
   const [workUnit, setWorkUnit] = useState<WorkUnitDetail | null>(null);
-  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [members, setMembers] = useState<Member[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     const res = await apiFetch<WorkUnitDetail>(`/work-units/${workUnitId}`);
     if (res.data) setWorkUnit(res.data);
     if (res.error) setError(`${res.error.code}: ${res.error.message}`);
-  }
+  }, [workUnitId]);
 
   useEffect(() => {
     refresh();
-    apiFetch<Employee[]>("/employees").then((r) => r.data && setEmployees(r.data));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workUnitId]);
+  }, [refresh]);
+
+  const canManage =
+    workUnit != null && (isFinance || (isLead && employeeId != null && employeeId === workUnit.teamLeadId));
+
+  // The assignable-members endpoint is Admin/HR/owning-lead only; fetch once we
+  // know the caller can manage this unit.
+  useEffect(() => {
+    if (!canManage) return;
+    apiFetch<Member[]>(`/work-units/${workUnitId}/assignable-members`).then((r) => r.data && setMembers(r.data));
+  }, [canManage, workUnitId]);
 
   if (error) return <p className="text-sm text-destructive">{error}</p>;
   if (!workUnit) return <p className="text-sm text-muted-foreground">Loading…</p>;
@@ -339,9 +478,7 @@ export function WorkUnitDetailScreen({ workUnitId }: { workUnitId: string }) {
           <Badge variant="outline">{workUnit.status}</Badge>
         </div>
         {workUnit.description && (
-          <p className="mt-2 whitespace-pre-wrap text-sm text-muted-foreground">
-            {workUnit.description}
-          </p>
+          <p className="mt-2 whitespace-pre-wrap text-sm text-muted-foreground">{workUnit.description}</p>
         )}
         {allItems.length > 0 && (
           <div className="mt-3 flex max-w-sm items-center gap-2">
@@ -353,23 +490,27 @@ export function WorkUnitDetailScreen({ workUnitId }: { workUnitId: string }) {
         )}
       </div>
 
-      <GenerateTasksPanel workUnit={workUnit} employees={employees} onPersisted={refresh} />
+      {canManage && <PlanTasksPanel workUnit={workUnit} members={members} onPersisted={refresh} />}
 
       <Card>
         <CardHeader>
           <CardTitle>Sub-units &amp; work items</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-          <NewSubUnitForm workUnitId={workUnit.id} onCreated={refresh} />
+          {canManage && (
+            <CollapsibleForm label="Add sub-unit">
+              <NewSubUnitForm workUnitId={workUnit.id} onCreated={refresh} />
+            </CollapsibleForm>
+          )}
           {(workUnit.subUnits ?? []).map((su) => (
             <div key={su.id} className="flex flex-col gap-3 rounded-lg border p-3">
               <p className="font-medium">{su.name}</p>
               {(su.workItems ?? []).map((wi) => (
                 <div
                   key={wi.id}
-                  className="flex items-center justify-between rounded border p-2 text-sm"
+                  className="flex flex-wrap items-center justify-between gap-2 rounded border p-2 text-sm"
                 >
-                  <span>
+                  <span className="min-w-0 flex-1">
                     {wi.title} <span className="text-muted-foreground">({wi.mode})</span>
                     {wi.mode === "metric" && (
                       <span className="text-muted-foreground">
@@ -384,10 +525,24 @@ export function WorkUnitDetailScreen({ workUnitId }: { workUnitId: string }) {
                       <span className="text-muted-foreground"> · assigned to {wi.assignee.fullName}</span>
                     )}
                   </span>
-                  <Badge variant="outline">{wi.status}</Badge>
+                  <span className="flex items-center gap-2">
+                    <Badge variant="outline">{wi.status}</Badge>
+                    {canManage && (
+                      <ReassignControl
+                        workItemId={wi.id}
+                        members={members}
+                        currentId={wi.assignee?.id}
+                        onReassigned={refresh}
+                      />
+                    )}
+                  </span>
                 </div>
               ))}
-              <NewWorkItemForm subUnitId={su.id} employees={employees} onCreated={refresh} />
+              {canManage && (
+                <CollapsibleForm label="Add task">
+                  <NewWorkItemForm subUnitId={su.id} members={members} onCreated={refresh} />
+                </CollapsibleForm>
+              )}
             </div>
           ))}
         </CardContent>

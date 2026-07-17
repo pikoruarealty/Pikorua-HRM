@@ -170,6 +170,7 @@ application code (`lib/payroll/calc.ts`), not stored here.
 |---|---|---|
 | id | uuid PK | singleton row or versioned by effective date |
 | late_deduction_percent | numeric(5,2) | % of one day's pay deducted per late occurrence, e.g. `20.00` = 20% |
+| late_grace_minutes | int (default 0) | minutes after a team's expected start time within which a clock-in is still on time (not counted late); `0` = exact to the minute. Snapshotted per `effective_from` like the deduction rate. |
 | effective_from | date | supports changing rates over time without breaking historical payslips |
 
 ### `payslips`

@@ -6,33 +6,48 @@ import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { WorkItemMode } from "@prisma/client";
 import {
   generateTaskBreakdown,
+  generateProjectOutcome,
   GroqError,
   MAX_SUB_UNITS,
   MAX_ITEMS_PER_SUB_UNIT,
 } from "@/lib/ai/task-generation";
 
-// Track B. POST /api/v1/work-units/:id/generate-tasks — AI task generation.
+// Track B. POST /api/v1/work-units/:id/generate-tasks — AI task planning.
 //
-// Takes a WorkUnit's brief (body.description, else the stored WorkUnit.description)
-// and asks the LLM to propose a SubUnit + WorkItem breakdown.
-//
-// Default (persist omitted/false): returns the DRAFT only, no DB writes — the
-// Lead reviews and creates via the normal endpoints (or re-calls with persist).
-// persist=true: creates the SubUnits + WorkItems, all assigned to
-// defaultAssigneeId (required in that case), using the same team-membership
-// rule as the manual work-item route. LLM point/target suggestions are used
-// where present, else a sensible default is applied.
+// The plan lifecycle runs in three modes over one endpoint:
+//   { stage: "outcome" }        → LLM proposes a "definition of done" for the
+//                                 whole unit (Step 1, creator reviews/edits).
+//   { stage: "tasks", expectedOutcome? } (default when not persisting)
+//                               → LLM proposes a SubUnit + WorkItem breakdown,
+//                                 grounded by the approved outcome (Step 2).
+//   { persist: true, subUnits } → create the tree with a per-item assignee each
+//                                 (Step 3, "Assign"). No LLM call.
+//   { persist: true, defaultAssigneeId } → backward-compat single-assignee path
+//                                 (used by the /test harness); still supported.
 //
 // RBAC mirrors POST /sub-units/:id/work-items — Admin/HR or the owning Lead.
 
-// Fallbacks when the model omits a per-item estimate.
 const DEFAULT_TASK_POINTS = 3;
 const DEFAULT_TARGET_VALUE = 100;
 
+const persistItemSchema = z.object({
+  title: z.string().min(1).max(300),
+  taskPoints: z.number().positive().optional(),
+  targetValue: z.number().positive().optional(),
+  assignedTo: z.string().uuid(),
+});
+const persistSubUnitSchema = z.object({
+  name: z.string().min(1).max(200),
+  workItems: z.array(persistItemSchema).default([]),
+});
+
 const bodySchema = z.object({
+  stage: z.enum(["outcome", "tasks"]).optional(),
   description: z.string().min(1).max(5000).optional(),
+  expectedOutcome: z.string().min(1).max(5000).optional(),
   persist: z.boolean().optional(),
   defaultAssigneeId: z.string().uuid().optional(),
+  subUnits: z.array(persistSubUnitSchema).optional(),
   maxSubUnits: z.number().int().min(1).max(MAX_SUB_UNITS).optional(),
   maxItemsPerSubUnit: z.number().int().min(1).max(MAX_ITEMS_PER_SUB_UNIT).optional(),
 });
@@ -59,15 +74,165 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   try {
     body = await req.json();
   } catch {
-    // An empty body is fine (defaults to the stored description, draft mode).
     body = {};
   }
   const parsed = bodySchema.safeParse(body ?? {});
   if (!parsed.success) {
     return failFor(ErrorCode.VALIDATION, "Invalid request body.");
   }
-  const { persist, defaultAssigneeId, maxSubUnits, maxItemsPerSubUnit } = parsed.data;
+  const { stage, persist, defaultAssigneeId, subUnits, maxSubUnits, maxItemsPerSubUnit } = parsed.data;
 
+  // Domain labels + default mode for this department type.
+  const label = await prisma.departmentLabel.findUnique({
+    where: { departmentTypeKey: workUnit.department.typeKey },
+  });
+  const mode: WorkItemMode =
+    label?.workItemMode ??
+    (workUnit.department.typeKey === "tech" ? WorkItemMode.atomic : WorkItemMode.metric);
+
+  // For a Lead, the team they lead — assignees must belong to it. Resolved once.
+  const ownTeam =
+    isOwningLead && !isFinanceRole(role)
+      ? await prisma.team.findFirst({ where: { teamLeadId: session.employeeId! } })
+      : null;
+
+  async function validateAssignee(assigneeId: string): Promise<string | null> {
+    const assignee = await prisma.employee.findUnique({
+      where: { id: assigneeId },
+      select: { id: true, teamId: true },
+    });
+    if (!assignee) return "An assignee does not reference an existing employee.";
+    if (isOwningLead && !isFinanceRole(role)) {
+      if (!ownTeam || assignee.teamId !== ownTeam.id) {
+        return "Leads can only assign tasks to their own team's members.";
+      }
+    }
+    return null;
+  }
+
+  // ---- Persist (Step 3): per-item assignees, or backward-compat single ----
+  if (persist) {
+    const now = new Date();
+    const periodMonth = now.getUTCMonth() + 1;
+    const periodYear = now.getUTCFullYear();
+
+    if (subUnits && subUnits.length > 0) {
+      // Validate every distinct assignee up front.
+      const assigneeIds = [...new Set(subUnits.flatMap((su) => su.workItems.map((wi) => wi.assignedTo)))];
+      for (const id of assigneeIds) {
+        const err = await validateAssignee(id);
+        if (err) return failFor(ErrorCode.VALIDATION, err);
+      }
+
+      const created = await prisma.$transaction(async (tx) => {
+        const out = [];
+        for (const su of subUnits) {
+          const subUnit = await tx.subUnit.create({
+            data: { workUnitId: workUnit.id, name: su.name },
+          });
+          const items = [];
+          for (const wi of su.workItems) {
+            const workItem = await tx.workItem.create({
+              data:
+                mode === WorkItemMode.atomic
+                  ? {
+                      subUnitId: subUnit.id,
+                      assignedTo: wi.assignedTo,
+                      title: wi.title,
+                      mode: WorkItemMode.atomic,
+                      taskPoints: wi.taskPoints ? Math.max(1, Math.round(wi.taskPoints)) : DEFAULT_TASK_POINTS,
+                    }
+                  : {
+                      subUnitId: subUnit.id,
+                      assignedTo: wi.assignedTo,
+                      title: wi.title,
+                      mode: WorkItemMode.metric,
+                      targetValue: wi.targetValue ?? DEFAULT_TARGET_VALUE,
+                      currentValue: 0,
+                      periodMonth,
+                      periodYear,
+                    },
+            });
+            items.push(workItem);
+          }
+          out.push({ ...subUnit, workItems: items });
+        }
+        return out;
+      });
+
+      return ok({ workUnitId: workUnit.id, mode, persisted: true, subUnits: created }, 201);
+    }
+
+    // Backward-compat: single default assignee, re-runs the LLM.
+    if (!defaultAssigneeId) {
+      return failFor(
+        ErrorCode.VALIDATION,
+        "Provide subUnits (with a per-item assignedTo) or defaultAssigneeId to persist.",
+      );
+    }
+    const err = await validateAssignee(defaultAssigneeId);
+    if (err) return failFor(ErrorCode.VALIDATION, err);
+
+    const description = (parsed.data.description ?? workUnit.description ?? "").trim();
+    if (!description) {
+      return failFor(ErrorCode.VALIDATION, "No project description available.");
+    }
+    let breakdown;
+    try {
+      breakdown = await generateTaskBreakdown({
+        projectName: workUnit.name,
+        description,
+        mode,
+        workUnitLabel: label?.workUnitLabel ?? "Project",
+        subUnitLabel: label?.subUnitLabel ?? "Sub-unit",
+        workItemLabel: label?.workItemLabel ?? "Task",
+        expectedOutcome: parsed.data.expectedOutcome,
+        maxSubUnits,
+        maxItemsPerSubUnit,
+      });
+    } catch (e) {
+      if (e instanceof GroqError) return fail(ErrorCode.INTERNAL, `Task generation failed: ${e.message}`, 502);
+      throw e;
+    }
+
+    const created = await prisma.$transaction(async (tx) => {
+      const out = [];
+      for (const su of breakdown.subUnits) {
+        const subUnit = await tx.subUnit.create({ data: { workUnitId: workUnit.id, name: su.name } });
+        const items = [];
+        for (const wi of su.workItems) {
+          const workItem = await tx.workItem.create({
+            data:
+              mode === WorkItemMode.atomic
+                ? {
+                    subUnitId: subUnit.id,
+                    assignedTo: defaultAssigneeId,
+                    title: wi.title,
+                    mode: WorkItemMode.atomic,
+                    taskPoints: wi.taskPoints ?? DEFAULT_TASK_POINTS,
+                  }
+                : {
+                    subUnitId: subUnit.id,
+                    assignedTo: defaultAssigneeId,
+                    title: wi.title,
+                    mode: WorkItemMode.metric,
+                    targetValue: wi.targetValue ?? DEFAULT_TARGET_VALUE,
+                    currentValue: 0,
+                    periodMonth,
+                    periodYear,
+                  },
+          });
+          items.push(workItem);
+        }
+        out.push({ ...subUnit, workItems: items });
+      }
+      return out;
+    });
+
+    return ok({ workUnitId: workUnit.id, mode, persisted: true, assignedTo: defaultAssigneeId, subUnits: created }, 201);
+  }
+
+  // ---- Draft modes (no DB writes) ----
   const description = (parsed.data.description ?? workUnit.description ?? "").trim();
   if (!description) {
     return failFor(
@@ -76,40 +241,22 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     );
   }
 
-  // Domain labels + default mode for this department type (Project/Feature/Task
-  // vs Campaign/Segment/Call, and atomic vs metric).
-  const label = await prisma.departmentLabel.findUnique({
-    where: { departmentTypeKey: workUnit.department.typeKey },
-  });
-  const mode: WorkItemMode =
-    label?.workItemMode ??
-    (workUnit.department.typeKey === "tech" ? WorkItemMode.atomic : WorkItemMode.metric);
-
-  // Validate the persist assignee up front so we don't spend an LLM call on a
-  // request that can't complete.
-  let assignee: { id: string; teamId: string | null } | null = null;
-  if (persist) {
-    if (!defaultAssigneeId) {
-      return failFor(
-        ErrorCode.VALIDATION,
-        "defaultAssigneeId is required when persist is true (every WorkItem needs an assignee).",
-      );
-    }
-    assignee = await prisma.employee.findUnique({
-      where: { id: defaultAssigneeId },
-      select: { id: true, teamId: true },
-    });
-    if (!assignee) {
-      return failFor(ErrorCode.VALIDATION, "defaultAssigneeId does not reference an existing employee.");
-    }
-    if (isOwningLead && !isFinanceRole(role)) {
-      const ownTeam = await prisma.team.findFirst({ where: { teamLeadId: session.employeeId } });
-      if (!ownTeam || assignee.teamId !== ownTeam.id) {
-        return failFor(ErrorCode.VALIDATION, "Leads can only assign WorkItems to their own team's members.");
-      }
+  // Step 1: expected-outcome draft.
+  if (stage === "outcome") {
+    try {
+      const { expectedOutcome } = await generateProjectOutcome({
+        projectName: workUnit.name,
+        description,
+        workUnitLabel: label?.workUnitLabel ?? "Project",
+      });
+      return ok({ workUnitId: workUnit.id, expectedOutcome });
+    } catch (e) {
+      if (e instanceof GroqError) return fail(ErrorCode.INTERNAL, `Outcome generation failed: ${e.message}`, 502);
+      throw e;
     }
   }
 
+  // Step 2: task breakdown draft (grounded by the approved outcome if provided).
   let breakdown;
   try {
     breakdown = await generateTaskBreakdown({
@@ -119,83 +266,26 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       workUnitLabel: label?.workUnitLabel ?? "Project",
       subUnitLabel: label?.subUnitLabel ?? "Sub-unit",
       workItemLabel: label?.workItemLabel ?? "Task",
+      expectedOutcome: parsed.data.expectedOutcome,
       maxSubUnits,
       maxItemsPerSubUnit,
     });
   } catch (err) {
     if (err instanceof GroqError) {
-      // Upstream/model failure — surface as 502 (bad gateway) so the client can
-      // distinguish it from its own 4xx validation errors.
       return fail(ErrorCode.INTERNAL, `Task generation failed: ${err.message}`, 502);
     }
     throw err;
   }
 
-  // Draft mode (default): return the proposal without writing anything.
-  if (!persist) {
-    return ok({
-      workUnitId: workUnit.id,
-      mode,
-      persisted: false,
-      labels: {
-        workUnit: label?.workUnitLabel ?? "Project",
-        subUnit: label?.subUnitLabel ?? "Sub-unit",
-        workItem: label?.workItemLabel ?? "Task",
-      },
-      subUnits: breakdown.subUnits,
-    });
-  }
-
-  // Persist mode: create the whole tree in one transaction, assigned to
-  // defaultAssigneeId. Metric items are scoped to the current period.
-  const now = new Date();
-  const periodMonth = now.getUTCMonth() + 1;
-  const periodYear = now.getUTCFullYear();
-
-  const created = await prisma.$transaction(async (tx) => {
-    const out = [];
-    for (const su of breakdown.subUnits) {
-      const subUnit = await tx.subUnit.create({
-        data: { workUnitId: workUnit.id, name: su.name },
-      });
-      const items = [];
-      for (const wi of su.workItems) {
-        const workItem = await tx.workItem.create({
-          data:
-            mode === WorkItemMode.atomic
-              ? {
-                  subUnitId: subUnit.id,
-                  assignedTo: assignee!.id,
-                  title: wi.title,
-                  mode: WorkItemMode.atomic,
-                  taskPoints: wi.taskPoints ?? DEFAULT_TASK_POINTS,
-                }
-              : {
-                  subUnitId: subUnit.id,
-                  assignedTo: assignee!.id,
-                  title: wi.title,
-                  mode: WorkItemMode.metric,
-                  targetValue: wi.targetValue ?? DEFAULT_TARGET_VALUE,
-                  currentValue: 0,
-                  periodMonth,
-                  periodYear,
-                },
-        });
-        items.push(workItem);
-      }
-      out.push({ ...subUnit, workItems: items });
-    }
-    return out;
-  });
-
-  return ok(
-    {
-      workUnitId: workUnit.id,
-      mode,
-      persisted: true,
-      assignedTo: assignee!.id,
-      subUnits: created,
+  return ok({
+    workUnitId: workUnit.id,
+    mode,
+    persisted: false,
+    labels: {
+      workUnit: label?.workUnitLabel ?? "Project",
+      subUnit: label?.subUnitLabel ?? "Sub-unit",
+      workItem: label?.workItemLabel ?? "Task",
     },
-    201,
-  );
+    subUnits: breakdown.subUnits,
+  });
 }

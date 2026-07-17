@@ -90,7 +90,7 @@
 | Method | Path | Roles | Notes |
 |---|---|---|---|
 | GET | `/payroll/config` | Admin/HR | the late-deduction percentage (2026-07-17 — half-day/unpaid-leave/absent are fixed fractions of a day's pay, not configured here) |
-| PUT | `/payroll/config` | Admin | `{ late_deduction_percent, effective_from }` — update the rate (versioned by `effective_from`) |
+| PUT | `/payroll/config` | Admin | `{ late_deduction_percent, late_grace_minutes, effective_from }` — update the rate + late-grace window (versioned by `effective_from`) |
 | GET | `/payslips/:employee_id/employee-of-month-status` | Admin/HR | Quick lookup: was this employee Employee of the Month for their department this period? (from `recognition_snapshots.is_employee_of_month`) — reference only. Superseded for the generate screen's own use by `POST /payslips/preview`, which returns the same flag alongside the full breakdown |
 | POST | `/payslips/preview` | Admin/HR | Added 2026-07-17. `{ employee_id, month, year, incentive_amount?, bonus_amount?, other_addition_amount?, other_deduction_amount? }` — **read-only**, computes the same earned-pay breakdown + net pay as `/payslips/generate` (shared `lib/payroll/payslip-preview.ts`) without persisting anything, so the UI can show a live projection before the user commits |
 | POST | `/payslips/generate` | Admin/HR | `{ employee_id, month, year, incentive_amount, bonus_amount, bonus_reason?, other_addition_amount?, other_addition_reason?, other_deduction_amount?, other_deduction_reason? }` — server computes `earned_base_pay` from **approved** attendance (present/half-day/paid-leave/holiday/compensation days paid; absent/unpaid-leave excluded) + a late-arrival penalty + reimbursements from approved requests, and denormalizes `employee_of_month_ref` |
