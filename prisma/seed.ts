@@ -39,9 +39,10 @@ async function main() {
   if (!existingConfig) {
     await prisma.payrollConfig.create({
       data: {
-        lateDeductionFlat: 200,
-        unpaidLeaveDeductionFlat: 1000,
-        halfDayDeductionFlat: 500,
+        // Safe default — matches the 20260717060000 migration's backfill of
+        // the pre-existing row, so no surprise deduction until an Admin sets
+        // a real rate via PUT /payroll/config.
+        lateDeductionPercent: 0,
         effectiveFrom: new Date("2026-01-01"),
       },
     });
