@@ -3,6 +3,7 @@ import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { getSession, hashPassword } from "@/lib/auth";
+import { EmployeeStatus } from "@prisma/client";
 import { FINANCE_ROLES, Role, isLeadRole } from "@/lib/rbac";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { audit, clientIp } from "@/lib/audit";
@@ -85,6 +86,22 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const departmentIdFilter = searchParams.get("department_id") ?? undefined;
   const teamIdFilter = searchParams.get("team_id") ?? undefined;
+  const statusParam = searchParams.get("status") ?? undefined;
+  const statusFilter =
+    statusParam && (statusParam === EmployeeStatus.active || statusParam === EmployeeStatus.inactive)
+      ? statusParam
+      : undefined;
+  const roleParam = searchParams.get("role") ?? undefined;
+  const roleFilter = roleParam && (Object.values(Role) as string[]).includes(roleParam) ? (roleParam as Role) : undefined;
+  const q = searchParams.get("q")?.trim() || undefined;
+  const searchFilter = q
+    ? {
+        OR: [
+          { fullName: { contains: q, mode: "insensitive" as const } },
+          { email: { contains: q, mode: "insensitive" as const } },
+        ],
+      }
+    : {};
 
   const isFinance = FINANCE_ROLES.includes(session.role);
 
@@ -93,6 +110,9 @@ export async function GET(req: Request) {
       where: {
         ...(departmentIdFilter ? { departmentId: departmentIdFilter } : {}),
         ...(teamIdFilter ? { teamId: teamIdFilter } : {}),
+        ...(statusFilter ? { status: statusFilter } : {}),
+        ...(roleFilter ? { role: roleFilter } : {}),
+        ...searchFilter,
       },
       select: FINANCE_SELECT,
       orderBy: { fullName: "asc" },
@@ -116,6 +136,9 @@ export async function GET(req: Request) {
       where: {
         teamId: viewer.teamId,
         ...(departmentIdFilter ? { departmentId: departmentIdFilter } : {}),
+        ...(statusFilter ? { status: statusFilter } : {}),
+        ...(roleFilter ? { role: roleFilter } : {}),
+        ...searchFilter,
       },
       select: PUBLIC_SELECT,
       orderBy: { fullName: "asc" },

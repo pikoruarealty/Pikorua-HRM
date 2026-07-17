@@ -68,29 +68,65 @@ export function EmployeeListScreen({ canManage }: { canManage: boolean }) {
   const [error, setError] = useState<string | null>(null);
 
   const [search, setSearch] = useState("");
+  // Debounced separately so every keystroke doesn't fire a request — search
+  // is delegated to the backend (GET /employees?q=) rather than filtered
+  // client-side, since the employee list is expected to grow into the
+  // thousands and shouldn't all be shipped to the browser just to filter it.
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>(ALL);
   const [roleFilter, setRoleFilter] = useState<string>(ALL);
   const [departmentFilter, setDepartmentFilter] = useState<string>(ALL);
   const [teamFilter, setTeamFilter] = useState<string>(ALL);
 
   useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  useEffect(() => {
+    apiFetchDepartmentsAndTeams();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function apiFetchDepartmentsAndTeams() {
+    try {
+      const [dept, team] = await Promise.all([
+        getJson(await fetch("/api/v1/departments")).catch(() => []),
+        getJson(await fetch("/api/v1/teams")).catch(() => []),
+      ]);
+      setDepartments(dept);
+      setTeams(team);
+    } catch {
+      // non-fatal — filter dropdowns just stay empty
+    }
+  }
+
+  useEffect(() => {
+    const controller = new AbortController();
     (async () => {
+      setLoading(true);
       try {
-        const [emp, dept, team] = await Promise.all([
-          getJson(await fetch("/api/v1/employees")),
-          getJson(await fetch("/api/v1/departments")).catch(() => []),
-          getJson(await fetch("/api/v1/teams")).catch(() => []),
-        ]);
+        const params = new URLSearchParams();
+        if (debouncedSearch) params.set("q", debouncedSearch);
+        if (statusFilter !== ALL) params.set("status", statusFilter);
+        if (roleFilter !== ALL) params.set("role", roleFilter);
+        if (departmentFilter !== ALL) params.set("department_id", departmentFilter);
+        if (teamFilter !== ALL) params.set("team_id", teamFilter);
+        const qs = params.toString();
+        const emp = await getJson(
+          await fetch(`/api/v1/employees${qs ? `?${qs}` : ""}`, { signal: controller.signal }),
+        );
         setEmployees(emp);
-        setDepartments(dept);
-        setTeams(team);
+        setError(null);
       } catch (e) {
+        if (e instanceof DOMException && e.name === "AbortError") return;
         setError(e instanceof Error ? e.message : "Failed to load employees.");
       } finally {
         setLoading(false);
       }
     })();
-  }, []);
+    return () => controller.abort();
+  }, [debouncedSearch, statusFilter, roleFilter, departmentFilter, teamFilter]);
 
   // Teams selectable in the team filter narrow to the chosen department.
   const teamsForFilter = useMemo(
@@ -101,19 +137,7 @@ export function EmployeeListScreen({ canManage }: { canManage: boolean }) {
     [teams, departmentFilter],
   );
 
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return employees.filter((e) => {
-      if (q && !e.fullName.toLowerCase().includes(q) && !e.email.toLowerCase().includes(q)) {
-        return false;
-      }
-      if (statusFilter !== ALL && e.status !== statusFilter) return false;
-      if (roleFilter !== ALL && e.role !== roleFilter) return false;
-      if (departmentFilter !== ALL && e.departmentId !== departmentFilter) return false;
-      if (teamFilter !== ALL && e.teamId !== teamFilter) return false;
-      return true;
-    });
-  }, [employees, search, statusFilter, roleFilter, departmentFilter, teamFilter]);
+  const filtered = employees;
 
   const anyFilterActive =
     search.trim() !== "" ||
@@ -124,6 +148,7 @@ export function EmployeeListScreen({ canManage }: { canManage: boolean }) {
 
   function resetFilters() {
     setSearch("");
+    setDebouncedSearch("");
     setStatusFilter(ALL);
     setRoleFilter(ALL);
     setDepartmentFilter(ALL);
@@ -225,10 +250,8 @@ export function EmployeeListScreen({ canManage }: { canManage: boolean }) {
         <CardHeader>
           <CardTitle>
             {filtered.length} employee{filtered.length === 1 ? "" : "s"}
-            {anyFilterActive && employees.length !== filtered.length && (
-              <span className="ml-2 text-sm font-normal text-muted-foreground">
-                of {employees.length}
-              </span>
+            {anyFilterActive && (
+              <span className="ml-2 text-sm font-normal text-muted-foreground">matching filters</span>
             )}
           </CardTitle>
         </CardHeader>

@@ -14,6 +14,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { AttendanceOverviewPanel } from "@/components/attendance/attendance-overview-panel";
+import { AttendanceMonthlyPanel } from "@/components/attendance/attendance-monthly-panel";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
@@ -71,6 +72,8 @@ export function AttendanceScreen({
       {employeeId && <ClockWidget employeeId={employeeId} />}
 
       {canReview && <AttendanceOverviewPanel />}
+
+      {canReview && <AttendanceMonthlyPanel />}
 
       {isAdmin && <ManualRecordForm />}
 

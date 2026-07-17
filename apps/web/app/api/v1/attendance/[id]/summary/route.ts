@@ -4,6 +4,7 @@ import { getSession } from "@/lib/auth";
 import { FINANCE_ROLES, isLeadRole } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { getAttendanceSummary } from "@/lib/attendance/summary";
+import { getMonthlyAttendanceBreakdown } from "@/lib/attendance/monthly-breakdown";
 
 // Track A. GET /api/v1/attendance/:employee_id/summary?month=&year=
 // (folder is named [id], not [employee_id], only because Next.js requires
@@ -60,7 +61,10 @@ export async function GET(
     return failFor(ErrorCode.NOT_FOUND, "Employee not found.");
   }
 
-  const summary = await getAttendanceSummary(employeeId, month, year);
+  const [summary, breakdown] = await Promise.all([
+    getAttendanceSummary(employeeId, month, year),
+    getMonthlyAttendanceBreakdown(employeeId, month, year),
+  ]);
 
   return ok({
     employee_id: employeeId,
@@ -70,6 +74,17 @@ export async function GET(
     half_day_count: summary.halfDayCount,
     unpaid_leave_count: summary.unpaidLeaveCount,
     approved_record_count: summary.approvedRecordCount,
+    // Reporting-only breakdown (2026-07-17) — present/absent/paid-leave/
+    // compensation/holiday counts, derived independently of the payroll
+    // deduction fields above (see lib/attendance/monthly-breakdown.ts).
+    present_days: breakdown.presentDays,
+    absent_days: breakdown.absentDays,
+    half_days: breakdown.halfDays,
+    paid_leave_days: breakdown.paidLeaveDays,
+    unpaid_leave_days: breakdown.unpaidLeaveDays,
+    compensation_days: breakdown.compensationDays,
+    holiday_days: breakdown.holidayDays,
+    working_days_elapsed: breakdown.workingDaysElapsed,
     notes: {
       late_tracking_unavailable: summary.lateTrackingUnavailable
         ? "This employee's team has no expected_start_time configured — late count excludes those days."

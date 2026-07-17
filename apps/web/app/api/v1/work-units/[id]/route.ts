@@ -8,7 +8,11 @@ import { WorkUnitStatus } from "@prisma/client";
 // Track B. GET/PATCH /api/v1/work-units/:id — Milestone 1.1.
 
 const nestedInclude = {
-  subUnits: { include: { workItems: true } },
+  subUnits: {
+    include: {
+      workItems: { include: { assignee: { select: { id: true, fullName: true } } } },
+    },
+  },
 } as const;
 
 export async function GET(_req: Request, { params }: { params: { id: string } }) {

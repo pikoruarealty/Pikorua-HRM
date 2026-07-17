@@ -9,9 +9,16 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { Progress } from "@/components/ui/progress";
 import { apiFetch } from "@/components/_lib/api";
 
-type WorkUnit = { id: string; name: string; status: string; departmentId: string };
+type WorkUnit = {
+  id: string;
+  name: string;
+  status: string;
+  departmentId: string;
+  progress?: { completed: number; total: number };
+};
 type Department = { id: string; name: string };
 type Employee = { id: string; fullName: string; role: string };
 
@@ -139,16 +146,31 @@ export function WorkUnitsScreen() {
           {workUnits.length === 0 && (
             <p className="text-sm text-muted-foreground">None visible to your role yet.</p>
           )}
-          {workUnits.map((wu) => (
-            <Link
-              key={wu.id}
-              href={`/work/${wu.id}`}
-              className="flex items-center justify-between rounded border p-3 text-sm hover:bg-muted/50"
-            >
-              <span className="font-medium">{wu.name}</span>
-              <Badge variant="outline">{wu.status}</Badge>
-            </Link>
-          ))}
+          {workUnits.map((wu) => {
+            const total = wu.progress?.total ?? 0;
+            const completed = wu.progress?.completed ?? 0;
+            const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
+            return (
+              <Link
+                key={wu.id}
+                href={`/work/${wu.id}`}
+                className="flex flex-col gap-2 rounded border p-3 text-sm hover:bg-muted/50"
+              >
+                <span className="flex items-center justify-between">
+                  <span className="font-medium">{wu.name}</span>
+                  <Badge variant="outline">{wu.status}</Badge>
+                </span>
+                {wu.progress && (
+                  <span className="flex items-center gap-2">
+                    <Progress value={percent} className="max-w-xs" />
+                    <span className="whitespace-nowrap text-xs text-muted-foreground">
+                      {completed}/{total} done
+                    </span>
+                  </span>
+                )}
+              </Link>
+            );
+          })}
         </CardContent>
       </Card>
     </div>
