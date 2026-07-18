@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import {
   Dialog,
   DialogContent,
@@ -21,6 +22,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { isLeadRole, Role } from "@/lib/rbac";
 
 type Team = {
   id: string;
@@ -34,6 +36,8 @@ type Team = {
 
 type Department = { id: string; name: string; typeKey: string };
 
+type LeadEmployee = { id: string; fullName: string; email: string; role: Role };
+
 async function getJson(res: Response) {
   const json = await res.json();
   if (json.error) throw new Error(json.error.message);
@@ -44,6 +48,7 @@ export function TeamsScreen({ canManage }: { canManage: boolean }) {
   const router = useRouter();
   const [teams, setTeams] = useState<Team[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
+  const [leads, setLeads] = useState<LeadEmployee[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -52,12 +57,14 @@ export function TeamsScreen({ canManage }: { canManage: boolean }) {
   async function load() {
     setLoading(true);
     try {
-      const [teamsData, deptData] = await Promise.all([
+      const [teamsData, deptData, employeeData] = await Promise.all([
         getJson(await fetch("/api/v1/teams")),
         canManage ? getJson(await fetch("/api/v1/departments")) : Promise.resolve([]),
+        canManage ? getJson(await fetch("/api/v1/employees?status=active")) : Promise.resolve([]),
       ]);
       setTeams(teamsData);
       setDepartments(deptData);
+      setLeads((employeeData as LeadEmployee[]).filter((e) => isLeadRole(e.role)));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load teams.");
     } finally {
@@ -100,7 +107,7 @@ export function TeamsScreen({ canManage }: { canManage: boolean }) {
 
       {error && <p className="text-sm text-destructive">{error}</p>}
 
-      {canManage && <CreateTeamForm departments={departments} onCreated={load} />}
+      {canManage && <CreateTeamForm departments={departments} leads={leads} onCreated={load} />}
 
       <Card>
         <CardHeader>
@@ -178,6 +185,7 @@ export function TeamsScreen({ canManage }: { canManage: boolean }) {
                 </DialogHeader>
                 <EditTeamForm
                   team={teams.find((t) => t.id === editingId)!}
+                  leads={leads}
                   onSaved={() => {
                     setEditingId(null);
                     load();
@@ -194,9 +202,11 @@ export function TeamsScreen({ canManage }: { canManage: boolean }) {
 
 function CreateTeamForm({
   departments,
+  leads,
   onCreated,
 }: {
   departments: Department[];
+  leads: LeadEmployee[];
   onCreated: () => void;
 }) {
   const [name, setName] = useState("");
@@ -262,13 +272,15 @@ function CreateTeamForm({
             </Select>
           </div>
           <div className="flex flex-col gap-2">
-            <Label htmlFor="team_lead_id">Team lead employee ID</Label>
-            <Input
-              id="team_lead_id"
-              placeholder="employee UUID with a lead role"
-              value={teamLeadId}
-              onChange={(e) => setTeamLeadId(e.target.value)}
-              required
+            <Label htmlFor="team_lead_id">Team lead</Label>
+            <SearchableSelect
+              value={teamLeadId || undefined}
+              onChange={setTeamLeadId}
+              placeholder="Select a lead"
+              searchPlaceholder="Search name or email…"
+              emptyText="No lead-role employees found."
+              className="w-56"
+              items={leads.map((l) => ({ value: l.id, label: l.fullName, sublabel: l.email }))}
             />
           </div>
           <div className="flex flex-col gap-2">
@@ -290,7 +302,15 @@ function CreateTeamForm({
   );
 }
 
-function EditTeamForm({ team, onSaved }: { team: Team; onSaved: () => void }) {
+function EditTeamForm({
+  team,
+  leads,
+  onSaved,
+}: {
+  team: Team;
+  leads: LeadEmployee[];
+  onSaved: () => void;
+}) {
   const [name, setName] = useState(team.name);
   const [teamLeadId, setTeamLeadId] = useState(team.teamLeadId ?? "");
   const [expectedStartTime, setExpectedStartTime] = useState(team.expectedStartTime ?? "");
@@ -328,8 +348,19 @@ function EditTeamForm({ team, onSaved }: { team: Team; onSaved: () => void }) {
         <Input id="edit_name" value={name} onChange={(e) => setName(e.target.value)} required />
       </div>
       <div className="flex flex-col gap-2">
-        <Label htmlFor="edit_lead">Team lead employee ID</Label>
-        <Input id="edit_lead" value={teamLeadId} onChange={(e) => setTeamLeadId(e.target.value)} />
+        <Label htmlFor="edit_lead">Team lead</Label>
+        <SearchableSelect
+          value={teamLeadId || undefined}
+          onChange={setTeamLeadId}
+          placeholder="Select a lead"
+          searchPlaceholder="Search name or email…"
+          emptyText="No lead-role employees found."
+          items={
+            team.teamLead && !leads.some((l) => l.id === team.teamLead!.id)
+              ? [{ value: team.teamLead.id, label: team.teamLead.fullName }, ...leads.map((l) => ({ value: l.id, label: l.fullName, sublabel: l.email }))]
+              : leads.map((l) => ({ value: l.id, label: l.fullName, sublabel: l.email }))
+          }
+        />
       </div>
       <div className="flex flex-col gap-2">
         <Label htmlFor="edit_expected_start_time">Expected start (HH:MM)</Label>
