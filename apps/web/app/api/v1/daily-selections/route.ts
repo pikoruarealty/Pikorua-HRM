@@ -41,7 +41,7 @@ export async function POST(req: Request) {
   const { workItemIds } = parsed.data;
 
   const uniqueIds = [...new Set(workItemIds)];
-  const workItems = await prisma.workItem.findMany({ where: { id: { in: uniqueIds } } });
+  const workItems = await prisma.workItem.findMany({ where: { id: { in: uniqueIds }, deletedAt: null } });
   if (workItems.length !== uniqueIds.length || workItems.some((w) => w.assignedTo !== session.employeeId)) {
     return failFor(ErrorCode.VALIDATION, "All workItemIds must reference WorkItems assigned to you.");
   }
