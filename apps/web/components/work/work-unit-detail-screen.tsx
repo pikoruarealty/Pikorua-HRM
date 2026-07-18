@@ -425,6 +425,38 @@ function NewWorkItemForm({
   );
 }
 
+/** Assign a fixed set of work items to one member in a single batch (used by the
+ *  bulk-select bar and the per-feature "assign all"). Reuses the validated
+ *  PATCH /work-items/:id route per item. */
+function AssignAllControl({
+  members,
+  busy,
+  onAssign,
+  label,
+  widthClass = "w-52",
+}: {
+  members: Member[];
+  busy: boolean;
+  onAssign: (memberId: string) => void;
+  label: string;
+  widthClass?: string;
+}) {
+  return (
+    <Select value={undefined} onValueChange={onAssign} disabled={busy}>
+      <SelectTrigger className={`h-8 ${widthClass}`}>
+        <SelectValue placeholder={busy ? "Assigning…" : label} />
+      </SelectTrigger>
+      <SelectContent>
+        {members.map((m) => (
+          <SelectItem key={m.id} value={m.id}>
+            {m.fullName} ({m.role})
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
 export function WorkUnitDetailScreen({
   workUnitId,
   isFinance,
@@ -439,6 +471,9 @@ export function WorkUnitDetailScreen({
   const [workUnit, setWorkUnit] = useState<WorkUnitDetail | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // Bulk-assign selection: a set of WorkItem ids checked across the whole unit.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   const refresh = useCallback(async () => {
     const res = await apiFetch<WorkUnitDetail>(`/work-units/${workUnitId}`);
@@ -449,6 +484,38 @@ export function WorkUnitDetailScreen({
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  function toggleSelect(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  // Assign every id in `ids` to `memberId`, then refresh once. Errors surface
+  // in the shared error line; partial success is fine (each PATCH is independent).
+  const assignMany = useCallback(
+    async (ids: string[], memberId: string) => {
+      if (ids.length === 0 || !memberId) return;
+      setBulkBusy(true);
+      setError(null);
+      const results = await Promise.all(
+        ids.map((id) =>
+          apiFetch(`/work-items/${id}`, { method: "PATCH", body: JSON.stringify({ assignedTo: memberId }) }),
+        ),
+      );
+      const failed = results.filter((r) => r.error);
+      if (failed.length > 0) {
+        setError(`${failed.length} of ${ids.length} could not be assigned: ${failed[0].error?.message}`);
+      }
+      setBulkBusy(false);
+      setSelected(new Set());
+      refresh();
+    },
+    [refresh],
+  );
 
   const canManage =
     workUnit != null && (isFinance || (isLead && employeeId != null && employeeId === workUnit.teamLeadId));
@@ -492,6 +559,22 @@ export function WorkUnitDetailScreen({
 
       {canManage && <PlanTasksPanel workUnit={workUnit} members={members} onPersisted={refresh} />}
 
+      {/* Bulk-assign bar — appears once one or more tasks are ticked. */}
+      {canManage && selected.size > 0 && (
+        <div className="sticky top-16 z-10 flex flex-wrap items-center gap-3 rounded-lg border bg-background/95 p-3 shadow-sm backdrop-blur">
+          <span className="text-sm font-medium">{selected.size} selected</span>
+          <AssignAllControl
+            members={members}
+            busy={bulkBusy}
+            onAssign={(memberId) => assignMany([...selected], memberId)}
+            label="Assign selected to…"
+          />
+          <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())} disabled={bulkBusy}>
+            Clear
+          </Button>
+        </div>
+      )}
+
       <Card>
         <CardHeader>
           <CardTitle>Sub-units &amp; work items</CardTitle>
@@ -502,28 +585,69 @@ export function WorkUnitDetailScreen({
               <NewSubUnitForm workUnitId={workUnit.id} onCreated={refresh} />
             </CollapsibleForm>
           )}
-          {(workUnit.subUnits ?? []).map((su) => (
+          {(workUnit.subUnits ?? []).map((su) => {
+            const suItemIds = (su.workItems ?? []).map((wi) => wi.id);
+            const allSuSelected = suItemIds.length > 0 && suItemIds.every((id) => selected.has(id));
+            return (
             <div key={su.id} className="flex flex-col gap-3 rounded-lg border p-3">
-              <p className="font-medium">{su.name}</p>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  {canManage && suItemIds.length > 0 && (
+                    <input
+                      type="checkbox"
+                      aria-label={`Select all tasks in ${su.name}`}
+                      checked={allSuSelected}
+                      onChange={() =>
+                        setSelected((prev) => {
+                          const next = new Set(prev);
+                          if (allSuSelected) suItemIds.forEach((id) => next.delete(id));
+                          else suItemIds.forEach((id) => next.add(id));
+                          return next;
+                        })
+                      }
+                    />
+                  )}
+                  <p className="font-medium">{su.name}</p>
+                </div>
+                {canManage && suItemIds.length > 0 && (
+                  <AssignAllControl
+                    members={members}
+                    busy={bulkBusy}
+                    onAssign={(memberId) => assignMany(suItemIds, memberId)}
+                    label="Assign whole feature to…"
+                    widthClass="w-56"
+                  />
+                )}
+              </div>
               {(su.workItems ?? []).map((wi) => (
                 <div
                   key={wi.id}
                   className="flex flex-wrap items-center justify-between gap-2 rounded border p-2 text-sm"
                 >
-                  <span className="min-w-0 flex-1">
-                    {wi.title} <span className="text-muted-foreground">({wi.mode})</span>
-                    {wi.mode === "metric" && (
-                      <span className="text-muted-foreground">
-                        {" "}
-                        · {wi.currentValue}/{wi.targetValue} for {wi.periodMonth}/{wi.periodYear}
-                      </span>
+                  <span className="flex min-w-0 flex-1 items-center gap-2">
+                    {canManage && (
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${wi.title}`}
+                        checked={selected.has(wi.id)}
+                        onChange={() => toggleSelect(wi.id)}
+                      />
                     )}
-                    {wi.mode === "atomic" && (
-                      <span className="text-muted-foreground"> · {wi.taskPoints} pts</span>
-                    )}
-                    {wi.assignee && (
-                      <span className="text-muted-foreground"> · assigned to {wi.assignee.fullName}</span>
-                    )}
+                    <span className="min-w-0 flex-1">
+                      {wi.title} <span className="text-muted-foreground">({wi.mode})</span>
+                      {wi.mode === "metric" && (
+                        <span className="text-muted-foreground">
+                          {" "}
+                          · {wi.currentValue}/{wi.targetValue} for {wi.periodMonth}/{wi.periodYear}
+                        </span>
+                      )}
+                      {wi.mode === "atomic" && (
+                        <span className="text-muted-foreground"> · {wi.taskPoints} pts</span>
+                      )}
+                      {wi.assignee && (
+                        <span className="text-muted-foreground"> · assigned to {wi.assignee.fullName}</span>
+                      )}
+                    </span>
                   </span>
                   <span className="flex items-center gap-2">
                     <Badge variant="outline">{wi.status}</Badge>
@@ -544,7 +668,8 @@ export function WorkUnitDetailScreen({
                 </CollapsibleForm>
               )}
             </div>
-          ))}
+            );
+          })}
         </CardContent>
       </Card>
     </div>

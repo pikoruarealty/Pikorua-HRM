@@ -5,10 +5,15 @@ import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { EmployeeStatus } from "@prisma/client";
 
 // Track B. GET /api/v1/work-units/:id/assignable-members — the set of employees
-// a task in this work unit may be assigned to: the active members of the team
-// led by this unit's teamLead, plus the lead. Single source of truth for the
-// "team members only" rule (matches the findFirst-team check the work-item
-// POST/PATCH routes already use for Lead assignment validation).
+// a task in this work unit may be reassigned to. This mirrors what each caller
+// is actually *allowed* to assign to in the work-item POST/PATCH routes, so the
+// dropdown never shows an option the server would then reject:
+//   - Admin/HR: every active employee (finance roles have no team restriction).
+//   - Owning Lead: active members of ALL teams they lead (a lead can lead more
+//     than one team), plus themselves.
+// Previously this scoped to a single `findFirst` team, so a multi-team lead —
+// or an Admin reassigning across teams — only ever saw one team's members (the
+// "I can only see the same employee" bug).
 //
 // RBAC: Admin/HR, or the owning Lead. 404 (not 403) otherwise so the unit's
 // existence isn't revealed outside the caller's scope.
@@ -27,13 +32,24 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     return failFor(ErrorCode.NOT_FOUND);
   }
 
-  const team = await prisma.team.findFirst({ where: { teamLeadId: workUnit.teamLeadId } });
+  // Admin/HR can assign to anyone active; a Lead is scoped to the teams they
+  // lead (any number of them) plus themselves.
+  let where;
+  if (isFinanceRole(role)) {
+    where = { status: EmployeeStatus.active };
+  } else {
+    const teams = await prisma.team.findMany({
+      where: { teamLeadId: workUnit.teamLeadId },
+      select: { id: true },
+    });
+    where = {
+      status: EmployeeStatus.active,
+      OR: [{ teamId: { in: teams.map((t) => t.id) } }, { id: workUnit.teamLeadId }],
+    };
+  }
 
   const members = await prisma.employee.findMany({
-    where: {
-      status: EmployeeStatus.active,
-      OR: [...(team ? [{ teamId: team.id }] : []), { id: workUnit.teamLeadId }],
-    },
+    where,
     select: { id: true, fullName: true, role: true },
     orderBy: { fullName: "asc" },
   });

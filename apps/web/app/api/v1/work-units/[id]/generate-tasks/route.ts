@@ -90,10 +90,18 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     label?.workItemMode ??
     (workUnit.department.typeKey === "tech" ? WorkItemMode.atomic : WorkItemMode.metric);
 
-  // For a Lead, the team they lead — assignees must belong to it. Resolved once.
-  const ownTeam =
+  // For a Lead, the teams they lead — assignees must belong to one of them (or
+  // be the Lead themselves). A Lead can lead more than one team. Resolved once.
+  const ownTeamIds =
     isOwningLead && !isFinanceRole(role)
-      ? await prisma.team.findFirst({ where: { teamLeadId: session.employeeId! } })
+      ? new Set(
+          (
+            await prisma.team.findMany({
+              where: { teamLeadId: session.employeeId! },
+              select: { id: true },
+            })
+          ).map((t) => t.id),
+        )
       : null;
 
   async function validateAssignee(assigneeId: string): Promise<string | null> {
@@ -102,8 +110,9 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       select: { id: true, teamId: true },
     });
     if (!assignee) return "An assignee does not reference an existing employee.";
-    if (isOwningLead && !isFinanceRole(role)) {
-      if (!ownTeam || assignee.teamId !== ownTeam.id) {
+    if (ownTeamIds) {
+      const inOwnTeam = assignee.teamId != null && ownTeamIds.has(assignee.teamId);
+      if (!inOwnTeam && assignee.id !== session!.employeeId) {
         return "Leads can only assign tasks to their own team's members.";
       }
     }

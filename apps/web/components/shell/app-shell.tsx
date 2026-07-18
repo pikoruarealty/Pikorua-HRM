@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Menu, X, Sun, Moon, LogOut, Hexagon, ChevronsUpDown, ShieldCheck } from "lucide-react";
+import { Menu, X, Sun, Moon, LogOut, Hexagon, ChevronsUpDown, ShieldCheck, UserRound } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { visibleGroups, type NavCtx } from "@/components/shell/nav-config";
@@ -111,6 +111,7 @@ function SidebarInner({
   unread,
   email,
   role,
+  employeeId,
   onNavigate,
   onLogout,
 }: {
@@ -118,6 +119,7 @@ function SidebarInner({
   unread: number;
   email: string;
   role: string;
+  employeeId: string | null;
   onNavigate?: () => void;
   onLogout: () => void;
 }) {
@@ -165,6 +167,18 @@ function SidebarInner({
       <div ref={menuRef} className="relative shrink-0 border-t border-sidebar-border p-3">
         {menuOpen && (
           <div className="animate-in fade-in slide-in-from-bottom-2 absolute inset-x-3 bottom-[calc(100%+0.5rem)] z-10 overflow-hidden rounded-xl border border-white/10 bg-sidebar-accent p-1.5 shadow-2xl shadow-black/50 ring-1 ring-white/10 duration-150">
+            {employeeId && (
+              <Link
+                href={`/employees/${employeeId}`}
+                onClick={() => setMenuOpen(false)}
+                className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2.5 text-sm font-medium text-slate-200 transition-colors hover:bg-white/10 hover:text-white"
+              >
+                <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-white/10">
+                  <UserRound className="size-4" />
+                </span>
+                My Profile
+              </Link>
+            )}
             <Link
               href="/settings"
               onClick={() => setMenuOpen(false)}
@@ -213,11 +227,13 @@ export function AppShell({
   ctx,
   email,
   role,
+  employeeId,
   children,
 }: {
   ctx: NavCtx;
   email: string;
   role: string;
+  employeeId: string | null;
   children: React.ReactNode;
 }) {
   const router = useRouter();
@@ -253,7 +269,7 @@ export function AppShell({
     <div className="min-h-[100dvh]">
       {/* Desktop sidebar */}
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 overflow-hidden border-r border-sidebar-border md:block">
-        <SidebarInner ctx={ctx} unread={unread} email={email} role={role} onLogout={logout} />
+        <SidebarInner ctx={ctx} unread={unread} email={email} role={role} employeeId={employeeId} onLogout={logout} />
       </aside>
 
       {/* Mobile drawer */}
@@ -276,6 +292,7 @@ export function AppShell({
               unread={unread}
               email={email}
               role={role}
+              employeeId={employeeId}
               onNavigate={() => setOpen(false)}
               onLogout={logout}
             />

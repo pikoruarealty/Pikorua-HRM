@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db/prisma";
-import { EmployeeStatus, type Notification } from "@prisma/client";
+import { EmployeeStatus, Role, type Notification } from "@prisma/client";
 import { sendPushToUser } from "@/lib/notifications/fcm";
 
 // Track B, Milestone 3.2. Generic notification push service — any module
@@ -72,5 +72,33 @@ export async function notifyAllActiveUsers(
     await Promise.allSettled(recipients.map((u) => pushNotification(u.id, type, message, title)));
   } catch (err) {
     console.error(`[notifications] failed to notify all active users (type=${type}):`, err);
+  }
+}
+
+/**
+ * Notify the approver pool (all Admin + HR users) — used when a request is
+ * filed so it doesn't sit unseen until someone happens to open /requests.
+ * `excludeUserId` skips the submitter (an HR person filing their own request
+ * shouldn't be pinged to review it — it goes up to Admin anyway). Never throws;
+ * a notify failure must not fail the request creation itself.
+ */
+export async function notifyFinanceUsers(
+  type: string,
+  message: string,
+  title?: string,
+  excludeUserId?: string,
+): Promise<void> {
+  try {
+    const recipients = await prisma.user.findMany({
+      where: {
+        role: { in: [Role.admin, Role.hr] },
+        employee: { status: EmployeeStatus.active },
+        ...(excludeUserId ? { id: { not: excludeUserId } } : {}),
+      },
+      select: { id: true },
+    });
+    await Promise.allSettled(recipients.map((u) => pushNotification(u.id, type, message, title)));
+  } catch (err) {
+    console.error(`[notifications] failed to notify finance users (type=${type}):`, err);
   }
 }
