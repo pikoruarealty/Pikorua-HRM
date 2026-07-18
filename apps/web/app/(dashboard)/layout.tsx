@@ -31,6 +31,7 @@ export default async function DashboardLayout({
     <AppShell
       email={user?.email ?? "account"}
       role={session.role}
+      employeeId={session.employeeId ?? null}
       ctx={{
         isFinance: FINANCE_ROLES.includes(session.role),
         isLead: isLeadRole(session.role),

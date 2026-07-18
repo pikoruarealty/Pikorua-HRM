@@ -53,8 +53,15 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     return failFor(ErrorCode.VALIDATION, "assignedTo does not reference an existing employee.");
   }
   if (isOwningLead && !isFinanceRole(role)) {
-    const ownTeam = await prisma.team.findFirst({ where: { teamLeadId: session.employeeId } });
-    if (!ownTeam || assignee.teamId !== ownTeam.id) {
+    // A Lead may lead more than one team — the assignee must belong to any of
+    // them, or be the Lead themselves (matches assignable-members' scope).
+    const ownTeams = await prisma.team.findMany({
+      where: { teamLeadId: session.employeeId },
+      select: { id: true },
+    });
+    const ownTeamIds = new Set(ownTeams.map((t) => t.id));
+    const inOwnTeam = assignee.teamId != null && ownTeamIds.has(assignee.teamId);
+    if (!inOwnTeam && assignee.id !== session.employeeId) {
       return failFor(ErrorCode.VALIDATION, "Leads can only assign WorkItems to their own team's members.");
     }
   }

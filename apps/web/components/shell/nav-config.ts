@@ -36,14 +36,22 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "Work",
     items: [
       { href: "/work", label: "Work Units", icon: FolderKanban, show: (c) => c.isFinance || c.isLead },
-      { href: "/my-tasks", label: "My Tasks", icon: ListChecks, show: (c) => c.hasEmployee },
-      { href: "/planning", label: "Daily Planning", icon: CalendarClock, show: (c) => c.hasEmployee },
+      // My Tasks / Daily Planning are for people who get assigned work items and
+      // clock in against them. Admin oversees rather than does, and its clock is
+      // deliberately hidden — so these are hidden for Admin entirely rather than
+      // shown-then-empty. HR still clocks in, so it keeps them.
+      { href: "/my-tasks", label: "My Tasks", icon: ListChecks, show: (c) => c.hasEmployee && !c.isAdmin },
+      { href: "/planning", label: "Daily Planning", icon: CalendarClock, show: (c) => c.hasEmployee && !c.isAdmin },
     ],
   },
   {
     label: "People",
     items: [
-      { href: "/employees", label: "Employees", icon: Users },
+      // The Employees directory is a management view (Admin/HR see everyone,
+      // a Lead sees their team). A plain employee only ever sees themselves in
+      // it, which is pointless — their own details live behind "My Profile" in
+      // the account menu instead. So hide the tab for non-managers.
+      { href: "/employees", label: "Employees", icon: Users, show: (c) => c.isFinance || c.isLead },
       { href: "/teams", label: "Teams", icon: UsersRound },
       { href: "/departments", label: "Departments", icon: Building2, show: (c) => c.isFinance },
       { href: "/attendance", label: "Attendance", icon: Clock },

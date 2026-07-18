@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -51,9 +52,17 @@ function humanizeRole(role: string) {
   return role.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+class ApiError extends Error {
+  code: string;
+  constructor(code: string, message: string) {
+    super(message);
+    this.code = code;
+  }
+}
+
 async function getJson(res: Response) {
   const json = await res.json();
-  if (json.error) throw new Error(json.error.message);
+  if (json.error) throw new ApiError(json.error.code, json.error.message);
   return json.data;
 }
 
@@ -74,6 +83,7 @@ export function EmployeeDetail({
   const [departments, setDepartments] = useState<Department[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<{ code: string; message: string } | null>(null);
   const [loading, setLoading] = useState(true);
 
   const [departmentId, setDepartmentId] = useState("");
@@ -86,6 +96,7 @@ export function EmployeeDetail({
 
   async function load() {
     setLoading(true);
+    setLoadError(null);
     try {
       // Departments/teams are fetched for every viewer so the profile can
       // show names instead of ids (both endpoints are role-safe: departments
@@ -104,7 +115,10 @@ export function EmployeeDetail({
       setDeviceUid(emp.deviceUid?.toString() ?? "");
       setRole(emp.role);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load employee.");
+      setLoadError({
+        code: e instanceof ApiError ? e.code : "INTERNAL",
+        message: e instanceof Error ? e.message : "Failed to load employee.",
+      });
     } finally {
       setLoading(false);
     }
@@ -173,7 +187,22 @@ export function EmployeeDetail({
   }
 
   if (loading) return <p className="text-sm text-muted-foreground">Loading…</p>;
-  if (error && !employee) return <p className="text-sm text-destructive">{error}</p>;
+  if (loadError && !employee) {
+    return (
+      <div className="flex min-h-[60vh] flex-col items-center justify-center gap-3 text-center">
+        <span className="flex size-14 items-center justify-center rounded-full bg-destructive/10 text-destructive">
+          <ShieldAlert className="size-7" />
+        </span>
+        <h1 className="text-lg font-semibold">
+          {loadError.code === "FORBIDDEN" ? "You don't have access to this profile" : "Something went wrong"}
+        </h1>
+        <p className="max-w-sm text-sm text-muted-foreground">{loadError.message}</p>
+        <Link href="/" className="mt-1 text-sm font-medium text-primary hover:underline">
+          Back to dashboard
+        </Link>
+      </div>
+    );
+  }
   if (!employee) return null;
 
   const teamsInDepartment = teams.filter((t) => t.departmentId === departmentId);

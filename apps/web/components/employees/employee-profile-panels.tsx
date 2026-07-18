@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -121,6 +122,7 @@ type PayslipRow = {
 };
 
 export function EmployeePayslipsPanel({ employeeId }: { employeeId: string }) {
+  const router = useRouter();
   const [payslips, setPayslips] = useState<PayslipRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -158,7 +160,11 @@ export function EmployeePayslipsPanel({ employeeId }: { employeeId: string }) {
             </TableHeader>
             <TableBody>
               {payslips.map((p) => (
-                <TableRow key={p.id}>
+                <TableRow
+                  key={p.id}
+                  onClick={() => router.push(`/payslips/${p.id}`)}
+                  className="cursor-pointer hover:bg-muted/50"
+                >
                   <TableCell>
                     {p.periodMonth}/{p.periodYear}
                   </TableCell>

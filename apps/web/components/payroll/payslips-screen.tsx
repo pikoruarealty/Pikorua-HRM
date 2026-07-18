@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -68,6 +69,7 @@ export function PayslipsScreen({
   canGenerate: boolean;
   isAdmin: boolean;
 }) {
+  const router = useRouter();
   const [payslips, setPayslips] = useState<Payslip[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -155,7 +157,11 @@ export function PayslipsScreen({
               </TableHeader>
               <TableBody>
                 {payslips.map((p) => (
-                  <TableRow key={p.id}>
+                  <TableRow
+                    key={p.id}
+                    onClick={() => router.push(`/payslips/${p.id}`)}
+                    className="cursor-pointer hover:bg-muted/50"
+                  >
                     {canGenerate && <TableCell>{p.employee.fullName}</TableCell>}
                     <TableCell>
                       {MONTH_NAMES[p.periodMonth - 1]} {p.periodYear}
@@ -168,20 +174,30 @@ export function PayslipsScreen({
                     </TableCell>
                     <TableCell>{p.employeeOfMonthRef ? "🏆" : "—"}</TableCell>
                     <TableCell>
+                      {/* Admin actions live inside a clickable row — stop the
+                          click from also navigating to the detail page. */}
                       <span className="flex items-center gap-2">
-                        <Link
-                          href={`/payslips/${p.id}`}
-                          className="text-sm font-medium text-primary hover:underline"
-                        >
-                          View
-                        </Link>
                         {isAdmin && p.status === "finalized" && (
-                          <Button size="sm" variant="ghost" onClick={() => unfinalize(p.id)}>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              unfinalize(p.id);
+                            }}
+                          >
                             Unfinalize
                           </Button>
                         )}
                         {isAdmin && p.status === "draft" && (
-                          <Button size="sm" variant="ghost" onClick={() => deleteDraft(p.id)}>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              deleteDraft(p.id);
+                            }}
+                          >
                             Delete
                           </Button>
                         )}
