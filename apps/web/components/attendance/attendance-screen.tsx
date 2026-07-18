@@ -65,11 +65,13 @@ export function AttendanceScreen({
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Attendance</h1>
         <p className="text-sm text-muted-foreground">
-          Manual clock-in/out, {canReview ? "review, and approval" : "and history"}.
+          {canReview ? "Review and approval." : "Your attendance history."} Clock in/out from{" "}
+          <a href="/planning" className="underline">
+            Daily Planning
+          </a>
+          .
         </p>
       </div>
-
-      {employeeId && <ClockWidget employeeId={employeeId} />}
 
       {canReview && <AttendanceOverviewPanel />}
 
@@ -79,91 +81,6 @@ export function AttendanceScreen({
 
       <AttendanceTable canReview={canReview} canSeeAll={canSeeAll} employeeId={employeeId} />
     </div>
-  );
-}
-
-function ClockWidget({ employeeId }: { employeeId: string }) {
-  const [today, setToday] = useState<AttendanceRecord | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function load() {
-    setLoading(true);
-    try {
-      const iso = new Date().toISOString().slice(0, 10);
-      const records: AttendanceRecord[] = await getJson(
-        await fetch(`/api/v1/attendance?employee_id=${employeeId}&date_from=${iso}&date_to=${iso}`),
-      );
-      setToday(records[0] ?? null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load today's record.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  async function clockIn() {
-    setBusy(true);
-    setError(null);
-    try {
-      await getJson(await fetch("/api/v1/attendance/clock-in", { method: "POST" }));
-      load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to clock in.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function clockOut() {
-    setBusy(true);
-    setError(null);
-    try {
-      await getJson(await fetch("/api/v1/attendance/clock-out", { method: "POST" }));
-      load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to clock out.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Today</CardTitle>
-      </CardHeader>
-      <CardContent className="flex flex-wrap items-center gap-4">
-        {loading ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
-        ) : (
-          <>
-            <div className="text-sm text-muted-foreground">
-              Clock-in: <span className="text-foreground">{fmt(today?.clockInRaw ?? null)}</span>
-              {"  ·  "}
-              Clock-out: <span className="text-foreground">{fmt(today?.clockOutRaw ?? null)}</span>
-            </div>
-            <Button onClick={clockIn} disabled={busy || !!today?.clockInRaw}>
-              Clock In
-            </Button>
-            <Button
-              variant="outline"
-              onClick={clockOut}
-              disabled={busy || !today?.clockInRaw || !!today?.clockOutRaw}
-            >
-              Clock Out
-            </Button>
-          </>
-        )}
-        {error && <p className="w-full text-sm text-destructive">{error}</p>}
-      </CardContent>
-    </Card>
   );
 }
 
