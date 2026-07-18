@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { apiFetch } from "@/components/_lib/api";
 import { cn } from "@/lib/utils";
 
@@ -423,13 +424,16 @@ function ClockCard() {
           </Badge>
         </CardTitle>
       </CardHeader>
-      <CardContent className="text-sm">
+      <CardContent className="flex flex-col gap-3 text-sm">
         {rec === undefined ? (
           <p className="text-muted-foreground">Loading…</p>
         ) : !clockedIn ? (
-          <p className="text-muted-foreground">
-            You haven&apos;t clocked in today. Head to Daily Planning to clock in.
-          </p>
+          <>
+            <p className="text-muted-foreground">You haven&apos;t clocked in today.</p>
+            <Link href="/planning" className="w-fit">
+              <Button>Clock In</Button>
+            </Link>
+          </>
         ) : (
           <div className="flex flex-col gap-3">
             <p className="text-muted-foreground">
@@ -449,6 +453,11 @@ function ClockCard() {
                 </div>
               </div>
             </div>
+            {!clockedOut && (
+              <Link href="/planning" className="w-fit">
+                <Button variant="outline">Clock Out</Button>
+              </Link>
+            )}
           </div>
         )}
       </CardContent>
