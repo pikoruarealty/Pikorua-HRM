@@ -346,7 +346,7 @@ export function HomeScreen({
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {QUICK_LINKS.filter((l) => (hasEmployee || l.href === "/recognition") && !(isAdmin && l.href === "/my-tasks")).map((l) => (
             <Link key={l.href} href={l.href}>
-              <Card className="h-full transition-colors hover:border-primary/50">
+              <Card className="h-full hover:-translate-y-0.5 hover:border-primary/50 hover:shadow-md active:translate-y-0">
                 <CardHeader>
                   <CardTitle className="text-base">{l.label}</CardTitle>
                 </CardHeader>
@@ -481,7 +481,7 @@ function StatTile({
 }) {
   return (
     <Link href={href}>
-      <Card className="h-full transition-colors hover:border-primary/50">
+      <Card className="h-full hover:-translate-y-0.5 hover:border-primary/50 hover:shadow-md active:translate-y-0">
         <CardContent className="flex flex-col gap-1 py-4">
           <span className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
             {icon}
