@@ -75,6 +75,7 @@ export async function computeAndReplace(
           mode: "metric",
           periodMonth: targetMonth,
           periodYear: targetYear,
+          deletedAt: null,
         },
         select: { assignedTo: true, targetValue: true, currentValue: true },
       });

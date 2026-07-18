@@ -100,7 +100,10 @@ export async function GET(req: Request) {
   // itself isn't returned here, only the counts, to keep the list payload
   // light (the full tree is fetched by the detail screen instead).
   const progressInclude = {
-    subUnits: { include: { workItems: { select: { status: true } } } },
+    subUnits: {
+      where: { deletedAt: null },
+      include: { workItems: { where: { deletedAt: null }, select: { status: true } } },
+    },
   } as const;
 
   function withProgress<T extends { subUnits: { workItems: { status: string }[] }[] }>(
@@ -116,7 +119,7 @@ export async function GET(req: Request) {
 
   if (isFinanceRole(role)) {
     const workUnits = await prisma.workUnit.findMany({
-      where: departmentIdFilter ? { departmentId: departmentIdFilter } : undefined,
+      where: { deletedAt: null, ...(departmentIdFilter ? { departmentId: departmentIdFilter } : {}) },
       include: progressInclude,
       orderBy: { createdAt: "desc" },
     });
@@ -134,7 +137,7 @@ export async function GET(req: Request) {
   if (isLeadRole(role)) {
     // Leads are scoped to their own department regardless of a filter override.
     const workUnits = await prisma.workUnit.findMany({
-      where: { departmentId: self.departmentId },
+      where: { departmentId: self.departmentId, deletedAt: null },
       include: progressInclude,
       orderBy: { createdAt: "desc" },
     });
@@ -144,7 +147,7 @@ export async function GET(req: Request) {
   // Employee: own-department, status-only view (assigned WorkItems will
   // extend this scope once WorkItem CRUD lands in 1.2).
   const workUnits = await prisma.workUnit.findMany({
-    where: { departmentId: self.departmentId },
+    where: { departmentId: self.departmentId, deletedAt: null },
     select: { id: true, name: true, status: true, departmentId: true },
     orderBy: { createdAt: "desc" },
   });

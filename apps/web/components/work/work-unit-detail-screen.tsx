@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -20,8 +21,10 @@ type WorkItem = {
   taskPoints?: number | null;
   targetValue?: string | null;
   currentValue?: string | null;
+  frequency?: "daily" | "monthly" | null;
   periodMonth?: number | null;
   periodYear?: number | null;
+  periodDay?: number | null;
   assignee?: { id: string; fullName: string } | null;
 };
 type SubUnit = { id: string; name: string; workItems: WorkItem[] };
@@ -296,6 +299,191 @@ function ReassignControl({
   );
 }
 
+function EditWorkItemControl({ wi, onSaved }: { wi: WorkItem; onSaved: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [title, setTitle] = useState(wi.title);
+  const [taskPoints, setTaskPoints] = useState(String(wi.taskPoints ?? ""));
+  const [targetValue, setTargetValue] = useState(wi.targetValue ?? "");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function save() {
+    setError(null);
+    setBusy(true);
+    const body: Record<string, unknown> = { title };
+    if (wi.mode === "atomic") body.taskPoints = Number(taskPoints);
+    else body.targetValue = Number(targetValue);
+    const res = await apiFetch(`/work-items/${wi.id}`, { method: "PATCH", body: JSON.stringify(body) });
+    setBusy(false);
+    if (res.error) return setError(`${res.error.code}: ${res.error.message}`);
+    setOpen(false);
+    onSaved();
+  }
+
+  if (!open) {
+    return (
+      <Button size="sm" variant="ghost" onClick={() => setOpen(true)}>
+        Edit
+      </Button>
+    );
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded border p-2">
+      <Input className="h-8 w-40" value={title} onChange={(e) => setTitle(e.target.value)} />
+      {wi.mode === "atomic" ? (
+        <Input
+          className="h-8 w-24"
+          type="number"
+          value={taskPoints}
+          onChange={(e) => setTaskPoints(e.target.value)}
+          placeholder="points"
+        />
+      ) : (
+        <Input
+          className="h-8 w-24"
+          type="number"
+          value={targetValue ?? ""}
+          onChange={(e) => setTargetValue(e.target.value)}
+          placeholder="target"
+        />
+      )}
+      <Button size="sm" onClick={save} disabled={busy}>
+        Save
+      </Button>
+      <Button size="sm" variant="ghost" onClick={() => setOpen(false)} disabled={busy}>
+        Cancel
+      </Button>
+      {error && <p className="w-full text-sm text-destructive">{error}</p>}
+    </div>
+  );
+}
+
+function DeleteWorkItemButton({ workItemId, title, onDeleted }: { workItemId: string; title: string; onDeleted: () => void }) {
+  const [busy, setBusy] = useState(false);
+  async function remove() {
+    if (!confirm(`Delete the task "${title}"? This cannot be undone.`)) return;
+    setBusy(true);
+    await apiFetch(`/work-items/${workItemId}`, { method: "DELETE" });
+    setBusy(false);
+    onDeleted();
+  }
+  return (
+    <Button size="sm" variant="ghost" className="text-destructive" onClick={remove} disabled={busy}>
+      Delete
+    </Button>
+  );
+}
+
+function SubUnitControls({
+  subUnit,
+  onChanged,
+}: {
+  subUnit: SubUnit;
+  onChanged: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(subUnit.name);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function rename() {
+    setError(null);
+    setBusy(true);
+    const res = await apiFetch(`/sub-units/${subUnit.id}`, { method: "PATCH", body: JSON.stringify({ name }) });
+    setBusy(false);
+    if (res.error) return setError(`${res.error.code}: ${res.error.message}`);
+    setEditing(false);
+    onChanged();
+  }
+
+  async function remove() {
+    if (!confirm(`Delete "${subUnit.name}" and all its tasks? This cannot be undone.`)) return;
+    setBusy(true);
+    await apiFetch(`/sub-units/${subUnit.id}`, { method: "DELETE" });
+    setBusy(false);
+    onChanged();
+  }
+
+  if (editing) {
+    return (
+      <div className="flex items-center gap-2">
+        <Input className="h-8 w-48" value={name} onChange={(e) => setName(e.target.value)} />
+        <Button size="sm" onClick={rename} disabled={busy}>
+          Save
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => setEditing(false)} disabled={busy}>
+          Cancel
+        </Button>
+        {error && <p className="text-sm text-destructive">{error}</p>}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <p className="font-medium">{subUnit.name}</p>
+      <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>
+        Rename
+      </Button>
+      <Button size="sm" variant="ghost" className="text-destructive" onClick={remove} disabled={busy}>
+        Delete
+      </Button>
+    </div>
+  );
+}
+
+function EditWorkUnitForm({ workUnit, onSaved }: { workUnit: WorkUnitDetail; onSaved: () => void }) {
+  const [name, setName] = useState(workUnit.name);
+  const [description, setDescription] = useState(workUnit.description ?? "");
+  const [status, setStatus] = useState(workUnit.status);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setBusy(true);
+    const res = await apiFetch(`/work-units/${workUnit.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name, description: description || null, status }),
+    });
+    setBusy(false);
+    if (res.error) return setError(`${res.error.code}: ${res.error.message}`);
+    onSaved();
+  }
+
+  return (
+    <form onSubmit={submit} className="flex flex-col gap-2 rounded border p-3">
+      <div className="flex flex-col gap-1.5">
+        <Label>Name</Label>
+        <Input value={name} onChange={(e) => setName(e.target.value)} required />
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <Label>Description</Label>
+        <Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} />
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <Label>Status</Label>
+        <Select value={status} onValueChange={setStatus}>
+          <SelectTrigger className="w-48">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="active">Active</SelectItem>
+            <SelectItem value="completed">Completed</SelectItem>
+            <SelectItem value="archived">Archived</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      {error && <p className="text-sm text-destructive">{error}</p>}
+      <Button type="submit" size="sm" className="w-fit" disabled={busy}>
+        Save changes
+      </Button>
+    </form>
+  );
+}
+
 function NewSubUnitForm({ workUnitId, onCreated }: { workUnitId: string; onCreated: () => void }) {
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -340,6 +528,7 @@ function NewWorkItemForm({
   const [mode, setMode] = useState<"atomic" | "metric">("atomic");
   const [taskPoints, setTaskPoints] = useState("");
   const [targetValue, setTargetValue] = useState("");
+  const [frequency, setFrequency] = useState<"daily" | "monthly">("monthly");
   const [periodMonth, setPeriodMonth] = useState(String(new Date().getMonth() + 1));
   const [periodYear, setPeriodYear] = useState(String(new Date().getFullYear()));
   const [error, setError] = useState<string | null>(null);
@@ -351,8 +540,11 @@ function NewWorkItemForm({
     if (mode === "atomic") body.taskPoints = Number(taskPoints);
     else {
       body.targetValue = Number(targetValue);
-      body.periodMonth = Number(periodMonth);
-      body.periodYear = Number(periodYear);
+      body.frequency = frequency;
+      if (frequency === "monthly") {
+        body.periodMonth = Number(periodMonth);
+        body.periodYear = Number(periodYear);
+      }
     }
     const res = await apiFetch(`/sub-units/${subUnitId}/work-items`, {
       method: "POST",
@@ -408,13 +600,33 @@ function NewWorkItemForm({
             <Input type="number" value={targetValue} onChange={(e) => setTargetValue(e.target.value)} required />
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label>Period month</Label>
-            <Input type="number" value={periodMonth} onChange={(e) => setPeriodMonth(e.target.value)} required />
+            <Label>Frequency</Label>
+            <Select value={frequency} onValueChange={(v) => setFrequency(v as "daily" | "monthly")}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="monthly">Monthly</SelectItem>
+                <SelectItem value="daily">Daily</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
-          <div className="flex flex-col gap-1.5">
-            <Label>Period year</Label>
-            <Input type="number" value={periodYear} onChange={(e) => setPeriodYear(e.target.value)} required />
-          </div>
+          {frequency === "monthly" ? (
+            <>
+              <div className="flex flex-col gap-1.5">
+                <Label>Period month</Label>
+                <Input type="number" value={periodMonth} onChange={(e) => setPeriodMonth(e.target.value)} required />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label>Period year</Label>
+                <Input type="number" value={periodYear} onChange={(e) => setPeriodYear(e.target.value)} required />
+              </div>
+            </>
+          ) : (
+            <p className="text-sm text-muted-foreground sm:col-span-2">
+              A daily target starts today and rolls forward automatically every day.
+            </p>
+          )}
         </>
       )}
       {error && <p className="text-sm text-destructive sm:col-span-2">{error}</p>}
@@ -468,9 +680,12 @@ export function WorkUnitDetailScreen({
   isLead: boolean;
   employeeId: string | null;
 }) {
+  const router = useRouter();
   const [workUnit, setWorkUnit] = useState<WorkUnitDetail | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [editingUnit, setEditingUnit] = useState(false);
+  const [unitDeleteBusy, setUnitDeleteBusy] = useState(false);
   // Bulk-assign selection: a set of WorkItem ids checked across the whole unit.
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
@@ -517,6 +732,16 @@ export function WorkUnitDetailScreen({
     [refresh],
   );
 
+  async function deleteWorkUnit() {
+    if (!workUnit) return;
+    if (!confirm(`Delete "${workUnit.name}" and everything under it? This cannot be undone.`)) return;
+    setUnitDeleteBusy(true);
+    const res = await apiFetch(`/work-units/${workUnit.id}`, { method: "DELETE" });
+    setUnitDeleteBusy(false);
+    if (res.error) return setError(`${res.error.code}: ${res.error.message}`);
+    router.push("/work");
+  }
+
   const canManage =
     workUnit != null && (isFinance || (isLead && employeeId != null && employeeId === workUnit.teamLeadId));
 
@@ -540,11 +765,27 @@ export function WorkUnitDetailScreen({
         <Link href="/work" className="text-sm text-muted-foreground hover:underline">
           ← Work units
         </Link>
-        <div className="mt-1 flex items-center gap-3">
+        <div className="mt-1 flex flex-wrap items-center gap-3">
           <h1 className="text-2xl font-bold tracking-tight">{workUnit.name}</h1>
           <Badge variant="outline">{workUnit.status}</Badge>
+          {canManage && !editingUnit && (
+            <div className="flex items-center gap-1">
+              <Button size="sm" variant="ghost" onClick={() => setEditingUnit(true)}>
+                Edit
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="text-destructive"
+                onClick={deleteWorkUnit}
+                disabled={unitDeleteBusy}
+              >
+                Delete
+              </Button>
+            </div>
+          )}
         </div>
-        {workUnit.description && (
+        {!editingUnit && workUnit.description && (
           <p className="mt-2 whitespace-pre-wrap text-sm text-muted-foreground">{workUnit.description}</p>
         )}
         {allItems.length > 0 && (
@@ -553,6 +794,17 @@ export function WorkUnitDetailScreen({
             <span className="whitespace-nowrap text-xs text-muted-foreground">
               {completedCount}/{allItems.length} done
             </span>
+          </div>
+        )}
+        {canManage && editingUnit && (
+          <div className="mt-3">
+            <EditWorkUnitForm
+              workUnit={workUnit}
+              onSaved={() => {
+                setEditingUnit(false);
+                refresh();
+              }}
+            />
           </div>
         )}
       </div>
@@ -607,7 +859,11 @@ export function WorkUnitDetailScreen({
                       }
                     />
                   )}
-                  <p className="font-medium">{su.name}</p>
+                  {canManage ? (
+                    <SubUnitControls subUnit={su} onChanged={refresh} />
+                  ) : (
+                    <p className="font-medium">{su.name}</p>
+                  )}
                 </div>
                 {canManage && suItemIds.length > 0 && (
                   <AssignAllControl
@@ -638,7 +894,10 @@ export function WorkUnitDetailScreen({
                       {wi.mode === "metric" && (
                         <span className="text-muted-foreground">
                           {" "}
-                          · {wi.currentValue}/{wi.targetValue} for {wi.periodMonth}/{wi.periodYear}
+                          · {wi.currentValue}/{wi.targetValue}{" "}
+                          {wi.frequency === "daily"
+                            ? `today (${wi.periodDay}/${wi.periodMonth}/${wi.periodYear}, daily)`
+                            : `for ${wi.periodMonth}/${wi.periodYear} (monthly)`}
                         </span>
                       )}
                       {wi.mode === "atomic" && (
@@ -649,15 +908,19 @@ export function WorkUnitDetailScreen({
                       )}
                     </span>
                   </span>
-                  <span className="flex items-center gap-2">
+                  <span className="flex flex-wrap items-center gap-2">
                     <Badge variant="outline">{wi.status}</Badge>
                     {canManage && (
-                      <ReassignControl
-                        workItemId={wi.id}
-                        members={members}
-                        currentId={wi.assignee?.id}
-                        onReassigned={refresh}
-                      />
+                      <>
+                        <ReassignControl
+                          workItemId={wi.id}
+                          members={members}
+                          currentId={wi.assignee?.id}
+                          onReassigned={refresh}
+                        />
+                        <EditWorkItemControl wi={wi} onSaved={refresh} />
+                        <DeleteWorkItemButton workItemId={wi.id} title={wi.title} onDeleted={refresh} />
+                      </>
                     )}
                   </span>
                 </div>

@@ -16,7 +16,7 @@ export async function GET() {
   if (!session.employeeId) return ok([]);
 
   const workItems = await prisma.workItem.findMany({
-    where: { assignedTo: session.employeeId },
+    where: { assignedTo: session.employeeId, deletedAt: null },
     orderBy: { createdAt: "desc" },
   });
 

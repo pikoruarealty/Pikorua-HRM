@@ -1,11 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { apiFetch } from "@/components/_lib/api";
+import { useAttendanceStatus } from "@/components/_lib/use-attendance-status";
 
 type WorkItem = {
   id: string;
@@ -61,12 +63,14 @@ function WorkItemRow({
   onUpdateProgress,
   draft,
   onDraftChange,
+  disabled,
 }: {
   wi: WorkItem;
   onComplete: (id: string) => void;
   onUpdateProgress: (id: string) => void;
   draft: string;
   onDraftChange: (v: string) => void;
+  disabled: boolean;
 }) {
   return (
     <div className="rounded border p-3 text-sm">
@@ -82,7 +86,7 @@ function WorkItemRow({
           <Badge variant="outline">{wi.status}</Badge>
           {wi.status !== "completed" &&
             (wi.mode === "atomic" ? (
-              <Button size="sm" onClick={() => onComplete(wi.id)}>
+              <Button size="sm" onClick={() => onComplete(wi.id)} disabled={disabled}>
                 Complete
               </Button>
             ) : (
@@ -92,8 +96,9 @@ function WorkItemRow({
                   placeholder="new value"
                   value={draft}
                   onChange={(e) => onDraftChange(e.target.value)}
+                  disabled={disabled}
                 />
-                <Button size="sm" onClick={() => onUpdateProgress(wi.id)}>
+                <Button size="sm" onClick={() => onUpdateProgress(wi.id)} disabled={disabled}>
                   Update
                 </Button>
               </>
@@ -109,6 +114,8 @@ export function MyTasksScreen() {
   const [items, setItems] = useState<WorkItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const { clockedIn, clockedOut, loading: attendanceLoading } = useAttendanceStatus();
+  const canModify = clockedIn && !clockedOut;
 
   async function refresh() {
     const res = await apiFetch<WorkItem[]>("/work-items/mine");
@@ -149,6 +156,15 @@ export function MyTasksScreen() {
         </p>
       </div>
       {error && <p className="text-sm text-destructive">{error}</p>}
+      {!attendanceLoading && !canModify && (
+        <p className="rounded border bg-muted/30 p-3 text-sm text-muted-foreground">
+          {clockedOut ? "You've clocked out for today — " : "You're not clocked in — "}
+          <Link href="/planning" className="underline">
+            clock in from Daily Planning
+          </Link>{" "}
+          to update your tasks.
+        </p>
+      )}
 
       <Card>
         <CardHeader>
@@ -164,6 +180,7 @@ export function MyTasksScreen() {
               onUpdateProgress={updateProgress}
               draft={drafts[wi.id] ?? ""}
               onDraftChange={(v) => setDrafts((d) => ({ ...d, [wi.id]: v }))}
+              disabled={!canModify || attendanceLoading}
             />
           ))}
         </CardContent>

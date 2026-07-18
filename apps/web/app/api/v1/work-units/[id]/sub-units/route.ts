@@ -15,7 +15,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
 
   const workUnit = await prisma.workUnit.findUnique({ where: { id: params.id } });
-  if (!workUnit) return failFor(ErrorCode.NOT_FOUND);
+  if (!workUnit || workUnit.deletedAt) return failFor(ErrorCode.NOT_FOUND);
 
   const role = session.role;
   const isOwningLead = isLeadRole(role) && session.employeeId === workUnit.teamLeadId;
