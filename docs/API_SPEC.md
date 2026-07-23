@@ -56,6 +56,7 @@
 | PATCH | `/attendance/:id/approve` | Admin/HR | Sets `approval_status = approved`, `approved_by`, `approved_at`. If not separately edited first, approved times default to the raw values. |
 | GET | `/attendance/overview` | Admin/HR | Added 2026-07-15. One-day glance: `?date=YYYY-MM-DD` (default today) → `{ date, holiday, counts: { total, present, halfDay, onLeave, absent, late, pendingApproval }, rows: [per-employee status] }`. A holiday date suppresses "absent". |
 | POST | `/attendance/manual` | **Admin only** | Added 2026-07-15 (manual override). `{ employee_id, date, clock_in, clock_out?, reason }` — creates/overwrites the record's **approved** times, written pre-approved with the admin as approver; raw clock values never touched. Audited (`attendance.manual_create` / `attendance.manual_override`). |
+| GET | `/attendance/task-progress` | Admin/HR (all), Lead (every team they lead + self) | Added 2026-07-23. Live "what is everyone doing right now" view: `?date=YYYY-MM-DD` (default today) → `{ date, rows: [{ employeeId, fullName, photoUrl, clockIn, clockOut, plannedCount, completedCount, pointsEarnedToday, items: [EodItem] }] }`, one call for the whole scoped team instead of querying `/attendance/eod` per employee. |
 
 ---
 
@@ -82,6 +83,7 @@
 | GET | `/daily-selections/today` | Employee, Lead (own team) | |
 | POST | `/work-items/:id/complete` | Employee (if assigned) | Marks atomic task completed → triggers point ledger credit (server-side, not client-computed) |
 | GET | `/employees/:id/points` | Admin/HR, Lead (own team), Employee (self) | returns point ledger + running balance |
+| GET | `/employees/:id/task-activity` | Admin/HR, Lead (own team), Employee (self) | Added 2026-07-23. `?period=daily\|weekly\|monthly\|total` (default `daily`), optional `?date=YYYY-MM-DD` anchor. Returns `{ summary: { period, from, to, tasksTouched, tasksCompletedInPeriod, pointsEarnedInPeriod, daysActiveInPeriod }, tasks: [{ workItemId, title, projectName, subUnitName, mode, status, taskPoints, assignedAt, completedAt, daysSelectedInPeriod, pointsEarnedInPeriod }] }` — every task the employee planned or completed in the period, enriched with which Project/SubUnit it belongs to. Distinct from `/employees/:id/work-items/history`, which is metric-mode growth tracking only. |
 
 ---
 

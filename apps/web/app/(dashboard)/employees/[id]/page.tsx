@@ -1,5 +1,6 @@
 import { getSession } from "@/lib/auth";
-import { FINANCE_ROLES, Role } from "@/lib/rbac";
+import { prisma } from "@/lib/db/prisma";
+import { FINANCE_ROLES, Role, isLeadRole } from "@/lib/rbac";
 import { EmployeeDetail } from "@/components/employees/employee-detail";
 
 export default async function EmployeeDetailPage({
@@ -10,13 +11,21 @@ export default async function EmployeeDetailPage({
   const session = await getSession();
   const canManage = FINANCE_ROLES.includes(session!.role);
   const isAdmin = session!.role === Role.admin;
-  // Attendance panel: same viewers the underlying GET /attendance* endpoints
-  // already allow for "self" (Admin/HR covered by canManage; Lead-of-team
-  // isn't special-cased here since no other part of this page differentiates
-  // Leads yet either — the API will 403 and the panel shows that error if a
-  // Lead without access somehow lands here).
   const isSelf = session!.employeeId === params.id;
-  const canViewAttendance = canManage || isSelf;
+
+  // Attendance panel: same viewers the underlying GET /attendance* endpoints
+  // already allow — Admin/HR via canManage, the employee themself via isSelf,
+  // and (matching employees/:id/task-activity's own RBAC) the Lead who owns
+  // this employee's team.
+  let isOwningLead = false;
+  if (!canManage && !isSelf && isLeadRole(session!.role) && session!.employeeId) {
+    const employee = await prisma.employee.findUnique({
+      where: { id: params.id },
+      select: { team: { select: { teamLeadId: true } } },
+    });
+    isOwningLead = employee?.team?.teamLeadId === session!.employeeId;
+  }
+  const canViewAttendance = canManage || isSelf || isOwningLead;
 
   return (
     <EmployeeDetail

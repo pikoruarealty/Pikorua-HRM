@@ -134,12 +134,13 @@ Kept here for context continuity; do not build in v1:
   2. Through the day, the employee marks progress on selected tasks (for Atomic tasks: move between Pending → WIP → Completed; for Metric tasks: update the running count).
   3. At **EOD**, tasks marked Completed have their task-point value added to the employee's running point balance for that period.
 - Task points are assigned **by the Team Lead**, per task, per feature/SubUnit — not automatically generated.
+- **Lead/Admin visibility (2026-07-23):** `GET /attendance/task-progress` gives Team Leads (every team they lead + self) and Admin/HR (whole company) a live, all-employees-at-once view of who has clocked in, what they selected today, and real-time completion progress — no need to query one employee's EOD at a time. `GET /employees/:id/task-activity` gives the same audiences (plus the employee themself) a per-employee task history broken down by period (daily/weekly/monthly/total), with each task's project, sub-unit, assignment date, and completion date.
 
 ### 5.5 Department → Teams
 
 - Department contains one or more Teams (Team 1 ... Team-n).
 - Each Team has exactly one Team Lead and one or more Team Members.
-- Team Lead can view their team's attendance, task progress, and project status (not salary/incentive/reimbursement data).
+- Team Lead can view their team's attendance, task progress, and project status (not salary/incentive/reimbursement data) — see §5.4 for the live task-progress and per-period task-activity surfaces this is implemented through.
 
 ### 5.6 Project → People/Tasks → Tracking
 
