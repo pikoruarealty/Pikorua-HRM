@@ -65,22 +65,25 @@ function NavContent({
                 href={item.href}
                 onClick={onNavigate}
                 className={cn(
-                  "group flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                  "group flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-150",
                   active
                     ? "bg-sidebar-accent text-white"
-                    : "text-sidebar-foreground hover:bg-sidebar-accent/60 hover:text-white",
+                    : "text-sidebar-foreground hover:translate-x-0.5 hover:bg-sidebar-accent/60 hover:text-white",
                 )}
               >
                 <Icon
                   className={cn(
-                    "size-[18px] shrink-0",
+                    "size-[18px] shrink-0 transition-transform duration-150 group-hover:scale-110",
                     active ? "text-brand" : "text-sidebar-muted group-hover:text-sidebar-foreground",
                   )}
                   strokeWidth={2}
                 />
                 <span className="flex-1">{item.label}</span>
                 {item.href === "/notifications" && unread > 0 && (
-                  <span className="rounded-full bg-brand px-1.5 py-0.5 text-[10px] font-semibold text-brand-foreground">
+                  <span
+                    key={unread}
+                    className="animate-in zoom-in-50 rounded-full bg-brand px-1.5 py-0.5 text-[10px] font-semibold text-brand-foreground duration-300"
+                  >
                     {unread > 99 ? "99+" : unread}
                   </span>
                 )}
@@ -93,9 +96,17 @@ function NavContent({
               className="group flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-sidebar-foreground transition-colors hover:bg-sidebar-accent/60 hover:text-white"
             >
               {dark ? (
-                <Sun className="size-[18px] shrink-0 text-sidebar-muted group-hover:text-sidebar-foreground" strokeWidth={2} />
+                <Sun
+                  key="sun"
+                  className="size-[18px] shrink-0 animate-in zoom-in-50 spin-in-90 text-sidebar-muted duration-300 group-hover:text-sidebar-foreground"
+                  strokeWidth={2}
+                />
               ) : (
-                <Moon className="size-[18px] shrink-0 text-sidebar-muted group-hover:text-sidebar-foreground" strokeWidth={2} />
+                <Moon
+                  key="moon"
+                  className="size-[18px] shrink-0 animate-in zoom-in-50 spin-in-90 text-sidebar-muted duration-300 group-hover:text-sidebar-foreground"
+                  strokeWidth={2}
+                />
               )}
               <span className="flex-1 text-left">{dark ? "Light mode" : "Dark mode"}</span>
             </button>
@@ -207,18 +218,34 @@ function SidebarInner({
 
         <button
           onClick={() => setMenuOpen((v) => !v)}
-          className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors hover:bg-sidebar-accent/60"
+          className="group flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors active:scale-[0.98] hover:bg-sidebar-accent/60"
         >
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-sidebar-accent text-sm font-semibold uppercase text-white">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-sidebar-accent text-sm font-semibold uppercase text-white transition-transform group-hover:scale-105">
             {email.slice(0, 1)}
           </span>
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-medium text-white">{email}</p>
             <p className="text-xs text-sidebar-muted">{ROLE_LABELS[role] ?? role}</p>
           </div>
-          <ChevronsUpDown className="size-4 shrink-0 text-sidebar-muted" />
+          <ChevronsUpDown
+            className={cn(
+              "size-4 shrink-0 text-sidebar-muted transition-transform duration-200",
+              menuOpen && "rotate-180",
+            )}
+          />
         </button>
       </div>
+    </div>
+  );
+}
+
+/** Replays a quick fade/slide whenever the route changes — purely cosmetic,
+ *  keyed by pathname so it never affects data fetching or component state. */
+function PageTransition({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
+  return (
+    <div key={pathname} className="animate-in fade-in slide-in-from-bottom-1 duration-300 ease-out">
+      {children}
     </div>
   );
 }
@@ -276,13 +303,13 @@ export function AppShell({
       {open && (
         <div className="fixed inset-0 z-40 md:hidden">
           <div
-            className="absolute inset-0 bg-slate-950/60 backdrop-blur-sm"
+            className="absolute inset-0 animate-in fade-in bg-slate-950/60 backdrop-blur-sm duration-200"
             onClick={() => setOpen(false)}
           />
-          <aside className="absolute inset-y-0 left-0 w-72 overflow-hidden border-r border-sidebar-border shadow-xl">
+          <aside className="absolute inset-y-0 left-0 w-72 animate-in slide-in-from-left overflow-hidden border-r border-sidebar-border shadow-xl duration-200 ease-out">
             <button
               onClick={() => setOpen(false)}
-              className="absolute right-3 top-4 z-10 rounded-md p-1.5 text-sidebar-muted hover:text-white"
+              className="absolute right-3 top-4 z-10 rounded-md p-1.5 text-sidebar-muted transition-colors hover:text-white active:scale-90"
               aria-label="Close menu"
             >
               <X className="size-5" />
@@ -316,7 +343,7 @@ export function AppShell({
         </header>
 
         <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-10">
-          {children}
+          <PageTransition>{children}</PageTransition>
         </main>
       </div>
     </div>

@@ -3,7 +3,7 @@ import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { isFinanceRole, isLeadRole } from "@/lib/rbac";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
-import { WorkItemMode } from "@prisma/client";
+import { WorkItemFrequency, WorkItemMode } from "@prisma/client";
 import {
   generateTaskBreakdown,
   generateProjectOutcome,
@@ -60,7 +60,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     where: { id: params.id },
     include: { department: true },
   });
-  if (!workUnit) return failFor(ErrorCode.NOT_FOUND);
+  if (!workUnit || workUnit.deletedAt) return failFor(ErrorCode.NOT_FOUND);
 
   const role = session.role;
   const isOwningLead = isLeadRole(role) && session.employeeId === workUnit.teamLeadId;
@@ -158,6 +158,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
                       mode: WorkItemMode.metric,
                       targetValue: wi.targetValue ?? DEFAULT_TARGET_VALUE,
                       currentValue: 0,
+                      frequency: WorkItemFrequency.monthly,
                       periodMonth,
                       periodYear,
                     },
@@ -227,6 +228,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
                     mode: WorkItemMode.metric,
                     targetValue: wi.targetValue ?? DEFAULT_TARGET_VALUE,
                     currentValue: 0,
+                    frequency: WorkItemFrequency.monthly,
                     periodMonth,
                     periodYear,
                   },

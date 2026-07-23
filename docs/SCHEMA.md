@@ -78,6 +78,7 @@ Config table implementing the generic label mapping described in PRD §4.1.
 | team_lead_id | uuid FK → employees.id | |
 | status | enum | `active`, `completed`, `archived` |
 | created_at | timestamptz | |
+| deleted_at | timestamptz? | Soft delete (2026-07-18) — kept for audit (points ledger/recognition history reference `work_items` underneath). Deleting a WorkUnit cascades to its SubUnits and WorkItems (all soft-deleted together). Deleted rows are filtered out of every normal read. |
 
 ### `sub_units` (Feature / Target Segment)
 | Column | Type | Notes |
@@ -86,6 +87,7 @@ Config table implementing the generic label mapping described in PRD §4.1.
 | work_unit_id | uuid FK → work_units.id | |
 | name | text | |
 | created_at | timestamptz | |
+| deleted_at | timestamptz? | Soft delete (2026-07-18) — cascades to its WorkItems. |
 
 ### `work_items` (Task / Call — supports both Atomic and Metric modes)
 | Column | Type | Notes |
@@ -98,14 +100,19 @@ Config table implementing the generic label mapping described in PRD §4.1.
 | task_points | integer? | required if mode = atomic; assigned by Team Lead |
 | target_value | numeric? | required if mode = metric, e.g. 100 (calls). **Editable at any time** (Team Lead can adjust mid-period). |
 | current_value | numeric? | required if mode = metric, running count |
-| period_month | integer? | required if mode = metric — **Sales/BD targets reset every month**, so each month is tracked as its own period rather than one indefinitely-running target |
+| frequency | enum? | required if mode = metric — `daily` or `monthly` (2026-07-18). Immutable after creation, like `mode`. |
+| period_month | integer? | required if mode = metric |
 | period_year | integer? | required if mode = metric |
+| period_day | integer? | required if mode = metric && frequency = daily, else null |
 | status | enum | `pending`, `wip`, `completed` — for atomic mode; for metric mode used loosely (`pending`/`wip`/`completed` when current >= target) |
 | created_at | timestamptz | |
 | updated_at | timestamptz | |
 | completed_at | timestamptz? | |
+| deleted_at | timestamptz? | Soft delete (2026-07-18) — the points ledger keeps its row for audit even after the WorkItem is deleted; deleted rows are filtered out of every normal read. |
 
-> **Monthly reset implementation note (Track B to decide):** either (a) a new metric `work_item` row is created each month for each employee/target, or (b) a single recurring target record has `current_value` reset to 0 at the start of each month while `period_month`/`period_year` advance. Either is fine — pick whichever is simpler given the ORM, but the `recognition_snapshots` and `payslips.employee_of_month_ref` logic should key off `period_month`/`period_year`, not assume a single ever-growing `current_value`.
+> **Monthly reset implementation (resolved 2026-07-13):** a new metric `work_item` row is created each period rather than resetting `current_value` in place, so `recognition_snapshots` and `payslips.employee_of_month_ref` key off `period_month`/`period_year` (+ `period_day` for daily), never a single ever-growing `current_value`.
+>
+> **Daily frequency (2026-07-18):** a `daily`-frequency metric task always starts "today" (server computes `period_month`/`period_year`/`period_day` at creation, ignoring any client-supplied period) and rolls forward automatically — a cron job (`lib/cron/metric-daily-rollover.ts`, daily at 00:10 UTC) clones the latest non-deleted daily row per `(sub_unit_id, assigned_to)` forward to a fresh row for today (`current_value` reset to 0, `target_value` carried forward). Soft-deleting the latest row stops the chain. `monthly`-frequency tasks are unchanged — still a Lead manually creating the next month's row.
 
 ### `daily_task_selections`
 Tracks which tasks an employee selected at clock-in for EOD point tallying.

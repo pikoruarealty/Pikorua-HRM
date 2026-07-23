@@ -43,6 +43,11 @@ enum WorkItemMode {
   metric
 }
 
+enum WorkItemFrequency {
+  daily
+  monthly
+}
+
 enum WorkUnitStatus {
   active
   completed
@@ -263,6 +268,9 @@ model WorkUnit {
   teamLead     Employee @relation("WorkUnitLead", fields: [teamLeadId], references: [id])
   status       WorkUnitStatus @default(active)
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  // Soft delete — kept for audit trail (points ledger / recognition history
+  // reference WorkItems underneath). Cascades to subUnits/workItems on delete.
+  deletedAt    DateTime? @map("deleted_at") @db.Timestamptz(6)
 
   subUnits SubUnit[]
 
@@ -275,6 +283,7 @@ model SubUnit {
   workUnit   WorkUnit @relation(fields: [workUnitId], references: [id])
   name       String
   createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  deletedAt  DateTime? @map("deleted_at") @db.Timestamptz(6)
 
   workItems WorkItem[]
 
@@ -282,7 +291,9 @@ model SubUnit {
 }
 
 // Supports both Atomic (Tech) and Metric (Sales/BD) modes. See SCHEMA.md note:
-// metric targets reset monthly, tracked per period_month/period_year.
+// metric targets reset per period_month/period_year (+ period_day for a
+// frequency=daily target), tracked as a new row per period rather than an
+// in-place reset.
 model WorkItem {
   id          String   @id @default(uuid()) @db.Uuid
   subUnitId   String   @map("sub_unit_id") @db.Uuid
@@ -294,18 +305,23 @@ model WorkItem {
   taskPoints  Int?     @map("task_points")     // required if atomic
   targetValue Decimal? @map("target_value") @db.Decimal(12, 2) // required if metric; editable anytime
   currentValue Decimal? @map("current_value") @db.Decimal(12, 2) // required if metric
-  periodMonth Int?     @map("period_month")    // required if metric (monthly reset)
+  frequency   WorkItemFrequency? @map("frequency") // required if metric; immutable after creation
+  periodMonth Int?     @map("period_month")    // required if metric
   periodYear  Int?     @map("period_year")     // required if metric
+  periodDay   Int?     @map("period_day")      // required if metric && frequency=daily, else null
   status      WorkItemStatus @default(pending)
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
   completedAt DateTime? @map("completed_at") @db.Timestamptz(6)
+  // Soft delete — the points ledger keeps referencing this row for audit even
+  // after deletion; deleted rows are just filtered out of normal operation.
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(6)
 
   dailySelections DailyTaskSelection[]
   pointLedger     EmployeePointLedger[]
 
   @@index([assignedTo])
-  @@index([mode, periodYear, periodMonth])
+  @@index([mode, periodYear, periodMonth, periodDay])
   @@map("work_items")
 }
 

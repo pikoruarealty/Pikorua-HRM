@@ -68,9 +68,14 @@
 | POST | `/work-units` | Lead, Admin/HR | Creates a Project/Campaign; `team_lead_id` defaults to creator if Lead |
 | GET | `/work-units/:id` | Any (scoped) | nested response includes sub_units + work_items |
 | PATCH | `/work-units/:id` | Lead (own), Admin/HR | status changes, rename |
+| DELETE | `/work-units/:id` | Lead (own), Admin/HR | Soft delete (2026-07-18) — cascades to its sub_units and work_items |
 | POST | `/work-units/:id/sub-units` | Lead (own work_unit), Admin/HR | `{ name }` |
-| POST | `/sub-units/:id/work-items` | Lead (own), Admin/HR | `{ title, assigned_to, mode, task_points? , target_value? }` — Lead sets task_points for atomic mode |
-| PATCH | `/work-items/:id` | Assigned Employee (status/current_value only), Lead (all fields) | Employees update their own task's status (atomic) or current_value (metric); Leads can reassign/edit points |
+| GET | `/sub-units/:id` | Lead (own), Admin/HR | (2026-07-18) |
+| PATCH | `/sub-units/:id` | Lead (own), Admin/HR | (2026-07-18) `{ name }` — rename |
+| DELETE | `/sub-units/:id` | Lead (own), Admin/HR | (2026-07-18) soft delete — cascades to its work_items |
+| POST | `/sub-units/:id/work-items` | Lead (own), Admin/HR | `{ title, assigned_to, mode, task_points? , target_value?, frequency? , period_month?, period_year? }` — Lead sets task_points for atomic mode; metric mode requires `frequency` (`daily`\|`monthly`, 2026-07-18): `monthly` requires `period_month`/`period_year`, `daily` computes the period server-side (always "today") |
+| PATCH | `/work-items/:id` | Assigned Employee (status/current_value only, requires the assignee to be currently clocked in — 2026-07-18), Lead (all fields) | Employees update their own task's status (atomic) or current_value (metric); Leads can reassign/edit points/title/target |
+| DELETE | `/work-items/:id` | Lead (own), Admin/HR | Soft delete (2026-07-18) — the points ledger keeps its row for audit |
 | GET | `/work-items/mine` | Employee | tasks assigned to the current employee, across work units |
 
 ---
@@ -81,7 +86,7 @@
 |---|---|---|---|
 | POST | `/daily-selections` | Employee | Called at clock-in: `{ work_item_ids: [] }` for today |
 | GET | `/daily-selections/today` | Employee, Lead (own team) | |
-| POST | `/work-items/:id/complete` | Employee (if assigned) | Marks atomic task completed → triggers point ledger credit (server-side, not client-computed) |
+| POST | `/work-items/:id/complete` | Employee (if assigned) | Marks atomic task completed → triggers point ledger credit (server-side, not client-computed). Requires the assignee to be currently clocked in (2026-07-18). |
 | GET | `/employees/:id/points` | Admin/HR, Lead (own team), Employee (self) | returns point ledger + running balance |
 | GET | `/employees/:id/task-activity` | Admin/HR, Lead (own team), Employee (self) | Added 2026-07-23. `?period=daily\|weekly\|monthly\|total` (default `daily`), optional `?date=YYYY-MM-DD` anchor. Returns `{ summary: { period, from, to, tasksTouched, tasksCompletedInPeriod, pointsEarnedInPeriod, daysActiveInPeriod }, tasks: [{ workItemId, title, projectName, subUnitName, mode, status, taskPoints, assignedAt, completedAt, daysSelectedInPeriod, pointsEarnedInPeriod }] }` — every task the employee planned or completed in the period, enriched with which Project/SubUnit it belongs to. Distinct from `/employees/:id/work-items/history`, which is metric-mode growth tracking only. |
 

@@ -46,9 +46,10 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     where: {
       assignedTo: employee.id,
       mode: WorkItemMode.metric,
+      deletedAt: null,
       ...(year !== undefined ? { periodYear: year } : {}),
     },
-    orderBy: [{ periodYear: "desc" }, { periodMonth: "desc" }],
+    orderBy: [{ periodYear: "desc" }, { periodMonth: "desc" }, { periodDay: "desc" }],
     take: limit ?? 24,
   });
 
@@ -56,8 +57,10 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     history.map((item) => ({
       id: item.id,
       title: item.title,
+      frequency: item.frequency,
       periodMonth: item.periodMonth,
       periodYear: item.periodYear,
+      periodDay: item.periodDay,
       targetValue: item.targetValue,
       currentValue: item.currentValue,
       achievedPct:

@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { apiFetch } from "@/components/_lib/api";
 import { cn } from "@/lib/utils";
 
@@ -345,7 +346,7 @@ export function HomeScreen({
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {QUICK_LINKS.filter((l) => (hasEmployee || l.href === "/recognition") && !(isAdmin && l.href === "/my-tasks")).map((l) => (
             <Link key={l.href} href={l.href}>
-              <Card className="h-full transition-colors hover:border-primary/50">
+              <Card className="h-full hover:-translate-y-0.5 hover:border-primary/50 hover:shadow-md active:translate-y-0">
                 <CardHeader>
                   <CardTitle className="text-base">{l.label}</CardTitle>
                 </CardHeader>
@@ -423,13 +424,16 @@ function ClockCard() {
           </Badge>
         </CardTitle>
       </CardHeader>
-      <CardContent className="text-sm">
+      <CardContent className="flex flex-col gap-3 text-sm">
         {rec === undefined ? (
           <p className="text-muted-foreground">Loading…</p>
         ) : !clockedIn ? (
-          <p className="text-muted-foreground">
-            You haven&apos;t clocked in today. Head to Daily Planning to clock in.
-          </p>
+          <>
+            <p className="text-muted-foreground">You haven&apos;t clocked in today.</p>
+            <Link href="/planning" className="w-fit">
+              <Button>Clock In</Button>
+            </Link>
+          </>
         ) : (
           <div className="flex flex-col gap-3">
             <p className="text-muted-foreground">
@@ -449,6 +453,11 @@ function ClockCard() {
                 </div>
               </div>
             </div>
+            {!clockedOut && (
+              <Link href="/planning" className="w-fit">
+                <Button variant="outline">Clock Out</Button>
+              </Link>
+            )}
           </div>
         )}
       </CardContent>
@@ -472,7 +481,7 @@ function StatTile({
 }) {
   return (
     <Link href={href}>
-      <Card className="h-full transition-colors hover:border-primary/50">
+      <Card className="h-full hover:-translate-y-0.5 hover:border-primary/50 hover:shadow-md active:translate-y-0">
         <CardContent className="flex flex-col gap-1 py-4">
           <span className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
             {icon}

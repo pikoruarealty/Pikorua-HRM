@@ -20,6 +20,7 @@
     "prisma:studio": "prisma studio",
     "db:seed": "prisma db seed",
     "db:reset": "prisma migrate reset",
+    "db:reset-admin": "bun prisma/reset-admin.ts",
     "depgraph:validate": "depcruise apps/web/app apps/web/lib apps/web/components",
     "depgraph:text": "depcruise apps/web/app apps/web/lib apps/web/components --output-type text",
     "depgraph:svg": "depcruise apps/web/app apps/web/lib apps/web/components --output-type dot | dot -T svg -o dependency-graph.svg",

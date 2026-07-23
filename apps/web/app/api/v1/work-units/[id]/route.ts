@@ -5,12 +5,16 @@ import { isFinanceRole, isLeadRole } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { WorkUnitStatus } from "@prisma/client";
 
-// Track B. GET/PATCH /api/v1/work-units/:id — Milestone 1.1.
+// Track B. GET/PATCH/DELETE /api/v1/work-units/:id — Milestone 1.1.
 
 const nestedInclude = {
   subUnits: {
+    where: { deletedAt: null },
     include: {
-      workItems: { include: { assignee: { select: { id: true, fullName: true } } } },
+      workItems: {
+        where: { deletedAt: null },
+        include: { assignee: { select: { id: true, fullName: true } } },
+      },
     },
   },
 } as const;
@@ -23,7 +27,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     where: { id: params.id },
     include: nestedInclude,
   });
-  if (!workUnit) return failFor(ErrorCode.NOT_FOUND);
+  if (!workUnit || workUnit.deletedAt) return failFor(ErrorCode.NOT_FOUND);
 
   const role = session.role;
   if (isFinanceRole(role)) {
@@ -69,7 +73,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
 
   const workUnit = await prisma.workUnit.findUnique({ where: { id: params.id } });
-  if (!workUnit) return failFor(ErrorCode.NOT_FOUND);
+  if (!workUnit || workUnit.deletedAt) return failFor(ErrorCode.NOT_FOUND);
 
   const role = session.role;
   const isOwningLead =
@@ -110,4 +114,35 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   });
 
   return ok(updated);
+}
+
+// DELETE /api/v1/work-units/:id — soft delete, cascading to its non-deleted
+// SubUnits and their WorkItems (one transaction). Same RBAC as PATCH.
+export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
+  const session = await getSession();
+  if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
+
+  const workUnit = await prisma.workUnit.findUnique({ where: { id: params.id } });
+  if (!workUnit || workUnit.deletedAt) return failFor(ErrorCode.NOT_FOUND);
+
+  const role = session.role;
+  const isOwningLead = isLeadRole(role) && session.employeeId === workUnit.teamLeadId;
+  if (!isFinanceRole(role) && !isOwningLead) {
+    return failFor(ErrorCode.FORBIDDEN);
+  }
+
+  const now = new Date();
+  await prisma.$transaction([
+    prisma.workItem.updateMany({
+      where: { subUnit: { workUnitId: params.id }, deletedAt: null },
+      data: { deletedAt: now },
+    }),
+    prisma.subUnit.updateMany({
+      where: { workUnitId: params.id, deletedAt: null },
+      data: { deletedAt: now },
+    }),
+    prisma.workUnit.update({ where: { id: params.id }, data: { deletedAt: now } }),
+  ]);
+
+  return ok({ id: params.id, deleted: true });
 }

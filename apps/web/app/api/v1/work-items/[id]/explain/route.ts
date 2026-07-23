@@ -18,7 +18,7 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
     where: { id: params.id },
     include: { subUnit: { include: { workUnit: true } } },
   });
-  if (!workItem) return failFor(ErrorCode.NOT_FOUND);
+  if (!workItem || workItem.deletedAt) return failFor(ErrorCode.NOT_FOUND);
 
   const role = session.role;
   const isOwningLead = isLeadRole(role) && session.employeeId === workItem.subUnit.workUnit.teamLeadId;

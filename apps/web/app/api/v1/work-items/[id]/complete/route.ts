@@ -1,7 +1,8 @@
 import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
-import { ok, failFor, ErrorCode } from "@/lib/api/response";
+import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { Prisma, WorkItemMode, WorkItemStatus } from "@prisma/client";
+import { isClockedInNow } from "@/lib/attendance/status";
 
 // Track B. POST /api/v1/work-items/:id/complete — Milestone 2.3.
 // Assigned Employee only (per API_SPEC §5 — no Lead/Admin override here;
@@ -16,7 +17,7 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
   if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
 
   const workItem = await prisma.workItem.findUnique({ where: { id: params.id } });
-  if (!workItem) return failFor(ErrorCode.NOT_FOUND);
+  if (!workItem || workItem.deletedAt) return failFor(ErrorCode.NOT_FOUND);
 
   if (session.employeeId !== workItem.assignedTo) {
     return failFor(ErrorCode.FORBIDDEN, "Only the assigned employee can complete this task.");
@@ -26,6 +27,9 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
   }
   if (workItem.status === WorkItemStatus.completed) {
     return failFor(ErrorCode.CONFLICT, "This task is already completed.");
+  }
+  if (!(await isClockedInNow(session.employeeId!))) {
+    return fail(ErrorCode.VALIDATION, "You must be clocked in to complete this task.", 422);
   }
 
   // The ledger's unique(work_item_id) constraint is the real guard against a

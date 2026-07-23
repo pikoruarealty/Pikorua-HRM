@@ -4,18 +4,18 @@ import { cn } from "@/lib/utils";
 
 // SHARED (Phase 0) shadcn/ui primitive. Keep API stable — both tracks use it.
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-[color,background-color,transform,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 active:translate-y-px disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0",
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-[color,background-color,transform,box-shadow] duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 active:scale-[0.97] disabled:pointer-events-none disabled:opacity-50 disabled:active:scale-100 [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:transition-transform",
   {
     variants: {
       variant: {
         default:
-          "bg-brand text-brand-foreground shadow-sm hover:bg-brand/90",
-        primary: "bg-primary text-primary-foreground shadow-sm hover:bg-primary/90",
+          "bg-brand text-brand-foreground shadow-sm hover:bg-brand/90 hover:shadow-md",
+        primary: "bg-primary text-primary-foreground shadow-sm hover:bg-primary/90 hover:shadow-md",
         destructive:
-          "bg-destructive text-destructive-foreground shadow-sm hover:bg-destructive/90",
-        success: "bg-success text-success-foreground shadow-sm hover:bg-success/90",
+          "bg-destructive text-destructive-foreground shadow-sm hover:bg-destructive/90 hover:shadow-md",
+        success: "bg-success text-success-foreground shadow-sm hover:bg-success/90 hover:shadow-md",
         outline:
-          "border border-input bg-background hover:bg-accent hover:text-accent-foreground",
+          "border border-input bg-background hover:border-accent-foreground/20 hover:bg-accent hover:text-accent-foreground",
         secondary:
           "bg-secondary text-secondary-foreground hover:bg-secondary/80",
         ghost: "hover:bg-accent hover:text-accent-foreground",
