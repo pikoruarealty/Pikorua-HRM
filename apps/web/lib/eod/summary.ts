@@ -19,6 +19,10 @@ export type EodItem = {
   targetValue: number | null;
   currentValue: number | null;
   completedToday: boolean;
+  projectName: string;
+  subUnitName: string;
+  assignedAt: Date;
+  completedAt: Date | null;
 };
 
 export type EodSummary = {
@@ -46,7 +50,7 @@ export async function buildEodSummary(
   const [selections, ledgerToday] = await Promise.all([
     prisma.dailyTaskSelection.findMany({
       where: { employeeId, date: dayStart },
-      include: { workItem: true },
+      include: { workItem: { include: { subUnit: { include: { workUnit: true } } } } },
       orderBy: { createdAt: "asc" },
     }),
     prisma.employeePointLedger.findMany({
@@ -77,6 +81,10 @@ export async function buildEodSummary(
       targetValue: w.targetValue == null ? null : Number(w.targetValue),
       currentValue: w.currentValue == null ? null : Number(w.currentValue),
       completedToday: creditedTodayByItem.has(w.id),
+      projectName: w.subUnit.workUnit.name,
+      subUnitName: w.subUnit.name,
+      assignedAt: w.createdAt,
+      completedAt: w.completedAt,
     };
   });
 

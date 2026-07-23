@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmployeeAttendancePanel } from "@/components/attendance/employee-attendance-panel";
 import { EmployeeWorkPanel } from "@/components/employees/employee-work-panel";
+import { EmployeeTaskActivityPanel } from "@/components/employees/employee-task-activity-panel";
 import { EmployeeAvatar } from "@/components/employees/employee-avatar";
 import { ImageCropModal, isSquare } from "@/components/employees/image-cropper";
 import {
@@ -375,6 +376,8 @@ export function EmployeeDetail({
       {canViewAttendance && <EmployeeAttendancePanel employeeId={employeeId} />}
 
       {canViewAttendance && <EmployeeWorkPanel employeeId={employeeId} />}
+
+      {canViewAttendance && <EmployeeTaskActivityPanel employeeId={employeeId} />}
 
       {/* Requests are server-scoped (Admin/HR all, Lead own team, Employee
           self); amounts are golden-rule data so only Admin/HR/self see them. */}

@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/table";
 import { AttendanceOverviewPanel } from "@/components/attendance/attendance-overview-panel";
 import { AttendanceMonthlyPanel } from "@/components/attendance/attendance-monthly-panel";
+import { TeamTaskProgressPanel } from "@/components/attendance/team-task-progress-panel";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
@@ -74,6 +75,8 @@ export function AttendanceScreen({
       {canReview && <AttendanceOverviewPanel />}
 
       {canReview && <AttendanceMonthlyPanel />}
+
+      {canSeeAll && <TeamTaskProgressPanel />}
 
       {isAdmin && <ManualRecordForm />}
 
