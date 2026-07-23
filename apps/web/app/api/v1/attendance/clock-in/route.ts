@@ -49,7 +49,7 @@ export async function POST(req: Request) {
   // Validate selections before recording anything, so a bad id fails the whole
   // request rather than clocking in with a partial/rejected plan.
   if (workItemIds.length > 0) {
-    const workItems = await prisma.workItem.findMany({ where: { id: { in: workItemIds } } });
+    const workItems = await prisma.workItem.findMany({ where: { id: { in: workItemIds }, deletedAt: null } });
     if (
       workItems.length !== workItemIds.length ||
       workItems.some((w) => w.assignedTo !== employeeId)
@@ -60,7 +60,7 @@ export async function POST(req: Request) {
     // No tasks picked: require at least one IF the employee has active tasks to
     // pick from. Someone with nothing assigned can still clock in.
     const activeCount = await prisma.workItem.count({
-      where: { assignedTo: employeeId, status: { not: WorkItemStatus.completed } },
+      where: { assignedTo: employeeId, status: { not: WorkItemStatus.completed }, deletedAt: null },
     });
     if (activeCount > 0) {
       return fail(

@@ -82,7 +82,7 @@ This label-mapping table itself should be stored as data (not hardcoded strings 
 This is a critical design decision — **do not merge these two into one task type**:
 
 - **Atomic task** (used by Tech): binary state only — Pending / WIP / Completed. No partial-percentage state is allowed. On completion, the task's pre-assigned **task point** value (set by the Team Lead when the task is created) is added to the employee's point balance. This exists specifically to avoid the "90% done" false-progress problem in dev work.
-- **Metric task** (used by Sales/BD, and any future department with quantifiable partial progress): has a **numeric target** and a **running current count** (e.g., target = 100 calls, current = 50). Progress = current / target. There is no task-point conversion for these in v1 — see Section 6.2.
+- **Metric task** (used by Sales/BD, and any future department with quantifiable partial progress): has a **numeric target** and a **running current count** (e.g., target = 100 calls, current = 50). Progress = current / target. There is no task-point conversion for these in v1 — see Section 6.2. A metric task also carries a **frequency, Monthly or Daily** (2026-07-18): Monthly is the original behavior (a Lead creates a fresh target row each month, `target_value` editable anytime mid-period); Daily starts "today" and rolls forward automatically every day (a scheduled job clones the target forward, resetting `current_value` to 0) — useful for a target that's naturally a daily cadence (e.g. 20 calls/day) rather than a monthly one.
 
 ---
 

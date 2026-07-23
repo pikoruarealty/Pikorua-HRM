@@ -2,10 +2,11 @@ import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { isFinanceRole, isLeadRole } from "@/lib/rbac";
-import { ok, failFor, ErrorCode } from "@/lib/api/response";
+import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { Prisma, WorkItemMode, WorkItemStatus } from "@prisma/client";
+import { isClockedInNow } from "@/lib/attendance/status";
 
-// Track B. PATCH /api/v1/work-items/:id — Milestone 1.2 (atomic) + 2.2 (metric).
+// Track B. PATCH/DELETE /api/v1/work-items/:id — Milestone 1.2 (atomic) + 2.2 (metric).
 
 const patchSchema = z.object({
   title: z.string().min(1).optional(),
@@ -24,7 +25,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     where: { id: params.id },
     include: { subUnit: { include: { workUnit: true } } },
   });
-  if (!workItem) return failFor(ErrorCode.NOT_FOUND);
+  if (!workItem || workItem.deletedAt) return failFor(ErrorCode.NOT_FOUND);
 
   const role = session.role;
   const isOwningLead = isLeadRole(role) && session.employeeId === workItem.subUnit.workUnit.teamLeadId;
@@ -33,6 +34,12 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
   if (!canEditAll && !isAssignee) {
     return failFor(ErrorCode.FORBIDDEN);
+  }
+  // Self-service updates (assignee marking their own progress) require the
+  // assignee to be currently clocked in; Lead/Admin management edits are
+  // unaffected — they aren't the assignee's own moment-to-moment work.
+  if (!canEditAll && !(await isClockedInNow(session.employeeId!))) {
+    return fail(ErrorCode.VALIDATION, "You must be clocked in to update your tasks.", 422);
   }
 
   let body: unknown;
@@ -154,4 +161,27 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   });
 
   return ok(updated);
+}
+
+// DELETE /api/v1/work-items/:id — soft delete, management only (not the
+// assignee). Leaf level — no cascade. The points ledger keeps its row
+// untouched for audit even after the WorkItem itself is soft-deleted.
+export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
+  const session = await getSession();
+  if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
+
+  const workItem = await prisma.workItem.findUnique({
+    where: { id: params.id },
+    include: { subUnit: { include: { workUnit: true } } },
+  });
+  if (!workItem || workItem.deletedAt) return failFor(ErrorCode.NOT_FOUND);
+
+  const role = session.role;
+  const isOwningLead = isLeadRole(role) && session.employeeId === workItem.subUnit.workUnit.teamLeadId;
+  if (!isFinanceRole(role) && !isOwningLead) {
+    return failFor(ErrorCode.FORBIDDEN);
+  }
+
+  await prisma.workItem.update({ where: { id: params.id }, data: { deletedAt: new Date() } });
+  return ok({ id: params.id, deleted: true });
 }

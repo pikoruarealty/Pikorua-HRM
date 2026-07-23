@@ -5,15 +5,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { apiFetch } from "@/components/_lib/api";
+import { useAttendanceStatus } from "@/components/_lib/use-attendance-status";
 
 type WorkItem = { id: string; title: string; status: string };
 type Selection = { id: string; workItemId: string; workItem: WorkItem };
-type AttendanceRecord = {
-  id: string;
-  date: string;
-  clockInRaw: string | null;
-  clockOutRaw: string | null;
-};
 type EodItem = {
   workItemId: string;
   title: string;
@@ -29,42 +24,33 @@ type Eod = {
   items: EodItem[];
 };
 
-function todayUtc(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
 export function PlanningScreen({ isAdmin = false }: { isAdmin?: boolean }) {
   const [mine, setMine] = useState<WorkItem[]>([]);
   const [today, setToday] = useState<Selection[]>([]);
-  const [attendance, setAttendance] = useState<AttendanceRecord | null>(null);
   const [eod, setEod] = useState<Eod | null>(null);
   const [checked, setChecked] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const { attendance, clockedIn, clockedOut, refresh: refreshAttendance } = useAttendanceStatus();
 
   async function refresh() {
-    const [mineRes, todayRes, attRes, eodRes] = await Promise.all([
+    const [mineRes, todayRes, eodRes] = await Promise.all([
       apiFetch<WorkItem[]>("/work-items/mine"),
       apiFetch<Selection[]>("/daily-selections/today"),
-      apiFetch<AttendanceRecord[]>("/attendance"),
       apiFetch<Eod>("/attendance/eod"),
     ]);
     if (mineRes.data) setMine(mineRes.data);
     if (todayRes.data) setToday(todayRes.data);
     if (eodRes.data) setEod(eodRes.data);
-    if (attRes.data) {
-      const t = todayUtc();
-      setAttendance(attRes.data.find((r) => r.date.slice(0, 10) === t) ?? null);
-    }
+    refreshAttendance();
   }
 
   useEffect(() => {
     refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const activeItems = mine.filter((wi) => wi.status !== "completed");
-  const clockedIn = !!attendance?.clockInRaw;
-  const clockedOut = !!attendance?.clockOutRaw;
   // Must pick ≥1 task to clock in when there are active tasks to pick from
   // (mirrors the server rule); someone with nothing assigned can still clock in.
   const clockInBlocked = activeItems.length > 0 && Object.values(checked).every((v) => !v);

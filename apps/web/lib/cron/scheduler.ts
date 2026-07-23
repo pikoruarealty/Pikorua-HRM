@@ -3,6 +3,7 @@ import { RecognitionPeriodType } from "@prisma/client";
 import { runRecognitionSnapshot } from "@/lib/cron/recognition";
 import { runBirthdayCheck } from "@/lib/cron/birthday";
 import { runMeetingReminders } from "@/lib/cron/meeting-reminders";
+import { runMetricDailyRollover } from "@/lib/cron/metric-daily-rollover";
 
 // In-process scheduler (PRD §6 — "a lightweight scheduled-jobs mechanism").
 // Registered once at server boot from instrumentation.ts. Assumes a single
@@ -36,6 +37,11 @@ export function startScheduler(): void {
   // Birthday / anniversary shoutout — daily at 00:05 UTC.
   cron.schedule("5 0 * * *", () => {
     safeRun("birthday-check", () => runBirthdayCheck());
+  });
+
+  // Metric daily-frequency rollover — daily at 00:10 UTC, before recognition.
+  cron.schedule("10 0 * * *", () => {
+    safeRun("metric-daily-rollover", () => runMetricDailyRollover());
   });
 
   // Recognition weekly snapshot — Mondays 00:15 UTC.
