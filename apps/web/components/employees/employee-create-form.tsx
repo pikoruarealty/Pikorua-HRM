@@ -172,10 +172,8 @@ export function EmployeeCreateForm() {
     setSubmitting(true);
     setError(null);
     try {
-      if (!photo) {
-        throw new Error("A profile photo is required.");
-      }
-      // Multipart since 2026-07-15: the profile photo is required at creation.
+      // Multipart since 2026-07-15: the profile photo is optional at creation
+      // (can be added later via the employee's photo upload).
       const form = new FormData();
       form.set("full_name", fullName);
       form.set("email", email);
@@ -185,7 +183,7 @@ export function EmployeeCreateForm() {
       if (teamId) form.set("team_id", teamId);
       form.set("date_of_joining", dateOfJoining);
       form.set("base_salary", baseSalary);
-      form.set("photo", photo);
+      if (photo) form.set("photo", photo);
       const data = await getJson(
         await fetch("/api/v1/employees", { method: "POST", body: form }),
       );
@@ -325,7 +323,7 @@ export function EmployeeCreateForm() {
             />
           </div>
           <div className="flex flex-col gap-2 sm:col-span-2">
-            <Label htmlFor="photo">Profile photo (required)</Label>
+            <Label htmlFor="photo">Profile photo (optional)</Label>
             <div className="flex items-center gap-4">
               {photoPreview && (
                 <div className="flex items-center gap-2">
@@ -350,7 +348,6 @@ export function EmployeeCreateForm() {
                 id="photo"
                 type="file"
                 accept="image/jpeg,image/png,image/webp"
-                required={!photo}
                 onChange={(e) => onPickPhoto(e.target.files?.[0] ?? null)}
               />
             </div>

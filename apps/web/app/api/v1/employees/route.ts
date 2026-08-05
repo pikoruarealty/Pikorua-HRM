@@ -187,16 +187,18 @@ export async function POST(req: Request) {
     return failFor(ErrorCode.FORBIDDEN);
   }
 
-  // Since 2026-07-15 a profile photo is REQUIRED at creation, so this route
-  // takes multipart/form-data (employee fields as form fields + a `photo`
-  // file) instead of JSON — same transport as the documents upload route.
+  // Since 2026-07-15 this route takes multipart/form-data (employee fields
+  // as form fields + an optional `photo` file) instead of JSON — same
+  // transport as the documents upload route. The photo was required at
+  // creation until 2026-08-05; it's now optional (employee can remain
+  // photo-less and add one later via PUT /employees/:id/photo).
   let formData: FormData;
   try {
     formData = await req.formData();
   } catch {
     return failFor(
       ErrorCode.VALIDATION,
-      "Request must be multipart/form-data (employee fields + required `photo` image file).",
+      "Request must be multipart/form-data (employee fields, optional `photo` image file).",
     );
   }
 
@@ -206,9 +208,15 @@ export async function POST(req: Request) {
   }
   const d = parsed.data;
 
-  const photo = validatePhotoFile(formData.get("photo"));
-  if (!photo.ok) {
-    return failFor(ErrorCode.VALIDATION, photo.message);
+  // Photo is optional: only validate type/size when one was actually attached.
+  const photoEntry = formData.get("photo");
+  let photo: { file: File; extension: string } | undefined;
+  if (photoEntry instanceof File && photoEntry.size > 0) {
+    const validated = validatePhotoFile(photoEntry);
+    if (!validated.ok) {
+      return failFor(ErrorCode.VALIDATION, validated.message);
+    }
+    photo = validated;
   }
 
   if (d.department_id) {
@@ -228,10 +236,14 @@ export async function POST(req: Request) {
   const tempPassword = d.password ?? generateTempPassword();
   const passwordHash = await hashPassword(tempPassword);
 
-  // Save the photo before creating the row so a created employee always has
-  // one (an orphaned file from a failed create is harmless on local disk).
-  const photoBuffer = Buffer.from(await photo.file.arrayBuffer());
-  const { storageKey } = await saveUploadedFile(photoBuffer, `photo${photo.extension}`, "photos");
+  // Save the photo (if any) before creating the row so a created employee
+  // never references a file that doesn't exist yet (an orphaned file from a
+  // failed create is harmless on local disk).
+  let storageKey: string | undefined;
+  if (photo) {
+    const photoBuffer = Buffer.from(await photo.file.arrayBuffer());
+    storageKey = (await saveUploadedFile(photoBuffer, `photo${photo.extension}`, "photos")).storageKey;
+  }
 
   const employee = await prisma.employee.create({
     data: {
