@@ -291,14 +291,14 @@ export function EmployeeListScreen({ canManage }: { canManage: boolean }) {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Email</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Role</TableHead>
-                  {canManage && <TableHead>Department</TableHead>}
-                  {canManage && <TableHead>Team</TableHead>}
-                  <TableHead>Status</TableHead>
-                  {canManage && <TableHead>Base salary</TableHead>}
+                  <TableHead className="whitespace-nowrap">Name</TableHead>
+                  <TableHead className="whitespace-nowrap">Email</TableHead>
+                  <TableHead className="whitespace-nowrap">Type</TableHead>
+                  <TableHead className="whitespace-nowrap">Role</TableHead>
+                  {canManage && <TableHead className="whitespace-nowrap">Department</TableHead>}
+                  {canManage && <TableHead className="whitespace-nowrap">Team</TableHead>}
+                  <TableHead className="whitespace-nowrap">Status</TableHead>
+                  {canManage && <TableHead className="whitespace-nowrap">Base salary</TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -308,27 +308,27 @@ export function EmployeeListScreen({ canManage }: { canManage: boolean }) {
                     onClick={() => router.push(`/employees/${e.id}`)}
                     className="cursor-pointer hover:bg-muted/50"
                   >
-                    <TableCell>
+                    <TableCell className="whitespace-nowrap font-medium">
                       <span className="flex items-center gap-2">
                         <EmployeeAvatar fullName={e.fullName} photoUrl={e.photoUrl} size="sm" />
                         {e.fullName}
                       </span>
                     </TableCell>
-                    <TableCell>{e.email}</TableCell>
-                    <TableCell>
+                    <TableCell className="whitespace-nowrap">{e.email}</TableCell>
+                    <TableCell className="whitespace-nowrap">
                       <Badge variant="outline">
                         {humanizeEmploymentType(e.employmentType)}
                       </Badge>
                     </TableCell>
-                    <TableCell>{humanizeRole(e.role)}</TableCell>
-                    {canManage && <TableCell>{deptName(e.departmentId)}</TableCell>}
-                    {canManage && <TableCell>{teamName(e.teamId)}</TableCell>}
-                    <TableCell>
+                    <TableCell className="whitespace-nowrap">{humanizeRole(e.role)}</TableCell>
+                    {canManage && <TableCell className="whitespace-nowrap">{deptName(e.departmentId)}</TableCell>}
+                    {canManage && <TableCell className="whitespace-nowrap">{teamName(e.teamId)}</TableCell>}
+                    <TableCell className="whitespace-nowrap">
                       <Badge variant={e.status === "active" ? "default" : "secondary"}>
                         {e.status}
                       </Badge>
                     </TableCell>
-                    {canManage && <TableCell>{e.baseSalary ?? "—"}</TableCell>}
+                    {canManage && <TableCell className="whitespace-nowrap">{e.baseSalary ?? "—"}</TableCell>}
                   </TableRow>
                 ))}
               </TableBody>

@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 // SHARED (Phase 0) shadcn/ui primitive. Useful for status pills (attendance
 // approval, request status, task status) across both tracks.
 const badgeVariants = cva(
-  "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none",
+  "inline-flex items-center whitespace-nowrap shrink-0 rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none",
   {
     variants: {
       variant: {

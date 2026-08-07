@@ -32,7 +32,6 @@ type TodayEvents = {
 };
 type WorkItem = { id: string; status: "pending" | "wip" | "completed" };
 type RequestRow = { id: string; status: string };
-type Employee = { id: string; status: "active" | "inactive" };
 type Payslip = { id: string; periodMonth: number; periodYear: number; status: string };
 type Announcement = { id: string; title: string; createdAt: string };
 type AttendanceRow = {
@@ -99,7 +98,6 @@ export function HomeScreen({
   const [pendingApprovals, setPendingApprovals] = useState<number | null>(null);
 
   // Finance (Admin/HR) org-wide data.
-  const [employees, setEmployees] = useState<Employee[] | null>(null);
   const [attendance, setAttendance] = useState<AttendanceOverview | null>(null);
 
   // Announcements (all roles) + audit trail (admin only).
@@ -159,7 +157,6 @@ export function HomeScreen({
     }
 
     if (isFinance) {
-      apiFetch<Employee[]>("/employees").then((r) => setEmployees(r.data ?? []));
       apiFetch<AttendanceOverview>("/attendance/overview").then((r) => setAttendance(r.data));
     }
   }, [hasEmployee, isLead, isFinance, isAdmin]);
@@ -183,7 +180,6 @@ export function HomeScreen({
 
   const openTasks = tasks?.filter((t) => t.status !== "completed").length ?? null;
   const pendingMyRequests = myRequests?.filter((r) => r.status === "pending").length ?? null;
-  const activeHeadcount = employees?.filter((e) => e.status === "active").length ?? null;
   const presentRows = attendance?.rows.filter((r) => r.status === "present" || r.status === "half_day") ?? [];
   const onLeaveRows = attendance?.rows.filter((r) => r.status === "on_leave") ?? [];
   const now = Date.now();
@@ -284,6 +280,32 @@ export function HomeScreen({
         </div>
       )}
 
+      {/* Attendance records — placed right at the top after daily overview for Admin/HR. */}
+      {isFinance && (
+        <section className="flex flex-col gap-3">
+          <h2 className="text-sm font-semibold text-muted-foreground">Today&apos;s attendance</h2>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <RosterCard
+              icon={<UserCheck className="size-4" />}
+              title="Present today"
+              count={attendance ? attendance.counts.present + attendance.counts.halfDay : null}
+              rows={presentRows}
+              emptyLabel="No one clocked in yet."
+              href="/attendance"
+            />
+            <RosterCard
+              icon={<CalendarOff className="size-4" />}
+              title="On leave today"
+              count={attendance ? onLeaveRows.length : null}
+              rows={onLeaveRows}
+              subLabel={(r) => (r.leaveType === "leave_unpaid" ? "Unpaid" : "Paid")}
+              emptyLabel="No one on leave today."
+              href="/attendance"
+            />
+          </div>
+        </section>
+      )}
+
       {/* Lead tiles — team-scoped oversight (no salary/finance data). */}
       {isLead && !isFinance && (
         <section className="flex flex-col gap-3">
@@ -312,50 +334,11 @@ export function HomeScreen({
         </section>
       )}
 
-      {/* Task progress — the changing, day-to-day view — comes first for
-          admins; the static "at a glance" counters below it. */}
+      {/* Task progress — the changing, day-to-day view — comes next for admins. */}
       {isAdmin && (
         <section className="flex flex-col gap-3">
           <h2 className="text-sm font-semibold text-muted-foreground">Task progress</h2>
           <AdminProgressPanel />
-        </section>
-      )}
-
-      {/* Admin/HR org-wide tiles (2026-08-08 redesign, owner feedback):
-          Present today first (now a scrollable roster, not just a count),
-          then who's on leave today (only rendered when there's anyone —
-          avoids an empty card most days), Active headcount last since it
-          barely changes day to day. */}
-      {isFinance && (
-        <section className="flex flex-col gap-3">
-          <h2 className="text-sm font-semibold text-muted-foreground">Company at a glance</h2>
-          <div className={cn("grid gap-4 sm:grid-cols-2", onLeaveRows.length > 0 && "lg:grid-cols-3")}>
-            <RosterCard
-              icon={<UserCheck className="size-4" />}
-              title="Present today"
-              count={attendance ? attendance.counts.present + attendance.counts.halfDay : null}
-              rows={presentRows}
-              emptyLabel="No one clocked in yet."
-              href="/attendance"
-            />
-            {onLeaveRows.length > 0 && (
-              <RosterCard
-                icon={<CalendarOff className="size-4" />}
-                title="On leave today"
-                count={onLeaveRows.length}
-                rows={onLeaveRows}
-                subLabel={(r) => (r.leaveType === "leave_unpaid" ? "Unpaid" : "Paid")}
-                emptyLabel=""
-                href="/attendance"
-              />
-            )}
-            <StatTile
-              icon={<Users className="size-4" />}
-              label="Active headcount"
-              value={activeHeadcount}
-              href="/employees"
-            />
-          </div>
         </section>
       )}
 
@@ -638,6 +621,8 @@ function ClockCard() {
     </Card>
   );
 }
+
+
 
 /** Compact metric tile. `value === null` renders a dash (loading / N/A). */
 function StatTile({
