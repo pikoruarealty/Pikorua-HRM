@@ -58,7 +58,7 @@ module.exports = {
       severity: "error",
       comment: "Importing something that can't be resolved is a broken build.",
       from: {},
-      to: { couldNotResolve: true },
+      to: { couldNotResolve: true, pathNot: ["^bun:", "^geist/", "^firebase-admin/"] },
     },
     {
       name: "no-dev-dep-in-src",
@@ -90,7 +90,7 @@ module.exports = {
   ],
   options: {
     doNotFollow: { path: "node_modules" },
-    tsConfig: { fileName: "apps/web/tsconfig.json" },
+    tsConfig: { fileName: "tsconfig.json" },
     tsPreCompilationDeps: true, // count type-only imports too
     enhancedResolveOptions: {
       extensions: [".ts", ".tsx", ".js", ".jsx", ".json"],

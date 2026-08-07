@@ -46,9 +46,10 @@ export async function POST(
     return fail(ErrorCode.CONFLICT, "This weekly off move has already been reverted.", 409);
   }
 
-  // requireRole above guarantees session is non-null if we reach here.
-  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-  const actor = session!;
+  if (!session) {
+    return failFor(ErrorCode.UNAUTHENTICATED);
+  }
+  const actor = session;
 
   const updated = await prisma.weeklyOffMove.update({
     where: { id: params.id },

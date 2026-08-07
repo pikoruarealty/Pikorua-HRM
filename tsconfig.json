@@ -1,13 +1,16 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022"],
+    "lib": ["ES2022", "DOM"],
     "module": "commonjs",
     "moduleResolution": "node",
     "esModuleInterop": true,
     "skipLibCheck": true,
     "strict": true,
-    "types": ["node"]
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["apps/web/*"]
+    }
   },
-  "include": ["prisma/**/*.ts"]
+  "include": ["prisma/**/*.ts", "apps/web/**/*.ts", "apps/web/**/*.tsx"]
 }
