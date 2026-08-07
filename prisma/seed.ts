@@ -60,6 +60,10 @@ async function main() {
         // PUT /leave-config — matches the payroll_config pattern above.
         paidLeavesPerMonth: 0,
         paidLeavesPerYear: 0,
+        partTimePaidLeavesPerMonth: 0,
+        partTimePaidLeavesPerYear: 0,
+        internPaidLeavesPerMonth: 0,
+        internPaidLeavesPerYear: 0,
         effectiveFrom: new Date("2026-01-01"),
       },
     });
