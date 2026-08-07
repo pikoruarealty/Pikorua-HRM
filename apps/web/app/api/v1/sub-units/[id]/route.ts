@@ -5,8 +5,9 @@ import { isFinanceRole, isLeadRole } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 
 // Track B. GET/PATCH/DELETE /api/v1/sub-units/:id.
-// RBAC mirrors POST /work-units/:id/sub-units — Admin/HR, or the owning Lead
-// (resolved via the parent WorkUnit's teamLeadId).
+// RBAC mirrors POST /work-units/:id/sub-units — Admin/HR, or the owning
+// project lead (resolved via the parent WorkUnit's projectLeadId; can be any
+// role, 2026-08-07).
 
 async function loadManageable(id: string) {
   const subUnit = await prisma.subUnit.findUnique({
@@ -39,8 +40,8 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   if (!subUnit) return failFor(ErrorCode.NOT_FOUND);
 
   const role = session.role;
-  const isOwningLead = isLeadRole(role) && session.employeeId === subUnit.workUnit.teamLeadId;
-  if (!isFinanceRole(role) && !isOwningLead) {
+  const isProjectLead = session.employeeId === subUnit.workUnit.projectLeadId;
+  if (!isFinanceRole(role) && !isProjectLead) {
     if (!isLeadRole(role)) return failFor(ErrorCode.FORBIDDEN);
     return failFor(ErrorCode.NOT_FOUND);
   }
@@ -73,8 +74,8 @@ export async function DELETE(_req: Request, { params }: { params: { id: string }
   if (!subUnit) return failFor(ErrorCode.NOT_FOUND);
 
   const role = session.role;
-  const isOwningLead = isLeadRole(role) && session.employeeId === subUnit.workUnit.teamLeadId;
-  if (!isFinanceRole(role) && !isOwningLead) {
+  const isProjectLead = session.employeeId === subUnit.workUnit.projectLeadId;
+  if (!isFinanceRole(role) && !isProjectLead) {
     if (!isLeadRole(role)) return failFor(ErrorCode.FORBIDDEN);
     return failFor(ErrorCode.NOT_FOUND);
   }

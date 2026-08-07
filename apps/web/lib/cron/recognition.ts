@@ -4,10 +4,19 @@ import { notifyAllActiveUsers } from "@/lib/notifications/push";
 
 // Track B — Milestone 3.1 core logic, extracted from the cron route so both
 // the CRON_SECRET-gated HTTP route AND the in-process scheduler
-// (instrumentation.ts) can invoke it without going through HTTP. Behavior is
-// unchanged from the original route: Tech scores off point-ledger, Sales/BD off
-// metric achieved-%, idempotent per (period_type, period_start), single winner
-// (rank 1, score > 0) gets is_employee_of_month for monthly periods.
+// (instrumentation.ts) can invoke it without going through HTTP. Tech scores
+// off point-ledger, Sales/BD off metric achieved-%, idempotent per
+// (period_type, period_start).
+//
+// 2026-08-07: this snapshot is now reference-only leaderboard data — it no
+// longer sets isEmployeeOfMonth on its own. "Employee of the Week/Month" is
+// now an Admin-only manual pick (POST /recognition/publish); this job just
+// keeps the underlying scores/ranks fresh for the admin to pick from. A
+// re-run of computeAndReplace deletes+recreates every row for the period,
+// which would also wipe out a prior manual publish's isEmployeeOfMonth /
+// selectedManually / publishedAt flags on that row — the publish route
+// re-applies on top of whatever the latest snapshot looks like, so always
+// recompute BEFORE publishing, not after.
 
 function startOfWeekUTC(d: Date): Date {
   const day = d.getUTCDay();
@@ -106,8 +115,9 @@ export async function computeAndReplace(
         employeeId: s.employeeId,
         score: s.score,
         rank,
-        isEmployeeOfMonth:
-          periodType === RecognitionPeriodType.monthly && rank === 1 && s.score > 0,
+        // No longer auto-set — see the file-header note. Admin picks and
+        // publishes the winner via POST /recognition/publish.
+        isEmployeeOfMonth: false,
       });
     });
   }

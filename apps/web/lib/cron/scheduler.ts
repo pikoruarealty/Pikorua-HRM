@@ -1,6 +1,4 @@
 import cron from "node-cron";
-import { RecognitionPeriodType } from "@prisma/client";
-import { runRecognitionSnapshot } from "@/lib/cron/recognition";
 import { runBirthdayCheck } from "@/lib/cron/birthday";
 import { runMeetingReminders } from "@/lib/cron/meeting-reminders";
 import { runMetricDailyRollover } from "@/lib/cron/metric-daily-rollover";
@@ -34,29 +32,28 @@ export function startScheduler(): void {
     safeRun("meeting-reminders", () => runMeetingReminders());
   });
 
-  // Birthday / anniversary shoutout — daily at 00:05 UTC.
+  // Birthday / anniversary / custom-event shoutout — daily at 00:05 UTC, plus
+  // an immediate run at boot as a catch-up. Since runBirthdayCheck() is now
+  // idempotent per user/message/day (2026-08-08), a boot-time run costs
+  // nothing on a day it already fired, but recovers same-day shoutouts that
+  // would otherwise be silently lost if the process wasn't up at 00:05 (a
+  // dev restart or redeploy) — this was reported as "saw it on the calendar,
+  // never got the notification."
   cron.schedule("5 0 * * *", () => {
     safeRun("birthday-check", () => runBirthdayCheck());
   });
+  safeRun("birthday-check-boot-catchup", () => runBirthdayCheck());
 
   // Metric daily-frequency rollover — daily at 00:10 UTC, before recognition.
   cron.schedule("10 0 * * *", () => {
     safeRun("metric-daily-rollover", () => runMetricDailyRollover());
   });
 
-  // Recognition weekly snapshot — Mondays 00:15 UTC.
-  cron.schedule("15 0 * * 1", () => {
-    safeRun("recognition-weekly", () =>
-      runRecognitionSnapshot({ periodType: RecognitionPeriodType.weekly }),
-    );
-  });
-
-  // Recognition monthly snapshot — 1st of month 00:20 UTC.
-  cron.schedule("20 0 1 * *", () => {
-    safeRun("recognition-monthly", () =>
-      runRecognitionSnapshot({ periodType: RecognitionPeriodType.monthly }),
-    );
-  });
+  // Recognition weekly/monthly snapshots are no longer auto-scheduled
+  // (2026-08-07) — "Employee of the Week/Month" is now an Admin-only manual
+  // pick (see POST /recognition/publish). runRecognitionSnapshot() stays
+  // callable on demand via POST /recognition/recompute so an admin can
+  // refresh the reference leaderboard before picking a winner.
 
   console.log("[cron] in-process scheduler started");
 }

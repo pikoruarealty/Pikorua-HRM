@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
+import { DatePicker } from "@/components/ui/date-picker";
 import { EmployeeAvatar } from "@/components/employees/employee-avatar";
 
 // Lead/Admin "what is everyone doing right now" live view (companion to the
@@ -74,11 +75,10 @@ export function TeamTaskProgressPanel() {
     <Card>
       <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 space-y-0">
         <CardTitle>Team task progress</CardTitle>
-        <input
-          type="date"
-          className="flex h-9 rounded-md border border-input bg-background px-3 py-1 text-sm"
+        <DatePicker
           value={date}
-          onChange={(e) => e.target.value && setDate(e.target.value)}
+          onChange={(v) => v && setDate(v)}
+          className="h-9 w-auto"
         />
       </CardHeader>
       <CardContent className="flex flex-col gap-3">

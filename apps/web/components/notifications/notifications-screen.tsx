@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { apiFetch } from "@/components/_lib/api";
+import { formatDateTime } from "@/lib/format-date";
 
 type Notification = {
   id: string;
@@ -147,7 +148,7 @@ export function NotificationsScreen() {
                     {n.message}
                   </p>
                   <p className="mt-1.5 text-xs text-muted-foreground">
-                    {new Date(n.createdAt).toLocaleString()}
+                    {formatDateTime(n.createdAt)}
                   </p>
                 </div>
               </div>

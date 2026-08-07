@@ -29,7 +29,7 @@ export function WorkUnitsScreen() {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [departmentId, setDepartmentId] = useState("");
-  const [teamLeadId, setTeamLeadId] = useState("");
+  const [projectLeadId, setProjectLeadId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -54,7 +54,7 @@ export function WorkUnitsScreen() {
         name,
         description: description || undefined,
         departmentId,
-        teamLeadId: teamLeadId || undefined,
+        projectLeadId: projectLeadId || undefined,
       }),
     });
     setLoading(false);
@@ -64,7 +64,7 @@ export function WorkUnitsScreen() {
     }
     setName("");
     setDescription("");
-    setTeamLeadId("");
+    setProjectLeadId("");
     refresh();
   }
 
@@ -112,10 +112,10 @@ export function WorkUnitsScreen() {
               />
             </div>
             <div className="flex flex-col gap-1.5 sm:col-span-2">
-              <Label>Team Lead (optional, Leads default to self)</Label>
+              <Label>Project Lead (optional, defaults to self)</Label>
               <Select
-                value={teamLeadId || "__self__"}
-                onValueChange={(v) => setTeamLeadId(v === "__self__" ? "" : v)}
+                value={projectLeadId || "__self__"}
+                onValueChange={(v) => setProjectLeadId(v === "__self__" ? "" : v)}
               >
                 <SelectTrigger>
                   <SelectValue />

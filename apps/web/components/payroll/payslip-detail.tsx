@@ -2,13 +2,20 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
+import { PayslipVisual } from "@/components/payroll/payslip-visual";
 
 type PayslipDetail = {
   id: string;
-  employee: { id: string; fullName: string };
+  employee: {
+    id: string;
+    fullName: string;
+    email?: string;
+    role?: string;
+    department?: { name: string } | null;
+  };
   periodMonth: number;
   periodYear: number;
   baseSalary: string;
@@ -94,7 +101,7 @@ export function PayslipDetail({ id, canFinalize }: { id: string; canFinalize: bo
           ← Payslips
         </Link>
       </div>
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">
             {payslip.employee.fullName} — {MONTH_NAMES[payslip.periodMonth - 1]} {payslip.periodYear}
@@ -113,61 +120,55 @@ export function PayslipDetail({ id, canFinalize }: { id: string; canFinalize: bo
         )}
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Breakdown</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <dl className="grid grid-cols-2 gap-x-8 gap-y-3 text-sm sm:grid-cols-3">
-            <Row
-              label="Earned base pay"
-              value={`₹${payslip.earnedBasePay}`}
-              sub={`present ${payslip.presentCount} · half-day ${payslip.halfDayCount} · paid leave ${payslip.paidLeaveCount} · holiday ${payslip.holidayCount} · compensation ${payslip.compensationCount} (of ₹${payslip.baseSalary} base salary)`}
-            />
-            <Row label="Incentive" value={`+₹${payslip.incentiveAmount}`} />
-            <Row
-              label="Bonus"
-              value={`+₹${payslip.bonusAmount}`}
-              sub={payslip.bonusReason ?? undefined}
-            />
-            {payslip.otherAdditionAmount && (
-              <Row
-                label="Other addition"
-                value={`+₹${payslip.otherAdditionAmount}`}
-                sub={payslip.otherAdditionReason ?? undefined}
-              />
-            )}
-            <Row label="Reimbursement" value={`+₹${payslip.reimbursementTotal}`} />
-            <Row
-              label="Late deduction"
-              value={`−₹${payslip.lateDeductionTotal}`}
-              sub={`${payslip.lateCount} late occurrence(s)`}
-            />
-            {payslip.otherDeductionAmount && (
-              <Row
-                label="Other deduction"
-                value={`−₹${payslip.otherDeductionAmount}`}
-                sub={payslip.otherDeductionReason ?? undefined}
-              />
-            )}
-            <Row label="Unpaid leave / absent (unpaid)" value={`${payslip.unpaidLeaveCount} / ${payslip.absentCount}`} />
-            <div className="col-span-full mt-2 border-t pt-3">
-              <dt className="text-muted-foreground">Net pay</dt>
-              <dd className="text-xl font-bold">₹{payslip.netPay}</dd>
-            </div>
-          </dl>
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
+      {/* Visual preview of the actual document — draft or finalized — with
+          Download following it (finalized only; drafts have nothing to
+          export yet). */}
+      <PayslipVisual
+        payslip={{
+          employee: {
+            fullName: payslip.employee.fullName,
+            email: payslip.employee.email,
+            role: payslip.employee.role,
+            departmentName: payslip.employee.department?.name ?? null,
+          },
+          periodMonth: payslip.periodMonth,
+          periodYear: payslip.periodYear,
+          baseSalary: Number(payslip.baseSalary),
+          earnedBasePay: Number(payslip.earnedBasePay),
+          presentCount: payslip.presentCount,
+          halfDayCount: payslip.halfDayCount,
+          paidLeaveCount: payslip.paidLeaveCount,
+          holidayCount: payslip.holidayCount,
+          compensationCount: payslip.compensationCount,
+          unpaidLeaveCount: payslip.unpaidLeaveCount,
+          absentCount: payslip.absentCount,
+          lateCount: payslip.lateCount,
+          incentiveAmount: Number(payslip.incentiveAmount),
+          bonusAmount: Number(payslip.bonusAmount),
+          bonusReason: payslip.bonusReason,
+          otherAdditionAmount: payslip.otherAdditionAmount !== null ? Number(payslip.otherAdditionAmount) : null,
+          otherAdditionReason: payslip.otherAdditionReason,
+          lateDeductionTotal: Number(payslip.lateDeductionTotal),
+          otherDeductionAmount: payslip.otherDeductionAmount !== null ? Number(payslip.otherDeductionAmount) : null,
+          otherDeductionReason: payslip.otherDeductionReason,
+          reimbursementTotal: Number(payslip.reimbursementTotal),
+          netPay: Number(payslip.netPay),
+          generatedAt: payslip.generatedAt,
+          status: payslip.status,
+        }}
+      />
 
-function Row({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <div>
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd className="font-medium">{value}</dd>
-      {sub && <p className="text-xs text-muted-foreground">{sub}</p>}
+      {payslip.status === "finalized" && (
+        <div className="mx-auto">
+          <a
+            href={`/api/v1/payslips/${id}/pdf`}
+            download
+            className={cn(buttonVariants({ variant: "outline" }))}
+          >
+            Download PDF
+          </a>
+        </div>
+      )}
     </div>
   );
 }

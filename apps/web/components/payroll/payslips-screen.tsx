@@ -105,6 +105,18 @@ export function PayslipsScreen({
     }
   }
 
+  // Draft-only: re-run the payslip math against current employee/attendance
+  // data (e.g. the salary was edited after this draft was generated).
+  async function recompute(id: string) {
+    setError(null);
+    try {
+      await getJson(await fetch(`/api/v1/payslips/${id}/recompute`, { method: "POST" }));
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to recompute draft.");
+    }
+  }
+
   async function load() {
     setLoading(true);
     try {
@@ -187,6 +199,18 @@ export function PayslipsScreen({
                             }}
                           >
                             Unfinalize
+                          </Button>
+                        )}
+                        {canGenerate && p.status === "draft" && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              recompute(p.id);
+                            }}
+                          >
+                            Recompute
                           </Button>
                         )}
                         {isAdmin && p.status === "draft" && (
@@ -634,8 +658,7 @@ function PayslipComputation({
           </Table>
         </div>
         <p className="mt-2 text-xs text-muted-foreground">
-          Earned base pay = {totalPayableDays} payable days × ₹{rupees(preview.perDayRate)}/day (base
-          salary ₹{rupees(preview.baseSalary)} ÷ 30) = ₹{rupees(preview.earnedBasePay)}
+          Earned base pay = {totalPayableDays} payable days × ₹{rupees(preview.perDayRate)}/day = ₹{rupees(preview.earnedBasePay)}
         </p>
       </div>
 

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -26,7 +27,7 @@ type OverviewRow = {
   photoUrl: string | null;
   team: { id: string; name: string } | null;
   department: { id: string; name: string } | null;
-  status: "present" | "half_day" | "on_leave" | "absent" | "holiday";
+  status: "present" | "half_day" | "on_leave" | "absent" | "holiday" | "weekly_off";
   late: boolean;
   leaveType: string | null;
   clockIn: string | null;
@@ -44,6 +45,7 @@ type Overview = {
     halfDay: number;
     onLeave: number;
     absent: number;
+    weeklyOff: number;
     late: number;
     pendingApproval: number;
   };
@@ -56,6 +58,7 @@ const STATUS_LABELS: Record<OverviewRow["status"], string> = {
   on_leave: "On leave",
   absent: "Absent",
   holiday: "Holiday",
+  weekly_off: "Weekly Off",
 };
 
 const STATUS_VARIANTS: Record<OverviewRow["status"], "default" | "secondary" | "destructive" | "outline"> = {
@@ -64,6 +67,7 @@ const STATUS_VARIANTS: Record<OverviewRow["status"], "default" | "secondary" | "
   on_leave: "outline",
   absent: "destructive",
   holiday: "secondary",
+  weekly_off: "secondary",
 };
 
 async function getJson(res: Response) {
@@ -105,6 +109,7 @@ export function AttendanceOverviewPanel() {
         { label: "Present", value: overview.counts.present },
         { label: "Half-day", value: overview.counts.halfDay },
         { label: "On leave", value: overview.counts.onLeave },
+        { label: "Weekly off", value: overview.counts.weeklyOff ?? 0 },
         { label: "Absent", value: overview.counts.absent, alert: overview.counts.absent > 0 && !overview.holiday },
         { label: "Late", value: overview.counts.late, alert: overview.counts.late > 0 },
         { label: "Pending approval", value: overview.counts.pendingApproval, alert: overview.counts.pendingApproval > 0 },
@@ -119,12 +124,11 @@ export function AttendanceOverviewPanel() {
           <Label htmlFor="overview_date" className="text-xs text-muted-foreground">
             Date
           </Label>
-          <Input
+          <DatePicker
             id="overview_date"
-            type="date"
-            className="w-auto"
+            className="h-9 w-auto"
             value={date}
-            onChange={(e) => e.target.value && setDate(e.target.value)}
+            onChange={(v) => v && setDate(v)}
           />
         </div>
       </CardHeader>

@@ -38,9 +38,15 @@ export type PayslipAmounts = {
 
 const HALF_DAY_FRACTION = 0.5;
 const DAYS_PER_MONTH = 30;
+const WEEKS_PER_MONTH = 52 / 12; // ~4.333333333333333 weeks/month (average weeks in a month)
 
-/** base_salary / 30 — the fixed-30-day-month per-day pay rate. */
-export function computePerDayRate(baseSalary: number): number {
+/** Computes the per-day pay rate:
+ *  - For part-time/intern with requiredDaysPerWeek set: baseSalary / (requiredDaysPerWeek * (52 / 12))
+ *  - For full-time / default: baseSalary / 30 (fixed 30-day-month convention). */
+export function computePerDayRate(baseSalary: number, requiredDaysPerWeek?: number | null): number {
+  if (requiredDaysPerWeek != null && requiredDaysPerWeek > 0 && requiredDaysPerWeek < 7) {
+    return baseSalary / (requiredDaysPerWeek * WEEKS_PER_MONTH);
+  }
   return baseSalary / DAYS_PER_MONTH;
 }
 

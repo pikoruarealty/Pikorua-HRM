@@ -11,7 +11,7 @@ import {
   Users,
   UserCheck,
   CalendarClock,
-  FileText,
+  CalendarOff,
   ShieldCheck,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -19,23 +19,42 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { apiFetch } from "@/components/_lib/api";
 import { cn } from "@/lib/utils";
+import { AdminProgressPanel } from "@/components/home/admin-progress-panel";
+import { EmployeeAvatar } from "@/components/employees/employee-avatar";
+import { formatDate } from "@/lib/format-date";
 
 type Me = { email: string; role: string; employeeId: string | null };
 type Notification = { id: string; readAt: string | null };
 type TodayEvents = {
   birthdays: { employeeId: string; fullName: string }[];
   anniversaries: { employeeId: string; fullName: string }[];
+  events: { employeeId: string | null; fullName: string | null; title: string }[];
 };
 type WorkItem = { id: string; status: "pending" | "wip" | "completed" };
 type RequestRow = { id: string; status: string };
 type Employee = { id: string; status: "active" | "inactive" };
 type Payslip = { id: string; periodMonth: number; periodYear: number; status: string };
 type Announcement = { id: string; title: string; createdAt: string };
-type AttendanceOverview = {
-  counts: { total: number; present: number; halfDay: number; onLeave: number; absent: number; late: number; pendingApproval: number };
+type AttendanceRow = {
+  employeeId: string;
+  fullName: string;
+  photoUrl: string | null;
+  status: "present" | "half_day" | "on_leave" | "absent" | "holiday" | "weekly_off";
+  leaveType: string | null;
 };
+type AttendanceOverview = {
+  counts: { total: number; present: number; halfDay: number; onLeave: number; absent: number; weeklyOff: number; late: number; pendingApproval: number };
+  rows: AttendanceRow[];
+};
+type Meeting = { id: string; title: string; scheduledAt: string; invitees: unknown[] };
 type DailySelection = { id: string };
-type AuditLog = { id: string; action: string; actor: { email: string } | null; createdAt: string };
+type PublishedPick = {
+  id: string;
+  periodType: "weekly" | "monthly";
+  employeeName: string;
+  departmentName: string;
+  publishedAt: string;
+};
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -82,11 +101,19 @@ export function HomeScreen({
   // Finance (Admin/HR) org-wide data.
   const [employees, setEmployees] = useState<Employee[] | null>(null);
   const [attendance, setAttendance] = useState<AttendanceOverview | null>(null);
-  const [draftPayslips, setDraftPayslips] = useState<number | null>(null);
 
   // Announcements (all roles) + audit trail (admin only).
   const [announcements, setAnnouncements] = useState<Announcement[] | null>(null);
-  const [auditLogs, setAuditLogs] = useState<AuditLog[] | null>(null);
+
+  // Upcoming meetings (all roles — the endpoint self-scopes: Admin/HR see
+  // every meeting, everyone else sees only ones they're invited to/created).
+  const [meetings, setMeetings] = useState<Meeting[] | null>(null);
+
+  // Employee of the Week/Month banner (2026-08-07) — admin-published picks,
+  // ~24h window server-side; dismissal is per pick-id in localStorage so it
+  // doesn't nag again this browser once acknowledged.
+  const [publishedPicks, setPublishedPicks] = useState<PublishedPick[]>([]);
+  const [dismissed, setDismissed] = useState<string[]>([]);
 
   useEffect(() => {
     // Fire each request independently; a forbidden/empty endpoint just leaves
@@ -104,6 +131,14 @@ export function HomeScreen({
     });
     apiFetch<TodayEvents>("/events/today").then((r) => setEvents(r.data));
     apiFetch<Announcement[]>("/announcements").then((r) => setAnnouncements(r.data ?? []));
+    apiFetch<Meeting[]>("/events/meetings").then((r) => setMeetings(r.data ?? []));
+    apiFetch<PublishedPick[]>("/recognition/published").then((r) => setPublishedPicks(r.data ?? []));
+    try {
+      const raw = window.localStorage.getItem("dismissed-eom-picks");
+      if (raw) setDismissed(JSON.parse(raw));
+    } catch {
+      // ignore — banner just won't remember dismissals this session
+    }
 
     if (hasEmployee) {
       apiFetch<WorkItem[]>("/work-items/mine").then((r) => setTasks(r.data ?? []));
@@ -126,26 +161,36 @@ export function HomeScreen({
     if (isFinance) {
       apiFetch<Employee[]>("/employees").then((r) => setEmployees(r.data ?? []));
       apiFetch<AttendanceOverview>("/attendance/overview").then((r) => setAttendance(r.data));
-      apiFetch<Payslip[]>("/payslips").then((r) =>
-        setDraftPayslips(r.data?.filter((p) => p.status === "draft").length ?? 0),
-      );
-    }
-
-    if (isAdmin) {
-      apiFetch<{ logs: AuditLog[] }>("/audit-logs?limit=5").then((r) =>
-        setAuditLogs(r.data?.logs ?? []),
-      );
     }
   }, [hasEmployee, isLead, isFinance, isAdmin]);
 
   const celebrations = [
     ...(events?.birthdays ?? []).map((b) => `🎉 ${b.fullName}'s birthday`),
     ...(events?.anniversaries ?? []).map((a) => `🎊 ${a.fullName}'s work anniversary`),
+    ...(events?.events ?? []).map((e) => `📌 ${e.fullName ? `${e.fullName} — ` : ""}${e.title}`),
   ];
+
+  function dismissPick(id: string) {
+    const next = [...dismissed, id];
+    setDismissed(next);
+    try {
+      window.localStorage.setItem("dismissed-eom-picks", JSON.stringify(next));
+    } catch {
+      // non-fatal — worst case it re-shows next reload
+    }
+  }
+  const visiblePicks = publishedPicks.filter((p) => !dismissed.includes(p.id));
 
   const openTasks = tasks?.filter((t) => t.status !== "completed").length ?? null;
   const pendingMyRequests = myRequests?.filter((r) => r.status === "pending").length ?? null;
   const activeHeadcount = employees?.filter((e) => e.status === "active").length ?? null;
+  const presentRows = attendance?.rows.filter((r) => r.status === "present" || r.status === "half_day") ?? [];
+  const onLeaveRows = attendance?.rows.filter((r) => r.status === "on_leave") ?? [];
+  const now = Date.now();
+  const upcomingMeetings = (meetings ?? [])
+    .filter((m) => new Date(m.scheduledAt).getTime() >= now)
+    .sort((a, b) => new Date(a.scheduledAt).getTime() - new Date(b.scheduledAt).getTime())
+    .slice(0, 5);
 
   return (
     <div className="flex flex-col gap-6">
@@ -172,6 +217,32 @@ export function HomeScreen({
         </Card>
       )}
 
+      {visiblePicks.length > 0 && (
+        <Card className="border-amber-400/50 bg-amber-50/50 dark:bg-amber-950/20">
+          <CardContent className="flex flex-col gap-2 py-4 text-sm">
+            {visiblePicks.map((p) => (
+              <div key={p.id} className="flex flex-wrap items-center justify-between gap-2">
+                <span>
+                  🏆{" "}
+                  <strong>
+                    {p.employeeName}
+                  </strong>{" "}
+                  is {p.periodType === "weekly" ? "Employee of the Week" : "Employee of the Month"} for{" "}
+                  {p.departmentName}!
+                </span>
+                <button
+                  type="button"
+                  onClick={() => dismissPick(p.id)}
+                  className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+                >
+                  Dismiss
+                </button>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Clock status — employees/leads/HR who clock in; not admin. */}
       {hasEmployee && !isAdmin && <ClockCard />}
 
@@ -186,18 +257,22 @@ export function HomeScreen({
               href="/my-tasks"
             />
           )}
-          <StatTile
-            icon={<Clock className="size-4" />}
-            label="Pending requests"
-            value={pendingMyRequests}
-            href="/requests"
-          />
-          <StatTile
-            icon={<Bell className="size-4" />}
-            label="Unread notifications"
-            value={unread}
-            href="/notifications"
-          />
+          {!isAdmin && (
+            <StatTile
+              icon={<Clock className="size-4" />}
+              label="Pending requests"
+              value={pendingMyRequests}
+              href="/requests"
+            />
+          )}
+          {!isAdmin && (
+            <StatTile
+              icon={<Bell className="size-4" />}
+              label="Unread notifications"
+              value={unread}
+              href="/notifications"
+            />
+          )}
           {!isAdmin && (
             <StatTile
               icon={<Award className="size-4" />}
@@ -237,38 +312,74 @@ export function HomeScreen({
         </section>
       )}
 
-      {/* Admin/HR org-wide tiles. */}
+      {/* Task progress — the changing, day-to-day view — comes first for
+          admins; the static "at a glance" counters below it. */}
+      {isAdmin && (
+        <section className="flex flex-col gap-3">
+          <h2 className="text-sm font-semibold text-muted-foreground">Task progress</h2>
+          <AdminProgressPanel />
+        </section>
+      )}
+
+      {/* Admin/HR org-wide tiles (2026-08-08 redesign, owner feedback):
+          Present today first (now a scrollable roster, not just a count),
+          then who's on leave today (only rendered when there's anyone —
+          avoids an empty card most days), Active headcount last since it
+          barely changes day to day. */}
       {isFinance && (
         <section className="flex flex-col gap-3">
           <h2 className="text-sm font-semibold text-muted-foreground">Company at a glance</h2>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className={cn("grid gap-4 sm:grid-cols-2", onLeaveRows.length > 0 && "lg:grid-cols-3")}>
+            <RosterCard
+              icon={<UserCheck className="size-4" />}
+              title="Present today"
+              count={attendance ? attendance.counts.present + attendance.counts.halfDay : null}
+              rows={presentRows}
+              emptyLabel="No one clocked in yet."
+              href="/attendance"
+            />
+            {onLeaveRows.length > 0 && (
+              <RosterCard
+                icon={<CalendarOff className="size-4" />}
+                title="On leave today"
+                count={onLeaveRows.length}
+                rows={onLeaveRows}
+                subLabel={(r) => (r.leaveType === "leave_unpaid" ? "Unpaid" : "Paid")}
+                emptyLabel=""
+                href="/attendance"
+              />
+            )}
             <StatTile
               icon={<Users className="size-4" />}
               label="Active headcount"
               value={activeHeadcount}
               href="/employees"
             />
-            <StatTile
-              icon={<UserCheck className="size-4" />}
-              label="Present today"
-              value={attendance ? attendance.counts.present + attendance.counts.halfDay : null}
-              hint={attendance ? `${attendance.counts.absent} absent · ${attendance.counts.onLeave} on leave` : undefined}
-              href="/attendance"
-            />
-            <StatTile
-              icon={<Inbox className="size-4" />}
-              label="Pending approvals"
-              value={pendingApprovals}
-              hint={attendance ? `${attendance.counts.pendingApproval} attendance to review` : undefined}
-              href="/requests"
-            />
-            <StatTile
-              icon={<FileText className="size-4" />}
-              label="Draft payslips"
-              value={draftPayslips}
-              href="/payslips"
-            />
           </div>
+        </section>
+      )}
+
+      {/* Upcoming meetings — dynamic by nature, only shown when there's
+          something coming up. Self-scoped by the API: Admin/HR see every
+          meeting, everyone else only what they're invited to. */}
+      {upcomingMeetings.length > 0 && (
+        <section className="flex flex-col gap-3">
+          <h2 className="text-sm font-semibold text-muted-foreground">Upcoming meetings</h2>
+          <Card>
+            <CardContent className="flex flex-col divide-y py-2">
+              {upcomingMeetings.map((m) => (
+                <div key={m.id} className="flex items-center justify-between gap-3 py-2 text-sm">
+                  <span className="flex items-center gap-2 truncate">
+                    <CalendarClock className="size-4 shrink-0 text-muted-foreground" />
+                    {m.title}
+                  </span>
+                  <span className="shrink-0 text-xs text-muted-foreground">
+                    {formatMeetingWhen(m.scheduledAt)}
+                  </span>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
         </section>
       )}
 
@@ -285,7 +396,7 @@ export function HomeScreen({
                 <li key={a.id} className="flex items-center justify-between gap-3 py-2 text-sm">
                   <span className="truncate">{a.title}</span>
                   <span className="shrink-0 text-xs text-muted-foreground">
-                    {new Date(a.createdAt).toLocaleDateString()}
+                    {formatDate(a.createdAt)}
                   </span>
                 </li>
               ))}
@@ -293,34 +404,24 @@ export function HomeScreen({
           )}
         </Panel>
 
-        {/* Latest payslip for the individual; audit trail for admins. */}
+        {/* Latest payslip for the individual; a compact link for admins —
+            the live feed moved out in favor of the task-progress charts
+            above (2026-08-07 dashboard redesign). */}
         {isAdmin ? (
-          <Panel title="Recent activity" href="/audit" linkLabel="Audit log">
-            {auditLogs === null ? (
-              <p className="text-sm text-muted-foreground">Loading…</p>
-            ) : auditLogs.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No audited activity yet.</p>
-            ) : (
-              <ul className="flex flex-col divide-y">
-                {auditLogs.map((l) => (
-                  <li key={l.id} className="flex items-center justify-between gap-3 py-2 text-sm">
-                    <span className="flex items-center gap-2 truncate">
-                      <ShieldCheck className="size-3.5 shrink-0 text-muted-foreground" />
-                      <span className="truncate font-mono text-xs">{l.action}</span>
-                      {l.actor && (
-                        <span className="truncate text-xs text-muted-foreground">
-                          {l.actor.email}
-                        </span>
-                      )}
-                    </span>
-                    <span className="shrink-0 text-xs text-muted-foreground">
-                      {new Date(l.createdAt).toLocaleDateString()}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Panel>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Audit trail</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <Link
+                href="/audit"
+                className="flex items-center gap-2 text-sm text-primary hover:underline"
+              >
+                <ShieldCheck className="size-4" />
+                View audit log →
+              </Link>
+            </CardContent>
+          </Card>
         ) : (
           hasEmployee && (
             <Panel title="Latest payslip" href="/payslips" linkLabel="All payslips">
@@ -360,6 +461,18 @@ export function HomeScreen({
   );
 }
 
+function formatMeetingWhen(iso: string): string {
+  const d = new Date(iso);
+  const today = new Date();
+  const isToday = d.toDateString() === today.toDateString();
+  const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  if (isToday) return `Today, ${time}`;
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  if (d.toDateString() === tomorrow.toDateString()) return `Tomorrow, ${time}`;
+  return `${d.toLocaleDateString(undefined, { day: "2-digit", month: "short" })}, ${time}`;
+}
+
 function greeting() {
   const h = new Date().getHours();
   if (h < 12) return "Good morning";
@@ -368,6 +481,12 @@ function greeting() {
 }
 
 type TodayAttendance = { date: string; clockInRaw: string | null; clockOutRaw: string | null };
+type WeeklyOffStatus = {
+  canClaimToday: boolean;
+  offToday: boolean;
+  usedThisWeek: boolean;
+  move: { id: string; date: string } | null;
+};
 
 function fmtDuration(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000));
@@ -378,15 +497,23 @@ function fmtDuration(ms: number): string {
 }
 
 /** Employee clock-status card: clocked in/out, live elapsed, total today +
- *  current session (equal until breaks land — the split is wired now). */
+ *  current session (equal until breaks land — the split is wired now).
+ *  When the employee hasn't clocked in yet and is eligible, also shows a
+ *  "Take Weekly Off" button that posts to /attendance/weekly-off. */
 function ClockCard() {
   const [rec, setRec] = useState<TodayAttendance | null | undefined>(undefined);
   const [now, setNow] = useState(() => Date.now());
+  const [weeklyOff, setWeeklyOff] = useState<WeeklyOffStatus | null>(null);
+  const [claiming, setClaiming] = useState(false);
+  const [claimError, setClaimError] = useState<string | null>(null);
 
   useEffect(() => {
     apiFetch<TodayAttendance[]>("/attendance").then((r) => {
       const today = new Date().toISOString().slice(0, 10);
       setRec((r.data ?? []).find((a) => a.date.slice(0, 10) === today) ?? null);
+    });
+    apiFetch<WeeklyOffStatus>("/attendance/weekly-off").then((r) => {
+      if (r.data) setWeeklyOff(r.data);
     });
   }, []);
 
@@ -404,8 +531,23 @@ function ClockCard() {
   const elapsedMs =
     rec?.clockInRaw != null
       ? (rec.clockOutRaw ? new Date(rec.clockOutRaw).getTime() : now) -
-        new Date(rec.clockInRaw).getTime()
+      new Date(rec.clockInRaw).getTime()
       : 0;
+
+  async function claimWeeklyOff() {
+    setClaiming(true);
+    setClaimError(null);
+    try {
+      const res = await fetch("/api/v1/attendance/weekly-off", { method: "POST" });
+      const json = await res.json();
+      if (json.error) throw new Error(json.error.message);
+      setWeeklyOff(json.data);
+    } catch (e) {
+      setClaimError(e instanceof Error ? e.message : "Failed to claim weekly off.");
+    } finally {
+      setClaiming(false);
+    }
+  }
 
   return (
     <Card>
@@ -416,23 +558,55 @@ function ClockCard() {
           <Badge variant={ticking ? "default" : "outline"}>
             {rec === undefined
               ? "…"
-              : clockedOut
-                ? "clocked out"
-                : clockedIn
-                  ? "clocked in"
-                  : "not clocked in"}
+              : weeklyOff?.offToday
+                ? "weekly off"
+                : clockedOut
+                  ? "clocked out"
+                  : clockedIn
+                    ? "clocked in"
+                    : "not clocked in"}
           </Badge>
         </CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-3 text-sm">
         {rec === undefined ? (
           <p className="text-muted-foreground">Loading…</p>
+        ) : weeklyOff?.offToday ? (
+          <>
+            <p className="text-muted-foreground">
+              {weeklyOff.move
+                ? "You've taken your weekly off today. Enjoy your day!"
+                : "Today is your team's default weekly off day."}
+            </p>
+            {weeklyOff.move && (
+              <p className="text-xs text-muted-foreground">
+                To come in today, ask Admin/HR to revert your weekly off first.
+              </p>
+            )}
+          </>
         ) : !clockedIn ? (
           <>
             <p className="text-muted-foreground">You haven&apos;t clocked in today.</p>
-            <Link href="/planning" className="w-fit">
-              <Button>Clock In</Button>
-            </Link>
+            <div className="flex flex-wrap gap-2">
+              <Link href="/planning" className="w-fit">
+                <Button>Clock In</Button>
+              </Link>
+              {weeklyOff?.canClaimToday && (
+                <Button
+                  variant="outline"
+                  disabled={claiming}
+                  onClick={claimWeeklyOff}
+                >
+                  {claiming ? "Claiming…" : "Take Weekly Off"}
+                </Button>
+              )}
+            </div>
+            {claimError && <p className="text-xs text-destructive">{claimError}</p>}
+            {weeklyOff?.usedThisWeek && !weeklyOff.offToday && (
+              <p className="text-xs text-muted-foreground">
+                Weekly off already used this week (on {weeklyOff.move?.date ?? "another day"}).
+              </p>
+            )}
           </>
         ) : (
           <div className="flex flex-col gap-3">
@@ -492,6 +666,56 @@ function StatTile({
         </CardContent>
       </Card>
     </Link>
+  );
+}
+
+/** Compact stat header + a scrollable roster of who makes up that count
+ *  (2026-08-08 dashboard redesign) — replaces a bare number tile with an
+ *  actually useful "who" view, without needing a separate page visit. */
+function RosterCard({
+  icon,
+  title,
+  count,
+  rows,
+  subLabel,
+  emptyLabel,
+  href,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  count: number | null;
+  rows: AttendanceRow[];
+  subLabel?: (r: AttendanceRow) => string;
+  emptyLabel: string;
+  href: string;
+}) {
+  return (
+    <Card className="h-full">
+      <CardContent className="flex flex-col gap-2 py-4">
+        <Link href={href} className="flex items-center justify-between gap-2 hover:underline">
+          <span className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+            {icon}
+            {title}
+          </span>
+          <span className="text-2xl font-bold">{count === null ? "—" : count}</span>
+        </Link>
+        {rows.length === 0 ? (
+          emptyLabel && <p className="text-xs text-muted-foreground">{emptyLabel}</p>
+        ) : (
+          <ul className="flex max-h-40 flex-col divide-y overflow-y-auto">
+            {rows.map((r) => (
+              <li key={r.employeeId} className="flex items-center gap-2 py-1.5 text-sm">
+                <EmployeeAvatar fullName={r.fullName} photoUrl={r.photoUrl} size="sm" />
+                <span className="truncate">{r.fullName}</span>
+                {subLabel && (
+                  <span className="ml-auto shrink-0 text-xs text-muted-foreground">{subLabel(r)}</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

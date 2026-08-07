@@ -18,8 +18,10 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   if (!workUnit || workUnit.deletedAt) return failFor(ErrorCode.NOT_FOUND);
 
   const role = session.role;
-  const isOwningLead = isLeadRole(role) && session.employeeId === workUnit.teamLeadId;
-  if (!isFinanceRole(role) && !isOwningLead) {
+  // Project lead can be any employee (2026-08-07) — ownership is just "am I
+  // the assigned projectLeadId", not gated to Lead roles anymore.
+  const isProjectLead = session.employeeId === workUnit.projectLeadId;
+  if (!isFinanceRole(role) && !isProjectLead) {
     // Don't reveal existence of WorkUnits outside the caller's scope.
     if (!isLeadRole(role)) return failFor(ErrorCode.FORBIDDEN);
     return failFor(ErrorCode.NOT_FOUND);

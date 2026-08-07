@@ -2,16 +2,21 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmployeeAttendancePanel } from "@/components/attendance/employee-attendance-panel";
 import { EmployeeWorkPanel } from "@/components/employees/employee-work-panel";
 import { EmployeeTaskActivityPanel } from "@/components/employees/employee-task-activity-panel";
 import { EmployeeAvatar } from "@/components/employees/employee-avatar";
+import { EmployeeEventsPanel } from "@/components/employees/employee-events-panel";
+import { EmployeeLeaveBalancePanel } from "@/components/employees/employee-leave-balance-panel";
+import { formatDate } from "@/lib/format-date";
 import { ImageCropModal, isSquare } from "@/components/employees/image-cropper";
 import {
   EmployeeRequestsPanel,
@@ -25,6 +30,9 @@ type Employee = {
   email: string;
   phone: string | null;
   role: string;
+  employmentType?: "fulltime" | "parttime" | "intern";
+  requiredDaysPerWeek?: number | null;
+  defaultWeeklyOffDay?: number | null;
   departmentId: string | null;
   teamId: string | null;
   status: "active" | "inactive";
@@ -37,7 +45,7 @@ type Employee = {
 };
 
 type Department = { id: string; name: string };
-type Team = { id: string; name: string; departmentId: string };
+type Team = { id: string; name: string; departmentId: string; defaultWeeklyOffDay?: number };
 
 const ROLES = [
   "admin",
@@ -49,8 +57,16 @@ const ROLES = [
   "bde",
 ];
 
+const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
 function humanizeRole(role: string) {
   return role.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function humanizeEmploymentType(type?: string) {
+  if (type === "parttime") return "Part-time";
+  if (type === "intern") return "Intern";
+  return "Full-time";
 }
 
 class ApiError extends Error {
@@ -92,8 +108,19 @@ export function EmployeeDetail({
   const [baseSalary, setBaseSalary] = useState("");
   const [deviceUid, setDeviceUid] = useState("");
   const [role, setRole] = useState("");
+  const [employmentType, setEmploymentType] = useState<"fulltime" | "parttime" | "intern">("fulltime");
+  const [requiredDaysPerWeek, setRequiredDaysPerWeek] = useState("");
+  const [defaultWeeklyOffDay, setDefaultWeeklyOffDay] = useState("__default__");
+  const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [dateOfBirth, setDateOfBirth] = useState("");
+  const [dateOfJoining, setDateOfJoining] = useState("");
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [hardDeleteError, setHardDeleteError] = useState<string | null>(null);
+  const [hardDeleting, setHardDeleting] = useState(false);
+  const router = useRouter();
 
   async function load() {
     setLoading(true);
@@ -115,6 +142,14 @@ export function EmployeeDetail({
       setBaseSalary(emp.baseSalary ?? "");
       setDeviceUid(emp.deviceUid?.toString() ?? "");
       setRole(emp.role);
+      setEmploymentType(emp.employmentType ?? "fulltime");
+      setRequiredDaysPerWeek(emp.requiredDaysPerWeek?.toString() ?? "");
+      setDefaultWeeklyOffDay(emp.defaultWeeklyOffDay !== null && emp.defaultWeeklyOffDay !== undefined ? String(emp.defaultWeeklyOffDay) : "__default__");
+      setFullName(emp.fullName);
+      setEmail(emp.email);
+      setPhone(emp.phone ?? "");
+      setDateOfBirth(emp.dateOfBirth ? emp.dateOfBirth.slice(0, 10) : "");
+      setDateOfJoining(emp.dateOfJoining.slice(0, 10));
     } catch (e) {
       setLoadError({
         code: e instanceof ApiError ? e.code : "INTERNAL",
@@ -148,6 +183,14 @@ export function EmployeeDetail({
             team_id: teamId || null,
             base_salary: Number(baseSalary),
             device_uid: deviceUid ? Number(deviceUid) : null,
+            employment_type: employmentType,
+            required_days_per_week: employmentType !== "fulltime" && requiredDaysPerWeek ? Number(requiredDaysPerWeek) : null,
+            default_weekly_off_day: defaultWeeklyOffDay !== "__default__" ? Number(defaultWeeklyOffDay) : null,
+            full_name: fullName,
+            email,
+            phone: phone || null,
+            date_of_birth: dateOfBirth || null,
+            date_of_joining: dateOfJoining,
             ...(roleChanged ? { role } : {}),
           }),
         }),
@@ -187,6 +230,26 @@ export function EmployeeDetail({
     load();
   }
 
+  async function onHardDelete() {
+    if (
+      !confirm(
+        "Permanently delete this employee? This cannot be undone and only works if they have zero attendance/payslip/request/task history.",
+      )
+    ) {
+      return;
+    }
+    setHardDeleting(true);
+    setHardDeleteError(null);
+    try {
+      await getJson(await fetch(`/api/v1/employees/${employeeId}/hard-delete`, { method: "DELETE" }));
+      router.push("/employees");
+    } catch (e) {
+      setHardDeleteError(e instanceof Error ? e.message : "Failed to permanently delete employee.");
+    } finally {
+      setHardDeleting(false);
+    }
+  }
+
   if (loading) return <p className="text-sm text-muted-foreground">Loading…</p>;
   if (loadError && !employee) {
     return (
@@ -207,6 +270,8 @@ export function EmployeeDetail({
   if (!employee) return null;
 
   const teamsInDepartment = teams.filter((t) => t.departmentId === departmentId);
+  const employeeTeam = teams.find((t) => t.id === employee.teamId);
+  const effectiveOffDay = employee.defaultWeeklyOffDay ?? employeeTeam?.defaultWeeklyOffDay ?? 0;
 
   return (
     <div className="flex flex-col gap-6">
@@ -224,9 +289,12 @@ export function EmployeeDetail({
             {canManage && <PhotoReplaceControl employeeId={employee.id} onUploaded={load} />}
           </div>
         </div>
-        <Badge variant={employee.status === "active" ? "default" : "secondary"}>
-          {employee.status}
-        </Badge>
+        <div className="flex items-center gap-2">
+          <Badge variant="outline">{humanizeEmploymentType(employee.employmentType)}</Badge>
+          <Badge variant={employee.status === "active" ? "default" : "secondary"}>
+            {employee.status}
+          </Badge>
+        </div>
       </div>
 
       <Card>
@@ -239,16 +307,32 @@ export function EmployeeDetail({
             {humanizeRole(employee.role)}
           </div>
           <div>
+            <span className="text-muted-foreground">Employment type: </span>
+            {humanizeEmploymentType(employee.employmentType)}
+            {employee.employmentType !== "fulltime" && employee.requiredDaysPerWeek && (
+              <span className="text-muted-foreground"> ({employee.requiredDaysPerWeek} days/wk)</span>
+            )}
+          </div>
+          <div>
+            <span className="text-muted-foreground">Weekly off day: </span>
+            {DAY_NAMES[effectiveOffDay]}
+            {employee.defaultWeeklyOffDay !== null && employee.defaultWeeklyOffDay !== undefined ? (
+              <span className="text-xs text-muted-foreground"> (employee override)</span>
+            ) : (
+              <span className="text-xs text-muted-foreground"> (team default)</span>
+            )}
+          </div>
+          <div>
             <span className="text-muted-foreground">Phone: </span>
             {employee.phone ?? "—"}
           </div>
           <div>
             <span className="text-muted-foreground">Date of birth: </span>
-            {employee.dateOfBirth ? new Date(employee.dateOfBirth).toLocaleDateString() : "—"}
+            {formatDate(employee.dateOfBirth)}
           </div>
           <div>
             <span className="text-muted-foreground">Date of joining: </span>
-            {new Date(employee.dateOfJoining).toLocaleDateString()}
+            {formatDate(employee.dateOfJoining)}
           </div>
           <div>
             <span className="text-muted-foreground">Department: </span>
@@ -260,7 +344,7 @@ export function EmployeeDetail({
           </div>
           <div>
             <span className="text-muted-foreground">On record since: </span>
-            {new Date(employee.createdAt).toLocaleDateString()}
+            {formatDate(employee.createdAt)}
           </div>
           {canManage && (
             <div>
@@ -278,6 +362,97 @@ export function EmployeeDetail({
           </CardHeader>
           <CardContent>
             <form onSubmit={onSave} className="grid gap-4 sm:grid-cols-2">
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="full_name">Full name</Label>
+                <Input
+                  id="full_name"
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="email">Email</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                />
+                <p className="text-xs text-muted-foreground">
+                  Also updates their login email.
+                </p>
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="phone">Phone</Label>
+                <Input id="phone" value={phone} onChange={(e) => setPhone(e.target.value)} />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="date_of_birth">Date of birth</Label>
+                <DatePicker id="date_of_birth" value={dateOfBirth} onChange={setDateOfBirth} />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="date_of_joining">Date of joining</Label>
+                <DatePicker id="date_of_joining" value={dateOfJoining} onChange={setDateOfJoining} required />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="employment_type">Employment Type</Label>
+                <Select
+                  value={employmentType}
+                  onValueChange={(v: "fulltime" | "parttime" | "intern") => {
+                    setEmploymentType(v);
+                    if (v !== "fulltime" && !requiredDaysPerWeek) {
+                      setRequiredDaysPerWeek(v === "intern" ? "6" : "3");
+                    }
+                  }}
+                >
+                  <SelectTrigger id="employment_type">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="fulltime">Full-time</SelectItem>
+                    <SelectItem value="parttime">Part-time</SelectItem>
+                    <SelectItem value="intern">Intern</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {employmentType !== "fulltime" && (
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="required_days">Required Days / Week</Label>
+                  <Input
+                    id="required_days"
+                    type="number"
+                    min="1"
+                    max="7"
+                    value={requiredDaysPerWeek}
+                    onChange={(e) => setRequiredDaysPerWeek(e.target.value)}
+                    placeholder="e.g. 3"
+                    required
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Days required per week (resets weekly, flexible attendance).
+                  </p>
+                </div>
+              )}
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="default_weekly_off_day">Weekly Off Day (Override)</Label>
+                <Select value={defaultWeeklyOffDay} onValueChange={setDefaultWeeklyOffDay}>
+                  <SelectTrigger id="default_weekly_off_day">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__default__">Default (from team / Sunday)</SelectItem>
+                    <SelectItem value="0">Sunday</SelectItem>
+                    <SelectItem value="1">Monday</SelectItem>
+                    <SelectItem value="2">Tuesday</SelectItem>
+                    <SelectItem value="3">Wednesday</SelectItem>
+                    <SelectItem value="4">Thursday</SelectItem>
+                    <SelectItem value="5">Friday</SelectItem>
+                    <SelectItem value="6">Saturday</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
               <div className="flex flex-col gap-2">
                 <Label htmlFor="department_id">Department</Label>
                 <Select
@@ -373,11 +548,17 @@ export function EmployeeDetail({
         </Card>
       )}
 
+      {canManage && <EmployeeEventsPanel employeeId={employeeId} />}
+
       {canViewAttendance && <EmployeeAttendancePanel employeeId={employeeId} />}
 
       {canViewAttendance && <EmployeeWorkPanel employeeId={employeeId} />}
 
       {canViewAttendance && <EmployeeTaskActivityPanel employeeId={employeeId} />}
+
+      {/* Leave balance: Admin/HR viewing anyone, or the employee viewing
+          their own — same tenure-prorated numbers either way. */}
+      {(canManage || isSelf) && <EmployeeLeaveBalancePanel employeeId={employeeId} />}
 
       {/* Requests are server-scoped (Admin/HR all, Lead own team, Employee
           self); amounts are golden-rule data so only Admin/HR/self see them. */}
@@ -387,20 +568,32 @@ export function EmployeeDetail({
           enforced server-side). Leads viewing teammates get no panel at all. */}
       {(canManage || isSelf) && <EmployeePayslipsPanel employeeId={employeeId} />}
 
-      <div className="flex gap-3">
-        {isAdmin && employee.status === "active" && (
-          <Button variant="destructive" onClick={onDeactivate} className="w-fit">
-            Deactivate employee
-          </Button>
-        )}
-        {/* Reactivation uses PATCH (status field), which is FINANCE_ROLES-gated
-            on the API side, same as the rest of the edit form above — not
-            Admin-only like deactivation (DELETE), so canManage is the right check. */}
-        {canManage && employee.status === "inactive" && (
-          <Button onClick={onReactivate} className="w-fit">
-            Reactivate employee
-          </Button>
-        )}
+      <div className="flex flex-col gap-2">
+        <div className="flex gap-3">
+          {isAdmin && employee.status === "active" && (
+            <Button variant="destructive" onClick={onDeactivate} className="w-fit">
+              Deactivate employee
+            </Button>
+          )}
+          {/* Reactivation uses PATCH (status field), which is FINANCE_ROLES-gated
+              on the API side, same as the rest of the edit form above — not
+              Admin-only like deactivation (DELETE), so canManage is the right check. */}
+          {canManage && employee.status === "inactive" && (
+            <Button onClick={onReactivate} className="w-fit">
+              Reactivate employee
+            </Button>
+          )}
+          {/* Permanent removal — Admin-only, only reachable once deactivated,
+              and blocked server-side unless the employee has zero history
+              (attendance/payslip/request/task/etc.) — real employees stay
+              soft-deleted only. */}
+          {isAdmin && employee.status === "inactive" && (
+            <Button variant="destructive" onClick={onHardDelete} disabled={hardDeleting} className="w-fit">
+              {hardDeleting ? "Deleting…" : "Delete permanently"}
+            </Button>
+          )}
+        </div>
+        {hardDeleteError && <p className="text-sm text-destructive">{hardDeleteError}</p>}
       </div>
     </div>
   );

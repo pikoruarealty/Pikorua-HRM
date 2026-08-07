@@ -38,6 +38,12 @@ enum EmployeeStatus {
   inactive
 }
 
+enum EmploymentType {
+  fulltime
+  parttime
+  intern
+}
+
 enum WorkItemMode {
   atomic
   metric
@@ -108,6 +114,10 @@ enum EventType {
   birthday
   anniversary
   meeting
+  // Admin/HR-logged milestone tied to one employee (e.g. work anniversary
+  // note, custom recognition date) — distinct from `meeting` which requires
+  // invitees. Added 2026-08-07 for the employee-events feature.
+  custom
 }
 
 // ===========================================================================
@@ -143,6 +153,7 @@ model User {
   createdHolidays      Holiday[]        @relation("HolidayCreator")
   pushTokens           PushToken[]
   resetTokens          PasswordResetToken[]
+  revertedWeeklyOffMoves WeeklyOffMove[] @relation("WeeklyOffMoveReverter")
 
   @@map("users")
 }
@@ -199,10 +210,22 @@ model Team {
   name         String
   teamLeadId   String?  @map("team_lead_id") @db.Uuid
   teamLead     Employee? @relation("TeamLead", fields: [teamLeadId], references: [id])
-  // "HH:MM" 24h, server-local time. Admin/HR-set per team; null = no fixed
-  // start time configured, so late-tracking is skipped for that team's
-  // attendance records (Track A decision, 2026-07-13 — see docs/TRACK_A_TASKS.md).
-  expectedStartTime String? @map("expected_start_time")
+  // "HH:MM" 24h, server-local time. Admin/HR-set per team; defaults to
+  // "11:00" unless explicitly customized (owner request, 2026-08-08 — team
+  // creation/edit UI always sends a value now). Still nullable at the schema
+  // level: null = no fixed start time configured, so late-tracking is
+  // skipped for that team's attendance records (Track A decision,
+  // 2026-07-13 — see docs/TRACK_A_TASKS.md) — that escape hatch stays
+  // available via direct API calls even though the UI no longer offers it.
+  expectedStartTime String? @default("11:00") @map("expected_start_time")
+  // Day of week this team is off by default (owner request, 2026-08-08).
+  // 0=Sunday..6=Saturday (matches JS Date#getUTCDay()). Defaults to Sunday —
+  // the old hardcoded rule in lib/attendance/monthly-breakdown.ts — but is
+  // now per-team and editable in the team create/edit UI, same pattern as
+  // expectedStartTime. An individual employee can self-declare a one-off
+  // WeeklyOffMove to a different day for a given week without changing the
+  // team's default.
+  defaultWeeklyOffDay Int @default(0) @map("default_weekly_off_day")
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   members       Employee[]     @relation("TeamMembers")
@@ -230,12 +253,15 @@ model Employee {
   photoUrl      String?  @map("photo_url")
   deviceUid     Int?     @map("device_uid") // reserved for future device-sync phase
   status        EmployeeStatus @default(active)
+  employmentType      EmploymentType @default(fulltime) @map("employment_type")
+  requiredDaysPerWeek Int?           @map("required_days_per_week") // 1-6 for parttime/intern; null for standard fulltime
+  defaultWeeklyOffDay Int?           @map("default_weekly_off_day") // 0=Sun..6=Sat; overrides Team.defaultWeeklyOffDay if set
   createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   user               User?
   ledTeams           Team[]               @relation("TeamLead")
-  ledWorkUnits       WorkUnit[]           @relation("WorkUnitLead")
+  ledWorkUnits       WorkUnit[]           @relation("WorkUnitProjectLead")
   assignedWorkItems  WorkItem[]           @relation("WorkItemAssignee")
   dailySelections    DailyTaskSelection[]
   pointLedger        EmployeePointLedger[]
@@ -247,6 +273,7 @@ model Employee {
   assets             Asset[]
   eventsAbout        Event[]              @relation("EventSubject")
   eventInvitees      EventInvitee[]
+  weeklyOffMoves     WeeklyOffMove[]
 
   @@map("employees")
 }
@@ -264,8 +291,12 @@ model WorkUnit {
   // (POST /work-units/:id/generate-tasks) which proposes SubUnits + WorkItems
   // from this description. Optional; null = no brief captured yet.
   description  String?
-  teamLeadId   String   @map("team_lead_id") @db.Uuid
-  teamLead     Employee @relation("WorkUnitLead", fields: [teamLeadId], references: [id])
+  // Renamed from teamLeadId 2026-08-07: a WorkUnit's lead can now be any
+  // employee (not just a tech_lead/sales_lead role) — see lib/rbac's
+  // canAssignAtOrBelow hierarchy helper. Not to be confused with the
+  // unrelated, unchanged Team.teamLeadId (actual org-team leadership).
+  projectLeadId String   @map("project_lead_id") @db.Uuid
+  projectLead   Employee @relation("WorkUnitProjectLead", fields: [projectLeadId], references: [id])
   status       WorkUnitStatus @default(active)
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   // Soft delete — kept for audit trail (points ledger / recognition history
@@ -372,6 +403,13 @@ model AttendanceRecord {
   clockOutApproved DateTime? @map("clock_out_approved") @db.Timestamptz(6)
   totalHours       Decimal? @map("total_hours") @db.Decimal(4, 2)
   isHalfDay        Boolean  @default(false) @map("is_half_day")
+  // Manual admin override (2026-08-07): marks an otherwise-normal present
+  // day as a compensation day (e.g. an employee came in to make up for a
+  // leave taken elsewhere), independent of the automatic Sunday-clock-in
+  // detection in lib/attendance/monthly-breakdown.ts. Both paths feed the
+  // same `compensationDays` bucket — this just adds a second, manual way to
+  // land in it for a weekday that isn't otherwise a day off.
+  isCompensation   Boolean  @default(false) @map("is_compensation")
   approvalStatus   AttendanceApprovalStatus @default(pending) @map("approval_status")
   approvedById     String?  @map("approved_by") @db.Uuid // must be admin/hr
   approvedBy       User?    @relation("AttendanceApprover", fields: [approvedById], references: [id])
@@ -383,6 +421,38 @@ model AttendanceRecord {
   @@unique([employeeId, date])
   @@index([approvalStatus])
   @@map("attendance_records")
+}
+
+// Per-employee weekly-off override (owner request, 2026-08-08). Each team has
+// a default off day (Team.defaultWeeklyOffDay, Sunday unless customized); an
+// employee can self-declare ONE day off per week that differs from the
+// team's default (e.g. team is off Sunday, one person needs Wednesday off
+// that week instead) via POST /attendance/weekly-off — only while not yet
+// clocked in that day, and only once per week (unique on
+// employeeId+weekStart; claiming again the same week overwrites the pending
+// date). While `active`, that date gets the same treatment Sunday already
+// gets in lib/attendance/monthly-breakdown.ts (skipped as a working day;
+// clocking in anyway auto-lands it in compensationDays) — and the team's
+// default day-of-week is NOT treated as off for that employee that week.
+// Admin/HR can revert a move (POST .../:id/revert) to fall back to the
+// team's default for that week — this is also how a claimed day that the
+// employee ends up clocking in on gets reclassified as a normal present day
+// instead of a compensation day: revert first, then the clock-in just falls
+// into normal present/half-day classification.
+model WeeklyOffMove {
+  id           String    @id @default(uuid()) @db.Uuid
+  employeeId   String    @map("employee_id") @db.Uuid
+  employee     Employee  @relation(fields: [employeeId], references: [id])
+  weekStart    DateTime  @map("week_start") @db.Date // Monday of the ISO week this applies to
+  date         DateTime  @db.Date // the day now serving as this employee's off day that week
+  active       Boolean   @default(true)
+  revertedById String?   @map("reverted_by") @db.Uuid
+  revertedBy   User?     @relation("WeeklyOffMoveReverter", fields: [revertedById], references: [id])
+  revertedAt   DateTime? @map("reverted_at") @db.Timestamptz(6)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@unique([employeeId, weekStart])
+  @@map("weekly_off_moves")
 }
 
 // NOTE: `device_punch_raw` from SCHEMA.md §3 is intentionally NOT modeled —
@@ -408,6 +478,23 @@ model PayrollConfig {
   effectiveFrom        DateTime @map("effective_from") @db.Date
 
   @@map("payroll_config")
+}
+
+// Admin-configurable paid-leave allowance (2026-08-07). Versioned like
+// PayrollConfig — each edit inserts a new row rather than overwriting, so a
+// balance computed for a past period reflects the allowance that was
+// actually in force then, not whatever the admin later changed it to.
+model LeaveConfig {
+  id                         String   @id @default(uuid()) @db.Uuid
+  paidLeavesPerMonth         Int      @map("paid_leaves_per_month")
+  paidLeavesPerYear          Int      @map("paid_leaves_per_year")
+  partTimePaidLeavesPerMonth Int      @default(0) @map("part_time_paid_leaves_per_month")
+  partTimePaidLeavesPerYear  Int      @default(0) @map("part_time_paid_leaves_per_year")
+  internPaidLeavesPerMonth   Int      @default(0) @map("intern_paid_leaves_per_month")
+  internPaidLeavesPerYear    Int      @default(0) @map("intern_paid_leaves_per_year")
+  effectiveFrom              DateTime @map("effective_from") @db.Date
+
+  @@map("leave_config")
 }
 
 model Payslip {
@@ -495,8 +582,16 @@ model RecognitionSnapshot {
   score            Decimal  @db.Decimal(14, 2)
   rank             Int
   isEmployeeOfMonth Boolean @default(false) @map("is_employee_of_month")
+  // 2026-08-07: auto-computation no longer sets isEmployeeOfMonth on its own
+  // (see lib/cron/recognition.ts) — it's now Admin-only, via POST
+  // /recognition/publish. selectedManually distinguishes an admin pick from
+  // legacy/pre-migration rows; publishedAt drives the ~24h dashboard banner
+  // window (GET /recognition/published).
+  selectedManually Boolean  @default(false) @map("selected_manually")
+  publishedAt      DateTime? @map("published_at") @db.Timestamptz(6)
 
   @@index([periodType, periodStart, departmentId])
+  @@index([isEmployeeOfMonth, publishedAt])
   @@map("recognition_snapshots")
 }
 

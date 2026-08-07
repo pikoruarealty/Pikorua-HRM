@@ -5,6 +5,7 @@ import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { isLateArrival, todayDateOnly } from "@/lib/attendance/time";
 import { getLatestPayrollConfig } from "@/lib/payroll/config";
 import { EmployeeStatus, RequestStatus, RequestType } from "@prisma/client";
+import { isOffDay, weekStartOf, buildMovedOffDateByWeek } from "@/lib/attendance/week";
 
 // Track A (2026-07-15). GET /api/v1/attendance/overview?date=YYYY-MM-DD —
 // Admin/HR only. The "glance" view of a single day: present / half-day /
@@ -14,9 +15,10 @@ import { EmployeeStatus, RequestStatus, RequestType } from "@prisma/client";
 // Status resolution per active employee, in order:
 //   attendance row (clock-in) → present (half_day if flagged, late if the
 //   team's expected start time was missed) → else approved leave covering
-//   the date → on_leave (paid/unpaid) → else holiday → absent.
+//   the date → on_leave (paid/unpaid) → else holiday → else weekly_off
+//   (team default day-of-week OR active WeeklyOffMove for the week) → absent.
 
-type EmployeeDayStatus = "present" | "half_day" | "on_leave" | "absent" | "holiday";
+type EmployeeDayStatus = "present" | "half_day" | "on_leave" | "absent" | "holiday" | "weekly_off";
 
 export async function GET(req: Request) {
   const session = await getSession();
@@ -37,14 +39,16 @@ export async function GET(req: Request) {
     return failFor(ErrorCode.VALIDATION, "date is not a valid calendar date.");
   }
 
-  const [employees, records, leaves, holiday] = await Promise.all([
+  const weekStart = weekStartOf(date);
+
+  const [employees, records, leaves, holiday, moves] = await Promise.all([
     prisma.employee.findMany({
       where: { status: EmployeeStatus.active },
       select: {
         id: true,
         fullName: true,
         photoUrl: true,
-        team: { select: { id: true, name: true, expectedStartTime: true } },
+        team: { select: { id: true, name: true, expectedStartTime: true, defaultWeeklyOffDay: true } },
         department: { select: { id: true, name: true } },
       },
       orderBy: { fullName: "asc" },
@@ -60,6 +64,12 @@ export async function GET(req: Request) {
       select: { employeeId: true, type: true },
     }),
     prisma.holiday.findUnique({ where: { date } }),
+    // Active weekly-off moves for the week containing this date. Keyed per
+    // employee so the classification loop can do a cheap per-employee lookup.
+    prisma.weeklyOffMove.findMany({
+      where: { active: true, weekStart },
+      select: { employeeId: true, weekStart: true, date: true },
+    }),
   ]);
 
   // Today's live view uses the current (latest) late-grace policy.
@@ -67,6 +77,13 @@ export async function GET(req: Request) {
 
   const recordByEmployee = new Map(records.map((r) => [r.employeeId, r]));
   const leaveByEmployee = new Map(leaves.map((l) => [l.employeeId, l.type]));
+  // Per-employee map of weekStart-key -> off-date-key for active moves this week.
+  const movesByEmployee = new Map<string, Map<string, string>>();
+  for (const m of moves) {
+    const empMap = movesByEmployee.get(m.employeeId) ?? new Map<string, string>();
+    empMap.set(m.weekStart.toISOString().slice(0, 10), m.date.toISOString().slice(0, 10));
+    movesByEmployee.set(m.employeeId, empMap);
+  }
 
   const rows = employees.map((e) => {
     const record = recordByEmployee.get(e.id);
@@ -82,6 +99,8 @@ export async function GET(req: Request) {
       status = "on_leave";
     } else if (holiday) {
       status = "holiday";
+    } else if (isOffDay(date, e.team?.defaultWeeklyOffDay ?? 0, movesByEmployee.get(e.id) ?? new Map())) {
+      status = "weekly_off";
     } else {
       status = "absent";
     }
@@ -108,6 +127,7 @@ export async function GET(req: Request) {
     halfDay: rows.filter((r) => r.status === "half_day").length,
     onLeave: rows.filter((r) => r.status === "on_leave").length,
     absent: rows.filter((r) => r.status === "absent").length,
+    weeklyOff: rows.filter((r) => r.status === "weekly_off").length,
     late: rows.filter((r) => r.late).length,
     pendingApproval: records.filter((r) => r.approvalStatus === "pending").length,
   };

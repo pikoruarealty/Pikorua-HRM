@@ -13,9 +13,15 @@ import { audit, clientIp } from "@/lib/audit";
 // for audit. total_hours/is_half_day are recomputed from the resulting
 // effective (approved-or-raw) times, since that's what payroll will read
 // once the record is approved.
+// is_compensation (2026-08-07): admin manual override — marks this record as
+// a compensation day (paid at the normal per-day rate, same as a Sunday
+// clock-in auto-detected in lib/attendance/monthly-breakdown.ts) regardless
+// of what day of the week it actually falls on. See that file's classifyMonth
+// for how this flag is combined with the automatic Sunday detection.
 const editSchema = z.object({
   clock_in_approved: z.string().datetime().nullable().optional(),
   clock_out_approved: z.string().datetime().nullable().optional(),
+  is_compensation: z.boolean().optional(),
 });
 
 export async function PATCH(
@@ -79,6 +85,7 @@ export async function PATCH(
       clockInApproved,
       clockOutApproved,
       ...(hours ? { totalHours: hours.totalHours, isHalfDay: hours.isHalfDay } : {}),
+      ...(parsed.data.is_compensation !== undefined ? { isCompensation: parsed.data.is_compensation } : {}),
     },
   });
 
@@ -94,6 +101,9 @@ export async function PATCH(
       clock_in_after: clockInApproved?.toISOString() ?? null,
       clock_out_before: existing.clockOutApproved?.toISOString() ?? null,
       clock_out_after: clockOutApproved?.toISOString() ?? null,
+      ...(parsed.data.is_compensation !== undefined
+        ? { is_compensation_before: existing.isCompensation, is_compensation_after: parsed.data.is_compensation }
+        : {}),
     },
     ip: clientIp(req),
   });

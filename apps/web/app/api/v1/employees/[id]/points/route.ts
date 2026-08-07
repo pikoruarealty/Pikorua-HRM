@@ -27,7 +27,15 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 
   const ledger = await prisma.employeePointLedger.findMany({
     where: { employeeId: employee.id },
-    include: { workItem: { select: { id: true, title: true } } },
+    include: {
+      workItem: {
+        select: {
+          id: true,
+          title: true,
+          subUnit: { select: { id: true, name: true, workUnit: { select: { id: true, name: true } } } },
+        },
+      },
+    },
     orderBy: { creditedAt: "desc" },
   });
 

@@ -11,7 +11,7 @@ const createSchema = z.object({
   name: z.string().min(1),
   description: z.string().max(5000).optional(),
   departmentId: z.string().uuid(),
-  teamLeadId: z.string().uuid().optional(),
+  projectLeadId: z.string().uuid().optional(),
   status: z.nativeEnum(WorkUnitStatus).optional(),
 });
 
@@ -36,7 +36,7 @@ export async function POST(req: Request) {
     return failFor(ErrorCode.VALIDATION, "name and departmentId are required.");
   }
   const { name, description, status } = parsed.data;
-  let { departmentId, teamLeadId } = parsed.data;
+  let { departmentId, projectLeadId } = parsed.data;
 
   const role = session!.role;
   const actingEmployeeId = session!.employeeId;
@@ -52,19 +52,20 @@ export async function POST(req: Request) {
     if (departmentId !== self.departmentId) {
       return failFor(ErrorCode.FORBIDDEN, "Leads can only create WorkUnits in their own department.");
     }
-    // Leads can only assign themselves as the team lead.
-    if (teamLeadId && teamLeadId !== actingEmployeeId) {
-      return failFor(ErrorCode.FORBIDDEN, "Leads can only assign themselves as team lead.");
+    // Leads can only assign themselves as the project lead.
+    if (projectLeadId && projectLeadId !== actingEmployeeId) {
+      return failFor(ErrorCode.FORBIDDEN, "Leads can only assign themselves as project lead.");
     }
-    teamLeadId = actingEmployeeId;
+    projectLeadId = actingEmployeeId;
   } else {
-    // Admin/HR: teamLeadId required, must reference a real employee.
-    if (!teamLeadId) {
-      return failFor(ErrorCode.VALIDATION, "teamLeadId is required.");
+    // Admin/HR: projectLeadId required, must reference a real employee — any
+    // role (not just Lead roles) can be the project lead (2026-08-07).
+    if (!projectLeadId) {
+      return failFor(ErrorCode.VALIDATION, "projectLeadId is required.");
     }
-    const lead = await prisma.employee.findUnique({ where: { id: teamLeadId } });
+    const lead = await prisma.employee.findUnique({ where: { id: projectLeadId } });
     if (!lead) {
-      return failFor(ErrorCode.VALIDATION, "teamLeadId does not reference an existing employee.");
+      return failFor(ErrorCode.VALIDATION, "projectLeadId does not reference an existing employee.");
     }
   }
 
@@ -78,7 +79,7 @@ export async function POST(req: Request) {
       name,
       description,
       departmentId,
-      teamLeadId: teamLeadId!,
+      projectLeadId: projectLeadId!,
       status: status ?? WorkUnitStatus.active,
     },
   });

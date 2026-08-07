@@ -34,7 +34,7 @@ type WorkUnitDetail = {
   status: string;
   description?: string | null;
   departmentId: string;
-  teamLeadId?: string | null;
+  projectLeadId?: string | null;
   subUnits: SubUnit[];
 };
 type Member = { id: string; fullName: string; role: string };
@@ -742,8 +742,10 @@ export function WorkUnitDetailScreen({
     router.push("/work");
   }
 
+  // Project lead can be any role now (2026-08-07) — ownership is purely
+  // "am I the assigned projectLeadId", not gated to Lead roles anymore.
   const canManage =
-    workUnit != null && (isFinance || (isLead && employeeId != null && employeeId === workUnit.teamLeadId));
+    workUnit != null && (isFinance || (employeeId != null && employeeId === workUnit.projectLeadId));
 
   // The assignable-members endpoint is Admin/HR/owning-lead only; fetch once we
   // know the caller can manage this unit.

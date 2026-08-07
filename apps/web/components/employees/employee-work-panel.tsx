@@ -7,9 +7,20 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { apiFetch } from "@/components/_lib/api";
+import { formatDate } from "@/lib/format-date";
 
 type Doc = { id: string; docType: string; fileUrl: string; uploadedAt: string };
-type LedgerEntry = { id: string; points: number; creditedAt: string; workItemId: string };
+type LedgerEntry = {
+  id: string;
+  points: number;
+  creditedAt: string;
+  workItemId: string;
+  workItem: {
+    id: string;
+    title: string;
+    subUnit: { id: string; name: string; workUnit: { id: string; name: string } } | null;
+  } | null;
+};
 type Points = { balance: number; ledger: LedgerEntry[] };
 type HistoryRow = {
   id: string;
@@ -79,12 +90,17 @@ export function EmployeeWorkPanel({ employeeId }: { employeeId: string }) {
               <span>
                 <Badge variant="outline">{d.docType}</Badge>{" "}
                 <span className="text-muted-foreground">
-                  {new Date(d.uploadedAt).toLocaleDateString()}
+                  {formatDate(d.uploadedAt)}
                 </span>
               </span>
-              <a href={d.fileUrl} className="text-sm underline" target="_blank" rel="noreferrer">
-                Download
-              </a>
+              <span className="flex items-center gap-3">
+                <a href={d.fileUrl} className="text-sm underline" target="_blank" rel="noreferrer">
+                  View
+                </a>
+                <a href={`${d.fileUrl}?download=1`} className="text-sm underline" download>
+                  Download
+                </a>
+              </span>
             </div>
           ))}
           <form onSubmit={upload} className="grid gap-2 sm:grid-cols-3">
@@ -120,11 +136,20 @@ export function EmployeeWorkPanel({ employeeId }: { employeeId: string }) {
               <p className="text-sm text-muted-foreground">No points credited yet.</p>
             )}
             {points.ledger.map((l) => (
-              <div key={l.id} className="flex items-center justify-between rounded border p-2 text-sm">
-                <span className="text-muted-foreground">
-                  {new Date(l.creditedAt).toLocaleDateString()}
+              <div key={l.id} className="flex items-center justify-between gap-3 rounded border p-2 text-sm">
+                <span className="flex min-w-0 flex-col">
+                  <span className="truncate font-medium">
+                    {l.workItem?.title ?? "(task deleted)"}
+                  </span>
+                  <span className="truncate text-xs text-muted-foreground">
+                    {l.workItem?.subUnit
+                      ? `${l.workItem.subUnit.workUnit.name} · ${l.workItem.subUnit.name}`
+                      : "—"}
+                    {" · "}
+                    {formatDate(l.creditedAt)}
+                  </span>
                 </span>
-                <span>+{l.points} pts</span>
+                <span className="shrink-0 font-medium">+{l.points} pts</span>
               </div>
             ))}
           </CardContent>

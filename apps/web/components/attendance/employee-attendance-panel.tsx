@@ -11,6 +11,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { formatDate } from "@/lib/format-date";
 
 type AttendanceRecord = {
   id: string;
@@ -150,7 +151,7 @@ export function EmployeeAttendancePanel({ employeeId }: { employeeId: string }) 
                 <TableBody>
                   {records.map((r) => (
                     <TableRow key={r.id}>
-                      <TableCell>{new Date(r.date).toLocaleDateString()}</TableCell>
+                      <TableCell>{formatDate(r.date)}</TableCell>
                       <TableCell>{fmtTime(r.clockInApproved ?? r.clockInRaw)}</TableCell>
                       <TableCell>{fmtTime(r.clockOutApproved ?? r.clockOutRaw)}</TableCell>
                       <TableCell>

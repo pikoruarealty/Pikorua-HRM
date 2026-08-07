@@ -4,7 +4,9 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { formatDate } from "@/lib/format-date";
 
 type PayrollConfig = {
   id: string;
@@ -113,7 +115,7 @@ export function PayrollConfigScreen({ canEdit }: { canEdit: boolean }) {
               <div>
                 <dt className="text-muted-foreground">Effective from</dt>
                 <dd className="font-medium">
-                  {new Date(config.effectiveFrom).toLocaleDateString()}
+                  {formatDate(config.effectiveFrom)}
                 </dd>
               </div>
             </dl>
@@ -170,14 +172,7 @@ export function PayrollConfigScreen({ canEdit }: { canEdit: boolean }) {
               </div>
               <div className="flex flex-col gap-2">
                 <Label htmlFor="effective">Effective from</Label>
-                <Input
-                  id="effective"
-                  type="date"
-                  required
-                  value={effectiveFrom}
-                  onChange={(e) => setEffectiveFrom(e.target.value)}
-                  className="w-40"
-                />
+                <DatePicker id="effective" required value={effectiveFrom} onChange={setEffectiveFrom} className="w-40" />
               </div>
               {saveError && <p className="w-full text-sm text-destructive">{saveError}</p>}
               <Button type="submit" disabled={submitting}>

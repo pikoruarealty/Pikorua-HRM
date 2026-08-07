@@ -2,12 +2,15 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Calendar } from "lucide-react";
+import { Calendar as CalendarIcon } from "lucide-react";
+import { parse, isValid } from "date-fns";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Calendar } from "@/components/ui/calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ImageCropModal, isSquare } from "@/components/employees/image-cropper";
 
 /** yyyy-mm-dd (ISO date) shown to the user as dd/mm/yyyy. */
@@ -42,18 +45,24 @@ function DateField({
   id,
   value,
   onChange,
+  required = true,
 }: {
   id: string;
   value: string;
   onChange: (iso: string) => void;
+  required?: boolean;
 }) {
   const [text, setText] = useState(isoToDisplay(value));
+  const [open, setOpen] = useState(false);
 
   // Keep the text mirror in sync when the ISO value changes from outside
-  // (e.g. the native picker) and the field isn't mid-edit.
+  // (e.g. the calendar popover) and the field isn't mid-edit.
   useEffect(() => {
     setText(isoToDisplay(value));
   }, [value]);
+
+  const selected = value ? parse(value, "yyyy-MM-dd", new Date()) : undefined;
+  const validSelected = selected && isValid(selected) ? selected : undefined;
 
   return (
     <div className="relative">
@@ -69,20 +78,36 @@ function DateField({
           if (iso) onChange(iso);
         }}
         onBlur={() => setText(isoToDisplay(value))}
-        required
+        required={required}
       />
-      <label
-        className="absolute inset-y-0 right-0 flex cursor-pointer items-center px-3 text-muted-foreground hover:text-foreground"
-        aria-label="Open date picker"
-      >
-        <Calendar className="size-4" />
-        <input
-          type="date"
-          className="sr-only"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-        />
-      </label>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            className="absolute inset-y-0 right-0 flex cursor-pointer items-center px-3 text-muted-foreground hover:text-foreground"
+            aria-label="Open date picker"
+          >
+            <CalendarIcon className="size-4" />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent className="w-auto p-0" align="end">
+          <Calendar
+            mode="single"
+            selected={validSelected}
+            defaultMonth={validSelected}
+            onSelect={(d) => {
+              if (d) {
+                const yyyy = d.getFullYear();
+                const mm = String(d.getMonth() + 1).padStart(2, "0");
+                const dd = String(d.getDate()).padStart(2, "0");
+                onChange(`${yyyy}-${mm}-${dd}`);
+              }
+              setOpen(false);
+            }}
+            initialFocus
+          />
+        </PopoverContent>
+      </Popover>
     </div>
   );
 }
@@ -115,9 +140,13 @@ export function EmployeeCreateForm() {
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [role, setRole] = useState("tech_employee");
+  const [employmentType, setEmploymentType] = useState<"fulltime" | "parttime" | "intern">("fulltime");
+  const [requiredDaysPerWeek, setRequiredDaysPerWeek] = useState("3");
+  const [defaultWeeklyOffDay, setDefaultWeeklyOffDay] = useState("__default__");
   const [departmentId, setDepartmentId] = useState("");
   const [teamId, setTeamId] = useState("");
   const [dateOfJoining, setDateOfJoining] = useState(todayIso());
+  const [dateOfBirth, setDateOfBirth] = useState("");
   const [baseSalary, setBaseSalary] = useState("");
   const [photo, setPhoto] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
@@ -179,9 +208,17 @@ export function EmployeeCreateForm() {
       form.set("email", email);
       if (phone) form.set("phone", phone);
       form.set("role", role);
+      form.set("employment_type", employmentType);
+      if (employmentType !== "fulltime" && requiredDaysPerWeek) {
+        form.set("required_days_per_week", requiredDaysPerWeek);
+      }
+      if (defaultWeeklyOffDay !== "__default__") {
+        form.set("default_weekly_off_day", defaultWeeklyOffDay);
+      }
       if (departmentId) form.set("department_id", departmentId);
       if (teamId) form.set("team_id", teamId);
       form.set("date_of_joining", dateOfJoining);
+      if (dateOfBirth) form.set("date_of_birth", dateOfBirth);
       form.set("base_salary", baseSalary);
       if (photo) form.set("photo", photo);
       const data = await getJson(
@@ -265,6 +302,63 @@ export function EmployeeCreateForm() {
             </Select>
           </div>
           <div className="flex flex-col gap-2">
+            <Label htmlFor="employment_type">Employment Type</Label>
+            <Select
+              value={employmentType}
+              onValueChange={(v: "fulltime" | "parttime" | "intern") => {
+                setEmploymentType(v);
+                if (v !== "fulltime" && !requiredDaysPerWeek) {
+                  setRequiredDaysPerWeek(v === "intern" ? "6" : "3");
+                }
+              }}
+            >
+              <SelectTrigger id="employment_type">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="fulltime">Full-time</SelectItem>
+                <SelectItem value="parttime">Part-time</SelectItem>
+                <SelectItem value="intern">Intern</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          {employmentType !== "fulltime" && (
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="required_days">Required Days / Week</Label>
+              <Input
+                id="required_days"
+                type="number"
+                min="1"
+                max="7"
+                value={requiredDaysPerWeek}
+                onChange={(e) => setRequiredDaysPerWeek(e.target.value)}
+                placeholder="e.g. 3"
+                required
+              />
+              <p className="text-xs text-muted-foreground">
+                Days required per week (resets weekly, flexible attendance).
+              </p>
+            </div>
+          )}
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="default_weekly_off_day">Weekly Off Day (Override)</Label>
+            <Select value={defaultWeeklyOffDay} onValueChange={setDefaultWeeklyOffDay}>
+              <SelectTrigger id="default_weekly_off_day">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__default__">Default (from team / Sunday)</SelectItem>
+                <SelectItem value="0">Sunday</SelectItem>
+                <SelectItem value="1">Monday</SelectItem>
+                <SelectItem value="2">Tuesday</SelectItem>
+                <SelectItem value="3">Wednesday</SelectItem>
+                <SelectItem value="4">Thursday</SelectItem>
+                <SelectItem value="5">Friday</SelectItem>
+                <SelectItem value="6">Saturday</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex flex-col gap-2">
             <Label htmlFor="department_id">Department</Label>
             <Select
               value={departmentId || "__none__"}
@@ -309,6 +403,15 @@ export function EmployeeCreateForm() {
           <div className="flex flex-col gap-2">
             <Label htmlFor="date_of_joining">Date of joining</Label>
             <DateField id="date_of_joining" value={dateOfJoining} onChange={setDateOfJoining} />
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="date_of_birth">Date of birth (optional)</Label>
+            <DateField
+              id="date_of_birth"
+              value={dateOfBirth}
+              onChange={setDateOfBirth}
+              required={false}
+            />
           </div>
           <div className="flex flex-col gap-2">
             <Label htmlFor="base_salary">Base salary</Label>

@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { apiFetch } from "@/components/_lib/api";
+import { formatDateTime } from "@/lib/format-date";
 
 type Announcement = {
   id: string;
@@ -237,7 +238,7 @@ export function AnnouncementsScreen({
                 </div>
                 <p className="text-muted-foreground">{a.body}</p>
                 <span className="text-xs text-muted-foreground">
-                  {new Date(a.createdAt).toLocaleString()}
+                  {formatDateTime(a.createdAt)}
                 </span>
               </div>
             </div>

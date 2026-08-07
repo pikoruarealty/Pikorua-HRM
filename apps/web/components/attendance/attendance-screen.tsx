@@ -18,6 +18,10 @@ import { AttendanceMonthlyPanel } from "@/components/attendance/attendance-month
 import { TeamTaskProgressPanel } from "@/components/attendance/team-task-progress-panel";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { DatePicker } from "@/components/ui/date-picker";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ChevronsUpDown, Search, X } from "lucide-react";
+import { formatDate, formatDateTime } from "@/lib/format-date";
 
 type AttendanceRecord = {
   id: string;
@@ -30,6 +34,7 @@ type AttendanceRecord = {
   clockOutApproved: string | null;
   totalHours: string | null;
   isHalfDay: boolean;
+  isCompensation: boolean;
   approvalStatus: "pending" | "approved";
 };
 
@@ -41,25 +46,19 @@ async function getJson(res: Response) {
 
 function fmt(iso: string | null) {
   if (!iso) return "—";
-  return new Date(iso).toLocaleString(undefined, {
-    dateStyle: "short",
-    timeStyle: "short",
-  });
+  return formatDateTime(iso);
 }
 
 export function AttendanceScreen({
   canReview,
   canSeeAll,
   employeeId,
-  isAdmin,
 }: {
-  /** Admin/HR — can edit + approve. */
+  /** Admin/HR — can edit + approve, and use the manual-record override form. */
   canReview: boolean;
   /** Admin/HR or Lead — sees more than just their own records. */
   canSeeAll: boolean;
   employeeId: string | null;
-  /** Admin only — manual-record override form. */
-  isAdmin: boolean;
 }) {
   return (
     <div className="flex flex-col gap-6">
@@ -80,7 +79,9 @@ export function AttendanceScreen({
 
       {canSeeAll && <TeamTaskProgressPanel />}
 
-      {isAdmin && <ManualRecordForm />}
+      {canReview && <ManualRecordSection />}
+
+      {canReview && <WeeklyOffMovesSection />}
 
       <AttendanceTable canReview={canReview} canSeeAll={canSeeAll} employeeId={employeeId} />
     </div>
@@ -180,7 +181,7 @@ function AttendanceTable({
                 <Fragment key={r.id}>
                   <TableRow>
                     {canSeeAll && <TableCell>{r.employee.fullName}</TableCell>}
-                    <TableCell>{new Date(r.date).toLocaleDateString()}</TableCell>
+                    <TableCell>{formatDate(r.date)}</TableCell>
                     <TableCell>{fmt(r.clockInApproved ?? r.clockInRaw)}</TableCell>
                     <TableCell>{fmt(r.clockOutApproved ?? r.clockOutRaw)}</TableCell>
                     <TableCell>
@@ -188,6 +189,11 @@ function AttendanceTable({
                       {r.isHalfDay && (
                         <Badge variant="secondary" className="ml-2">
                           Half-day
+                        </Badge>
+                      )}
+                      {r.isCompensation && (
+                        <Badge variant="outline" className="ml-2">
+                          Compensation
                         </Badge>
                       )}
                     </TableCell>
@@ -262,6 +268,7 @@ function EditRecordForm({
   const [clockOut, setClockOut] = useState(
     toLocalInputValue(record.clockOutApproved ?? record.clockOutRaw),
   );
+  const [isCompensation, setIsCompensation] = useState(record.isCompensation);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -277,6 +284,7 @@ function EditRecordForm({
           body: JSON.stringify({
             clock_in_approved: clockIn ? new Date(clockIn).toISOString() : null,
             clock_out_approved: clockOut ? new Date(clockOut).toISOString() : null,
+            is_compensation: isCompensation,
           }),
         }),
       );
@@ -308,6 +316,18 @@ function EditRecordForm({
           onChange={(e) => setClockOut(e.target.value)}
         />
       </div>
+      <div className="flex flex-col gap-2">
+        <label className="text-xs text-muted-foreground">&nbsp;</label>
+        <label className="flex h-9 cursor-pointer items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="size-4"
+            checked={isCompensation}
+            onChange={(e) => setIsCompensation(e.target.checked)}
+          />
+          Mark as compensation day
+        </label>
+      </div>
       {error && <p className="text-sm text-destructive">{error}</p>}
       <Button type="submit" size="sm" disabled={submitting}>
         {submitting ? "Saving…" : "Save"}
@@ -316,9 +336,143 @@ function EditRecordForm({
   );
 }
 
-// Admin-only override (2026-07-15): create/overwrite an attendance record by
-// hand for any employee/date — POST /api/v1/attendance/manual (audited,
-// written pre-approved with the admin as approver).
+// Admin/HR section (2026-08-08): view and revert employee self-declared
+// weekly-off moves. Only active moves are shown (already-reverted ones are
+// history, not actionable). Hidden entirely when no active moves exist so
+// it doesn't clutter the page on normal weeks.
+type WeeklyOffMove = {
+  id: string;
+  employee: { id: string; fullName: string };
+  weekStart: string;
+  date: string;
+};
+
+function WeeklyOffMovesSection() {
+  const [moves, setMoves] = useState<WeeklyOffMove[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [revertingId, setRevertingId] = useState<string | null>(null);
+
+  async function load() {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/v1/attendance/weekly-off/all");
+      const json = await res.json();
+      if (json.error) throw new Error(json.error.message);
+      setMoves(json.data ?? []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load weekly off claims.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function revert(id: string) {
+    if (!window.confirm("Revert this weekly off? The team's default day will apply and the employee will be notified.")) return;
+    setRevertingId(id);
+    setError(null);
+    try {
+      const res = await fetch(`/api/v1/attendance/weekly-off/${id}/revert`, { method: "POST" });
+      const json = await res.json();
+      if (json.error) throw new Error(json.error.message);
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to revert weekly off.");
+    } finally {
+      setRevertingId(null);
+    }
+  }
+
+  // Hide entirely when loading is done and there's nothing to show.
+  if (!loading && moves.length === 0 && !error) return null;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Weekly off claims</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {error && <p className="mb-3 text-sm text-destructive">{error}</p>}
+        {loading ? (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Employee</TableHead>
+                <TableHead>Week of</TableHead>
+                <TableHead>Claimed off date</TableHead>
+                <TableHead />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {moves.map((m) => (
+                <TableRow key={m.id}>
+                  <TableCell>{m.employee.fullName}</TableCell>
+                  <TableCell className="text-muted-foreground">{formatDate(m.weekStart)}</TableCell>
+                  <TableCell>
+                    <Badge variant="secondary">{formatDate(m.date)}</Badge>
+                  </TableCell>
+                  <TableCell>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={revertingId === m.id}
+                      onClick={() => revert(m.id)}
+                    >
+                      {revertingId === m.id ? "Reverting…" : "Revert"}
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// Admin/HR override (2026-08-07; widened from admin-only same day):
+// switches between the single-record form (unchanged) and the bulk
+// (multi-employee x multi-date) form.
+function ManualRecordSection() {
+  const [mode, setMode] = useState<"single" | "bulk">("single");
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between">
+        <CardTitle>Manual record (Admin/HR override)</CardTitle>
+        <div className="flex gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant={mode === "single" ? "default" : "outline"}
+            onClick={() => setMode("single")}
+          >
+            Single
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={mode === "bulk" ? "default" : "outline"}
+            onClick={() => setMode("bulk")}
+          >
+            Bulk add
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent>{mode === "single" ? <ManualRecordForm /> : <BulkManualRecordForm />}</CardContent>
+    </Card>
+  );
+}
+
+// Admin/HR override (2026-07-15; widened to HR 2026-08-07): create/overwrite
+// an attendance record by hand for any employee/date — POST
+// /api/v1/attendance/manual (audited, written pre-approved with the actor
+// as approver).
 function ManualRecordForm() {
   const [employees, setEmployees] = useState<{ id: string; fullName: string }[]>([]);
   const [employeeId, setEmployeeId] = useState("");
@@ -367,57 +521,369 @@ function ManualRecordForm() {
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Manual record (admin override)</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <form onSubmit={submit} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="manual_employee">Employee</Label>
-            <Select value={employeeId || "__none__"} onValueChange={(v) => setEmployeeId(v === "__none__" ? "" : v)}>
-              <SelectTrigger id="manual_employee">
-                <SelectValue placeholder="Select employee" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__none__">Select…</SelectItem>
-                {employees.map((e) => (
-                  <SelectItem key={e.id} value={e.id}>
-                    {e.fullName}
-                  </SelectItem>
+    <form onSubmit={submit} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="manual_employee">Employee</Label>
+        <Select value={employeeId || "__none__"} onValueChange={(v) => setEmployeeId(v === "__none__" ? "" : v)}>
+          <SelectTrigger id="manual_employee">
+            <SelectValue placeholder="Select employee" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__none__">Select…</SelectItem>
+            {employees.map((e) => (
+              <SelectItem key={e.id} value={e.id}>
+                {e.fullName}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="manual_date">Date</Label>
+        <DatePicker id="manual_date" value={date} onChange={setDate} required />
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="manual_in">Clock in</Label>
+        <Input id="manual_in" type="time" value={clockIn} onChange={(e) => setClockIn(e.target.value)} required />
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="manual_out">Clock out</Label>
+        <Input id="manual_out" type="time" value={clockOut} onChange={(e) => setClockOut(e.target.value)} />
+      </div>
+      <div className="flex flex-col gap-1.5 sm:col-span-2">
+        <Label htmlFor="manual_reason">Reason (audited)</Label>
+        <Input
+          id="manual_reason"
+          placeholder="e.g. forgot to clock in, device issue"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          required
+        />
+      </div>
+      {error && <p className="text-sm text-destructive sm:col-span-2 lg:col-span-3">{error}</p>}
+      {message && <p className="text-sm text-muted-foreground sm:col-span-2 lg:col-span-3">{message}</p>}
+      <Button type="submit" disabled={busy || !employeeId} className="w-fit">
+        {busy ? "Saving…" : "Save manual record"}
+      </Button>
+    </form>
+  );
+}
+
+// Admin/HR override (2026-08-07): bulk sibling of ManualRecordForm — pick
+// multiple employees + a date range, generate an employee x date grid with a
+// uniform default time that's still per-row editable, then submit the whole
+// grid to POST /attendance/manual/bulk in one call.
+type BulkRow = {
+  key: string;
+  employeeId: string;
+  employeeName: string;
+  date: string;
+  clockIn: string;
+  clockOut: string;
+};
+
+function dateRange(from: string, to: string): string[] {
+  if (!from || !to) return [];
+  const start = new Date(`${from}T00:00:00.000Z`);
+  const end = new Date(`${to}T00:00:00.000Z`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) return [];
+  const dates: string[] = [];
+  const cur = new Date(start);
+  while (cur <= end) {
+    dates.push(cur.toISOString().slice(0, 10));
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return dates;
+}
+
+function BulkManualRecordForm() {
+  const [employees, setEmployees] = useState<{ id: string; fullName: string }[]>([]);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [dateFrom, setDateFrom] = useState(() => new Date().toISOString().slice(0, 10));
+  const [dateTo, setDateTo] = useState(() => new Date().toISOString().slice(0, 10));
+  const [defaultIn, setDefaultIn] = useState("09:00");
+  const [defaultOut, setDefaultOut] = useState("18:00");
+  const [reason, setReason] = useState("");
+  const [rows, setRows] = useState<BulkRow[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      const res = await fetch("/api/v1/employees");
+      const json = await res.json();
+      if (json.data) setEmployees(json.data);
+    })();
+  }, []);
+
+  function generateRows() {
+    const dates = dateRange(dateFrom, dateTo);
+    const byId = new Map(employees.map((e) => [e.id, e.fullName]));
+    const next: BulkRow[] = [];
+    for (const empId of selectedIds) {
+      for (const d of dates) {
+        next.push({
+          key: `${empId}-${d}`,
+          employeeId: empId,
+          employeeName: byId.get(empId) ?? empId,
+          date: d,
+          clockIn: defaultIn,
+          clockOut: defaultOut,
+        });
+      }
+    }
+    setRows(next);
+    setMessage(null);
+    setError(null);
+  }
+
+  function updateRow(key: string, field: "clockIn" | "clockOut", value: string) {
+    setRows((prev) => (prev ? prev.map((r) => (r.key === key ? { ...r, [field]: value } : r)) : prev));
+  }
+
+  function removeRow(key: string) {
+    setRows((prev) => (prev ? prev.filter((r) => r.key !== key) : prev));
+  }
+
+  async function submitAll() {
+    if (!rows || rows.length === 0) return;
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const res = await fetch("/api/v1/attendance/manual/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reason,
+          records: rows.map((r) => ({
+            employee_id: r.employeeId,
+            date: r.date,
+            clock_in: new Date(`${r.date}T${r.clockIn}`).toISOString(),
+            clock_out: r.clockOut ? new Date(`${r.date}T${r.clockOut}`).toISOString() : undefined,
+          })),
+        }),
+      });
+      const json = await res.json();
+      if (json.error) throw new Error(json.error.message);
+      const { created, updated, failed } = json.data;
+      setMessage(
+        `${created} created, ${updated} updated${failed ? `, ${failed} failed` : ""}. Refresh the table below to see them.`,
+      );
+      setRows(null);
+      setReason("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save records.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="flex flex-col gap-1.5 sm:col-span-2 lg:col-span-4">
+          <Label>Employees</Label>
+          <EmployeeMultiSelect employees={employees} selectedIds={selectedIds} onChange={setSelectedIds} />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="bulk_from">Date from</Label>
+          <DatePicker id="bulk_from" value={dateFrom} onChange={setDateFrom} />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="bulk_to">Date to</Label>
+          <DatePicker id="bulk_to" value={dateTo} onChange={setDateTo} />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="bulk_in">Default clock in</Label>
+          <Input id="bulk_in" type="time" value={defaultIn} onChange={(e) => setDefaultIn(e.target.value)} />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="bulk_out">Default clock out</Label>
+          <Input id="bulk_out" type="time" value={defaultOut} onChange={(e) => setDefaultOut(e.target.value)} />
+        </div>
+        <div className="flex flex-col gap-1.5 sm:col-span-2 lg:col-span-3">
+          <Label htmlFor="bulk_reason">Reason (audited)</Label>
+          <Input
+            id="bulk_reason"
+            placeholder="e.g. backfilling device outage week"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+          />
+        </div>
+        <Button type="button" variant="outline" onClick={generateRows} disabled={selectedIds.length === 0} className="w-fit self-end">
+          Generate rows
+        </Button>
+      </div>
+
+      {rows && (
+        <div className="flex flex-col gap-3">
+          <p className="text-sm text-muted-foreground">
+            {rows.length} row(s) — edit any row&apos;s time before submitting, or remove it.
+          </p>
+          <div className="max-h-80 overflow-y-auto rounded-md border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Employee</TableHead>
+                  <TableHead>Date</TableHead>
+                  <TableHead>Clock in</TableHead>
+                  <TableHead>Clock out</TableHead>
+                  <TableHead />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rows.map((r) => (
+                  <TableRow key={r.key}>
+                    <TableCell>{r.employeeName}</TableCell>
+                    <TableCell>{r.date}</TableCell>
+                    <TableCell>
+                      <Input
+                        type="time"
+                        value={r.clockIn}
+                        onChange={(e) => updateRow(r.key, "clockIn", e.target.value)}
+                        className="h-8 w-28"
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Input
+                        type="time"
+                        value={r.clockOut}
+                        onChange={(e) => updateRow(r.key, "clockOut", e.target.value)}
+                        className="h-8 w-28"
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Button type="button" size="sm" variant="ghost" onClick={() => removeRow(r.key)}>
+                        Remove
+                      </Button>
+                    </TableCell>
+                  </TableRow>
                 ))}
-              </SelectContent>
-            </Select>
+              </TableBody>
+            </Table>
           </div>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="manual_date">Date</Label>
-            <Input id="manual_date" type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="manual_in">Clock in</Label>
-            <Input id="manual_in" type="time" value={clockIn} onChange={(e) => setClockIn(e.target.value)} required />
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="manual_out">Clock out</Label>
-            <Input id="manual_out" type="time" value={clockOut} onChange={(e) => setClockOut(e.target.value)} />
-          </div>
-          <div className="flex flex-col gap-1.5 sm:col-span-2">
-            <Label htmlFor="manual_reason">Reason (audited)</Label>
-            <Input
-              id="manual_reason"
-              placeholder="e.g. forgot to clock in, device issue"
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              required
+          {error && <p className="text-sm text-destructive">{error}</p>}
+          {message && <p className="text-sm text-muted-foreground">{message}</p>}
+          <Button
+            type="button"
+            onClick={submitAll}
+            disabled={busy || rows.length === 0 || !reason.trim()}
+            className="w-fit"
+          >
+            {busy ? "Saving…" : `Save ${rows.length} record(s)`}
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Searchable multi-select for the employee picker above — a flat wrap of
+// pills stopped scaling once the roster grows past a couple dozen people
+// (unbounded row count, no way to find one name quickly). This keeps
+// selection state on the outside (same value/onChange contract as before)
+// but renders as a single trigger + popover with a search box and a
+// scrollable checkbox list, so the picker's footprint stays constant
+// regardless of headcount.
+function EmployeeMultiSelect({
+  employees,
+  selectedIds,
+  onChange,
+}: {
+  employees: { id: string; fullName: string }[];
+  selectedIds: string[];
+  onChange: (ids: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+
+  const filtered = employees.filter((e) => e.fullName.toLowerCase().includes(query.trim().toLowerCase()));
+  const selectedSet = new Set(selectedIds);
+  const byId = new Map(employees.map((e) => [e.id, e.fullName]));
+
+  function toggle(id: string) {
+    onChange(selectedSet.has(id) ? selectedIds.filter((x) => x !== id) : [...selectedIds, id]);
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <Button
+            type="button"
+            variant="outline"
+            className="h-10 w-full justify-between gap-2 px-3 font-normal"
+          >
+            <span className={selectedIds.length === 0 ? "text-muted-foreground" : ""}>
+              {selectedIds.length === 0
+                ? "Select employees…"
+                : `${selectedIds.length} employee${selectedIds.length === 1 ? "" : "s"} selected`}
+            </span>
+            <ChevronsUpDown className="size-4 shrink-0 opacity-50" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+          <div className="flex items-center gap-2 border-b px-3 py-2">
+            <Search className="size-4 shrink-0 opacity-50" />
+            <input
+              autoFocus
+              placeholder="Search employees…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              className="h-7 w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
             />
           </div>
-          {error && <p className="text-sm text-destructive sm:col-span-2 lg:col-span-3">{error}</p>}
-          {message && <p className="text-sm text-muted-foreground sm:col-span-2 lg:col-span-3">{message}</p>}
-          <Button type="submit" disabled={busy || !employeeId} className="w-fit">
-            {busy ? "Saving…" : "Save manual record"}
-          </Button>
-        </form>
-      </CardContent>
-    </Card>
+          <div className="flex items-center justify-between gap-2 border-b px-3 py-1.5 text-xs text-muted-foreground">
+            <button
+              type="button"
+              className="underline"
+              onClick={() => onChange([...new Set([...selectedIds, ...filtered.map((e) => e.id)])])}
+            >
+              Select all{query ? " (filtered)" : ""}
+            </button>
+            <button type="button" className="underline" onClick={() => onChange([])}>
+              Clear
+            </button>
+          </div>
+          <div className="max-h-60 overflow-y-auto p-1">
+            {filtered.length === 0 ? (
+              <p className="px-2 py-3 text-center text-sm text-muted-foreground">No matches.</p>
+            ) : (
+              filtered.map((e) => (
+                <label
+                  key={e.id}
+                  className="flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent"
+                >
+                  <input
+                    type="checkbox"
+                    className="size-4 shrink-0"
+                    checked={selectedSet.has(e.id)}
+                    onChange={() => toggle(e.id)}
+                  />
+                  {e.fullName}
+                </label>
+              ))
+            )}
+          </div>
+        </PopoverContent>
+      </Popover>
+      {selectedIds.length > 0 && (
+        <div className="flex max-h-24 flex-wrap gap-1.5 overflow-y-auto">
+          {selectedIds.map((id) => (
+            <span
+              key={id}
+              className="flex items-center gap-1 rounded-full border border-input bg-background px-2 py-0.5 text-xs"
+            >
+              {byId.get(id) ?? id}
+              <button type="button" onClick={() => toggle(id)} aria-label={`Remove ${byId.get(id) ?? id}`}>
+                <X className="size-3" />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

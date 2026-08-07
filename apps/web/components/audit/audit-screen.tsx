@@ -13,6 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { formatDateTime } from "@/lib/format-date";
 import { apiFetch } from "@/components/_lib/api";
 
 type AuditLog = {
@@ -163,7 +164,7 @@ export function AuditScreen() {
                 <span className="font-medium">{log.actor?.email ?? "unauthenticated"}</span>
                 {log.actorRole && <span className="text-muted-foreground">({log.actorRole})</span>}
                 <span className="ml-auto text-xs text-muted-foreground">
-                  {new Date(log.createdAt).toLocaleString()}
+                  {formatDateTime(log.createdAt)}
                 </span>
               </div>
               {log.entityType && (

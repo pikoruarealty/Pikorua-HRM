@@ -1,9 +1,9 @@
 import { z } from "zod";
-import { Prisma, EmployeeStatus } from "@prisma/client";
+import { Prisma, EmployeeStatus, EmploymentType } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { FINANCE_ROLES, Role, isLeadRole } from "@/lib/rbac";
-import { ok, failFor, ErrorCode } from "@/lib/api/response";
+import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { audit, clientIp } from "@/lib/audit";
 import { withPhotoPath } from "@/lib/employees/photo";
 
@@ -17,6 +17,9 @@ const PUBLIC_SELECT = {
   departmentId: true,
   teamId: true,
   role: true,
+  employmentType: true,
+  requiredDaysPerWeek: true,
+  defaultWeeklyOffDay: true,
   dateOfBirth: true,
   dateOfJoining: true,
   deviceUid: true,
@@ -85,10 +88,20 @@ const patchSchema = z.object({
   team_id: z.string().uuid().nullable().optional(),
   status: z.nativeEnum(EmployeeStatus).optional(),
   device_uid: z.number().int().nullable().optional(),
+  employment_type: z.nativeEnum(EmploymentType).optional(),
+  required_days_per_week: z.number().int().min(1).max(7).nullable().optional(),
+  default_weekly_off_day: z.number().int().min(0).max(6).nullable().optional(),
   // Role change is a privilege-tier change: Admin-only (narrower than the
   // Admin/HR gate on the rest of this route), and handled specially below —
   // it also updates the linked User.role and revokes their sessions.
   role: z.nativeEnum(Role).optional(),
+  // 2026-08-07: previously permanently locked after creation — now
+  // Admin/HR-editable like everything else on this route.
+  full_name: z.string().min(1).optional(),
+  email: z.string().email().optional(),
+  phone: z.string().min(1).nullable().optional(),
+  date_of_birth: z.string().nullable().optional(),
+  date_of_joining: z.string().optional(),
 });
 
 export async function PATCH(
@@ -112,10 +125,7 @@ export async function PATCH(
 
   const parsed = patchSchema.safeParse(body);
   if (!parsed.success) {
-    return failFor(
-      ErrorCode.VALIDATION,
-      "Only base_salary, department_id, team_id, status, device_uid, role are editable.",
-    );
+    return failFor(ErrorCode.VALIDATION, "Invalid request body.");
   }
   const d = parsed.data;
 
@@ -141,10 +151,23 @@ export async function PATCH(
 
   const existing = await prisma.employee.findUnique({
     where: { id: params.id },
-    include: { user: { select: { id: true } } },
+    include: { user: { select: { id: true, email: true } } },
   });
   if (!existing) {
     return failFor(ErrorCode.NOT_FOUND, "Employee not found.");
+  }
+
+  // Email is @unique on both Employee and User — check both so a PATCH can't
+  // collide with someone else's login email either.
+  const emailChanged = d.email !== undefined && d.email !== existing.email;
+  if (emailChanged) {
+    const [emailOnEmployee, emailOnUser] = await Promise.all([
+      prisma.employee.findUnique({ where: { email: d.email } }),
+      prisma.user.findUnique({ where: { email: d.email } }),
+    ]);
+    if ((emailOnEmployee && emailOnEmployee.id !== params.id) || (emailOnUser && emailOnUser.id !== existing.user?.id)) {
+      return fail(ErrorCode.CONFLICT, "An employee with this email already exists.", 409);
+    }
   }
 
   const roleChanged = d.role !== undefined && d.role !== existing.role;
@@ -157,7 +180,17 @@ export async function PATCH(
       ...(d.team_id !== undefined ? { teamId: d.team_id } : {}),
       ...(d.status !== undefined ? { status: d.status } : {}),
       ...(d.device_uid !== undefined ? { deviceUid: d.device_uid } : {}),
+      ...(d.employment_type !== undefined ? { employmentType: d.employment_type } : {}),
+      ...(d.required_days_per_week !== undefined ? { requiredDaysPerWeek: d.required_days_per_week } : {}),
+      ...(d.default_weekly_off_day !== undefined ? { defaultWeeklyOffDay: d.default_weekly_off_day } : {}),
       ...(d.role !== undefined ? { role: d.role } : {}),
+      ...(d.full_name !== undefined ? { fullName: d.full_name } : {}),
+      ...(d.email !== undefined ? { email: d.email } : {}),
+      ...(d.phone !== undefined ? { phone: d.phone } : {}),
+      ...(d.date_of_birth !== undefined
+        ? { dateOfBirth: d.date_of_birth ? new Date(d.date_of_birth) : null }
+        : {}),
+      ...(d.date_of_joining !== undefined ? { dateOfJoining: new Date(d.date_of_joining) } : {}),
     },
     select: FINANCE_SELECT,
   });
@@ -165,10 +198,17 @@ export async function PATCH(
   // Keep the authorization source (User.role, read by getSession) in sync with
   // the display role, and bump tokenVersion so the employee's existing JWTs are
   // revoked — their next request forces a re-login under the new permission tier.
-  if (roleChanged && existing.user) {
+  // Email edits get the same treatment: User.email is the login identifier
+  // (see /auth/login), so it must track Employee.email or the employee's
+  // profile and login credentials silently diverge.
+  if ((roleChanged || emailChanged) && existing.user) {
     await prisma.user.update({
       where: { id: existing.user.id },
-      data: { role: d.role, tokenVersion: { increment: 1 } },
+      data: {
+        ...(roleChanged ? { role: d.role } : {}),
+        ...(emailChanged ? { email: d.email } : {}),
+        ...(roleChanged ? { tokenVersion: { increment: 1 } } : {}),
+      },
     });
   }
 
@@ -187,6 +227,7 @@ export async function PATCH(
         : {}),
       ...(d.status !== undefined ? { status_after: d.status } : {}),
       ...(roleChanged ? { role_before: existing.role, role_after: d.role } : {}),
+      ...(emailChanged ? { email_before: existing.email, email_after: d.email } : {}),
     },
     ip: clientIp(req),
   });

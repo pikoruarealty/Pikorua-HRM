@@ -18,7 +18,17 @@ export async function GET(
 
   const payslip = await prisma.payslip.findUnique({
     where: { id: params.id },
-    include: { employee: { select: { id: true, fullName: true } } },
+    include: {
+      employee: {
+        select: {
+          id: true,
+          fullName: true,
+          email: true,
+          role: true,
+          department: { select: { name: true } },
+        },
+      },
+    },
   });
   if (!payslip) {
     return failFor(ErrorCode.NOT_FOUND, "Payslip not found.");

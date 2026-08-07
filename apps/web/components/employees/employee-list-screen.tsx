@@ -30,6 +30,8 @@ type Employee = {
   photoUrl: string | null;
   email: string;
   role: string;
+  employmentType?: "fulltime" | "parttime" | "intern";
+  requiredDaysPerWeek?: number | null;
   departmentId: string | null;
   teamId: string | null;
   status: "active" | "inactive";
@@ -53,6 +55,12 @@ const ALL = "__all__";
 
 function humanizeRole(role: string) {
   return role.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function humanizeEmploymentType(type?: string) {
+  if (type === "parttime") return "Part-time";
+  if (type === "intern") return "Intern";
+  return "Full-time";
 }
 
 async function getJson(res: Response) {
@@ -79,6 +87,7 @@ export function EmployeeListScreen({ canManage }: { canManage: boolean }) {
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>(DEFAULT_STATUS);
   const [roleFilter, setRoleFilter] = useState<string>(ALL);
+  const [employmentTypeFilter, setEmploymentTypeFilter] = useState<string>(ALL);
   const [departmentFilter, setDepartmentFilter] = useState<string>(ALL);
   const [teamFilter, setTeamFilter] = useState<string>(ALL);
 
@@ -114,6 +123,7 @@ export function EmployeeListScreen({ canManage }: { canManage: boolean }) {
         if (debouncedSearch) params.set("q", debouncedSearch);
         if (statusFilter !== ALL) params.set("status", statusFilter);
         if (roleFilter !== ALL) params.set("role", roleFilter);
+        if (employmentTypeFilter !== ALL) params.set("employment_type", employmentTypeFilter);
         if (departmentFilter !== ALL) params.set("department_id", departmentFilter);
         if (teamFilter !== ALL) params.set("team_id", teamFilter);
         const qs = params.toString();
@@ -130,7 +140,7 @@ export function EmployeeListScreen({ canManage }: { canManage: boolean }) {
       }
     })();
     return () => controller.abort();
-  }, [debouncedSearch, statusFilter, roleFilter, departmentFilter, teamFilter]);
+  }, [debouncedSearch, statusFilter, roleFilter, employmentTypeFilter, departmentFilter, teamFilter]);
 
   // Teams selectable in the team filter narrow to the chosen department.
   const teamsForFilter = useMemo(
@@ -147,6 +157,7 @@ export function EmployeeListScreen({ canManage }: { canManage: boolean }) {
     search.trim() !== "" ||
     statusFilter !== DEFAULT_STATUS ||
     roleFilter !== ALL ||
+    employmentTypeFilter !== ALL ||
     departmentFilter !== ALL ||
     teamFilter !== ALL;
 
@@ -155,6 +166,7 @@ export function EmployeeListScreen({ canManage }: { canManage: boolean }) {
     setDebouncedSearch("");
     setStatusFilter(DEFAULT_STATUS);
     setRoleFilter(ALL);
+    setEmploymentTypeFilter(ALL);
     setDepartmentFilter(ALL);
     setTeamFilter(ALL);
   }
@@ -200,6 +212,17 @@ export function EmployeeListScreen({ canManage }: { canManage: boolean }) {
                     { value: ALL, label: "All statuses" },
                     { value: "active", label: "Active" },
                     { value: "inactive", label: "Inactive" },
+                  ]}
+                />
+                <FilterSelect
+                  label="Type"
+                  value={employmentTypeFilter}
+                  onChange={setEmploymentTypeFilter}
+                  options={[
+                    { value: ALL, label: "All types" },
+                    { value: "fulltime", label: "Full-time" },
+                    { value: "parttime", label: "Part-time" },
+                    { value: "intern", label: "Intern" },
                   ]}
                 />
                 <FilterSelect
@@ -270,6 +293,7 @@ export function EmployeeListScreen({ canManage }: { canManage: boolean }) {
                 <TableRow>
                   <TableHead>Name</TableHead>
                   <TableHead>Email</TableHead>
+                  <TableHead>Type</TableHead>
                   <TableHead>Role</TableHead>
                   {canManage && <TableHead>Department</TableHead>}
                   {canManage && <TableHead>Team</TableHead>}
@@ -291,6 +315,11 @@ export function EmployeeListScreen({ canManage }: { canManage: boolean }) {
                       </span>
                     </TableCell>
                     <TableCell>{e.email}</TableCell>
+                    <TableCell>
+                      <Badge variant="outline">
+                        {humanizeEmploymentType(e.employmentType)}
+                      </Badge>
+                    </TableCell>
                     <TableCell>{humanizeRole(e.role)}</TableCell>
                     {canManage && <TableCell>{deptName(e.departmentId)}</TableCell>}
                     {canManage && <TableCell>{teamName(e.teamId)}</TableCell>}

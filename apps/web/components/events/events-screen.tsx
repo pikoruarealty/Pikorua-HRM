@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { apiFetch } from "@/components/_lib/api";
+import { formatDateTime } from "@/lib/format-date";
 
 type TodayEvents = {
   birthdays: { employeeId: string; fullName: string }[];
@@ -210,7 +211,7 @@ export function EventsScreen() {
                 <div>
                   <p className="font-medium">{m.title}</p>
                   <p className="text-xs text-muted-foreground">
-                    {m.scheduledAt && new Date(m.scheduledAt).toLocaleString()} · reminder{" "}
+                    {m.scheduledAt && formatDateTime(m.scheduledAt)} · reminder{" "}
                     {m.reminderLeadMinutes}min before · {m.invitees.length} invitee row(s)
                   </p>
                 </div>

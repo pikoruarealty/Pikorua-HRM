@@ -51,6 +51,20 @@ async function main() {
     });
   }
 
+  // --- Leave config (singleton-ish; keyed by effective_from) -----------------
+  const existingLeaveConfig = await prisma.leaveConfig.findFirst();
+  if (!existingLeaveConfig) {
+    await prisma.leaveConfig.create({
+      data: {
+        // Safe default (0/0) until an Admin sets a real allowance via
+        // PUT /leave-config — matches the payroll_config pattern above.
+        paidLeavesPerMonth: 0,
+        paidLeavesPerYear: 0,
+        effectiveFrom: new Date("2026-01-01"),
+      },
+    });
+  }
+
   // --- Departments + label config -------------------------------------------
   const departmentSeeds = [
     {

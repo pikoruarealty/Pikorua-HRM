@@ -16,7 +16,7 @@ import { EmployeeStatus, EventType, RequestStatus, RequestType, type Prisma } fr
 // Multi-day leave is expanded to one item per day (clipped to the month) so
 // the month grid can render without client-side range math.
 
-export type CalendarItemKind = "holiday" | "birthday" | "anniversary" | "meeting" | "leave";
+export type CalendarItemKind = "holiday" | "birthday" | "anniversary" | "meeting" | "leave" | "custom";
 
 type CalendarItem = {
   id: string;
@@ -99,6 +99,38 @@ export async function GET(req: Request) {
         employeeId: e.id,
       });
     }
+  }
+
+  // --- Custom employee events (everyone, derived — recurs annually by
+  // month/day, same as birthdays/anniversaries above; the year on
+  // `scheduledAt` is only ever the year it was first logged) ----------------
+  const customEvents = await prisma.event.findMany({
+    where: { type: EventType.custom, scheduledAt: { not: null } },
+    include: { employee: { select: { id: true, fullName: true } } },
+  });
+  for (const ev of customEvents) {
+    if (!ev.scheduledAt) continue;
+    if (ev.scheduledAt.getUTCMonth() + 1 !== month) continue;
+    const day = ev.scheduledAt.getUTCDate();
+    // Guard Feb 29 (or any day past the target month's length) rather than
+    // rolling into the next month.
+    const daysInTargetMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    if (day > daysInTargetMonth) continue;
+    // Always prefix with the employee's name — the month-grid cells only
+    // render `title` (not `subtitle`), so an admin-authored title like "5-year
+    // anniversary" would show with no indication of whose it is. Don't also
+    // set `subtitle` to the employee name: the "all events" list renders
+    // `title · subtitle` whenever they differ, and since the name is already
+    // folded into `title` here that produced "Name — Event · Name" (name
+    // twice).
+    const eventLabel = ev.title ?? "Event";
+    items.push({
+      id: `custom:${ev.id}:${year}`,
+      kind: "custom",
+      date: isoDay(new Date(Date.UTC(year, month - 1, day))),
+      title: ev.employee ? `${ev.employee.fullName} — ${eventLabel}` : eventLabel,
+      employeeId: ev.employee?.id,
+    });
   }
 
   // --- Meetings (scoped like GET /events/meetings) --------------------------

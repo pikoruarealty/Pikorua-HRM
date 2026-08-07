@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
-import { isFinanceRole, isLeadRole } from "@/lib/rbac";
+import { isFinanceRole } from "@/lib/rbac";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { explainWorkItem, GroqError } from "@/lib/ai/task-generation";
 
@@ -21,9 +21,9 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
   if (!workItem || workItem.deletedAt) return failFor(ErrorCode.NOT_FOUND);
 
   const role = session.role;
-  const isOwningLead = isLeadRole(role) && session.employeeId === workItem.subUnit.workUnit.teamLeadId;
+  const isProjectLead = session.employeeId === workItem.subUnit.workUnit.projectLeadId;
   const isAssignee = session.employeeId === workItem.assignedTo;
-  if (!isFinanceRole(role) && !isOwningLead && !isAssignee) {
+  if (!isFinanceRole(role) && !isProjectLead && !isAssignee) {
     return failFor(ErrorCode.FORBIDDEN);
   }
 

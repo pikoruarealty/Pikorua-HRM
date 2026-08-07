@@ -64,7 +64,7 @@ const patchSchema = z.object({
   name: z.string().min(1).optional(),
   description: z.string().max(5000).nullable().optional(),
   status: z.nativeEnum(WorkUnitStatus).optional(),
-  teamLeadId: z.string().uuid().optional(),
+  projectLeadId: z.string().uuid().optional(),
   departmentId: z.string().uuid().optional(),
 });
 
@@ -76,9 +76,10 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   if (!workUnit || workUnit.deletedAt) return failFor(ErrorCode.NOT_FOUND);
 
   const role = session.role;
-  const isOwningLead =
-    isLeadRole(role) && session.employeeId === workUnit.teamLeadId;
-  if (!isFinanceRole(role) && !isOwningLead) {
+  // Project lead can be any employee now (2026-08-07, was Lead-role-only) —
+  // ownership is purely "am I the assigned projectLeadId", not a role check.
+  const isProjectLead = session.employeeId === workUnit.projectLeadId;
+  if (!isFinanceRole(role) && !isProjectLead) {
     return failFor(ErrorCode.FORBIDDEN);
   }
 
@@ -92,16 +93,16 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   if (!parsed.success) {
     return failFor(ErrorCode.VALIDATION, "Invalid request body.");
   }
-  const { name, description, status, teamLeadId, departmentId } = parsed.data;
+  const { name, description, status, projectLeadId, departmentId } = parsed.data;
 
-  // Owning Leads can only update name/status; reassignment is Admin/HR-only.
-  if (isOwningLead && !isFinanceRole(role) && (teamLeadId || departmentId)) {
-    return failFor(ErrorCode.FORBIDDEN, "Only Admin/HR can reassign a WorkUnit's lead or department.");
+  // Project leads can only update name/status; reassignment is Admin/HR-only.
+  if (isProjectLead && !isFinanceRole(role) && (projectLeadId || departmentId)) {
+    return failFor(ErrorCode.FORBIDDEN, "Only Admin/HR can reassign a WorkUnit's project lead or department.");
   }
 
-  if (teamLeadId) {
-    const lead = await prisma.employee.findUnique({ where: { id: teamLeadId } });
-    if (!lead) return failFor(ErrorCode.VALIDATION, "teamLeadId does not reference an existing employee.");
+  if (projectLeadId) {
+    const lead = await prisma.employee.findUnique({ where: { id: projectLeadId } });
+    if (!lead) return failFor(ErrorCode.VALIDATION, "projectLeadId does not reference an existing employee.");
   }
   if (departmentId) {
     const department = await prisma.department.findUnique({ where: { id: departmentId } });
@@ -110,7 +111,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
   const updated = await prisma.workUnit.update({
     where: { id: params.id },
-    data: { name, description, status, teamLeadId, departmentId },
+    data: { name, description, status, projectLeadId, departmentId },
   });
 
   return ok(updated);
@@ -126,8 +127,8 @@ export async function DELETE(_req: Request, { params }: { params: { id: string }
   if (!workUnit || workUnit.deletedAt) return failFor(ErrorCode.NOT_FOUND);
 
   const role = session.role;
-  const isOwningLead = isLeadRole(role) && session.employeeId === workUnit.teamLeadId;
-  if (!isFinanceRole(role) && !isOwningLead) {
+  const isProjectLead = session.employeeId === workUnit.projectLeadId;
+  if (!isFinanceRole(role) && !isProjectLead) {
     return failFor(ErrorCode.FORBIDDEN);
   }
 

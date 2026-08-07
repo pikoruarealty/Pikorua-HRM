@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Menu, X, Sun, Moon, LogOut, Hexagon, ChevronsUpDown, ShieldCheck, UserRound } from "lucide-react";
+import { Menu, X, Sun, Moon, LogOut, ChevronsUpDown, ShieldCheck, UserRound } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { visibleGroups, type NavCtx } from "@/components/shell/nav-config";
@@ -160,8 +161,11 @@ function SidebarInner({
         }}
         className="flex h-16 shrink-0 items-center gap-2.5 border-b border-sidebar-border px-5"
       >
-        <span className="flex size-8 items-center justify-center rounded-lg bg-brand text-brand-foreground">
-          <Hexagon className="size-5" strokeWidth={2.25} />
+        {/* Fixed square box + object-contain — the source PNG is a wide
+            infinity mark (not square), so a plain width/height Image would
+            squash it. */}
+        <span className="relative size-8 shrink-0">
+          <Image src="/pikorua-icon.png" alt="" fill className="object-contain" priority />
         </span>
         <span className="text-[15px] font-semibold tracking-tight text-white">Pikorua HRM</span>
       </Link>
@@ -335,8 +339,8 @@ export function AppShell({
             <Menu className="size-5" />
           </Button>
           <span className="flex items-center gap-2 font-semibold">
-            <span className="flex size-7 items-center justify-center rounded-md bg-brand text-brand-foreground">
-              <Hexagon className="size-4" strokeWidth={2.25} />
+            <span className="relative size-7 shrink-0">
+              <Image src="/pikorua-icon.png" alt="" fill className="object-contain" />
             </span>
             Pikorua HRM
           </span>

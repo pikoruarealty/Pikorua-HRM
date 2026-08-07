@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
-import { isFinanceRole, isLeadRole } from "@/lib/rbac";
+import { isFinanceRole, isLeadRole, rolesAtOrBelow } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { EmployeeStatus } from "@prisma/client";
 
@@ -8,15 +8,16 @@ import { EmployeeStatus } from "@prisma/client";
 // a task in this work unit may be reassigned to. This mirrors what each caller
 // is actually *allowed* to assign to in the work-item POST/PATCH routes, so the
 // dropdown never shows an option the server would then reject:
-//   - Admin/HR: every active employee (finance roles have no team restriction).
-//   - Owning Lead: active members of ALL teams they lead (a lead can lead more
-//     than one team), plus themselves.
-// Previously this scoped to a single `findFirst` team, so a multi-team lead —
-// or an Admin reassigning across teams — only ever saw one team's members (the
-// "I can only see the same employee" bug).
+//   - Admin/HR: every active employee (finance roles have no restriction).
+//   - Owning project lead (can be any role, 2026-08-07 — was Lead-role-only):
+//     active employees in the WorkUnit's own department whose role is at the
+//     project lead's tier or below (lib/rbac's canAssignAtOrBelow hierarchy —
+//     Admin/HR > Lead roles > individual contributors), plus themselves.
+// Previously this scoped to Team.teamLeadId membership, so a project lead who
+// wasn't literally an org-team's registered lead couldn't assign to anyone.
 //
-// RBAC: Admin/HR, or the owning Lead. 404 (not 403) otherwise so the unit's
-// existence isn't revealed outside the caller's scope.
+// RBAC: Admin/HR, or the owning project lead. 404 (not 403) otherwise so the
+// unit's existence isn't revealed outside the caller's scope.
 
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   const session = await getSession();
@@ -26,25 +27,24 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   if (!workUnit || workUnit.deletedAt) return failFor(ErrorCode.NOT_FOUND);
 
   const role = session.role;
-  const isOwningLead = isLeadRole(role) && session.employeeId === workUnit.teamLeadId;
-  if (!isFinanceRole(role) && !isOwningLead) {
+  const isProjectLead = session.employeeId === workUnit.projectLeadId;
+  if (!isFinanceRole(role) && !isProjectLead) {
     if (!isLeadRole(role)) return failFor(ErrorCode.FORBIDDEN);
     return failFor(ErrorCode.NOT_FOUND);
   }
 
-  // Admin/HR can assign to anyone active; a Lead is scoped to the teams they
-  // lead (any number of them) plus themselves.
+  // Admin/HR can assign to anyone active; a project lead is scoped to their
+  // own department, at their hierarchy tier or below, plus themselves.
   let where;
   if (isFinanceRole(role)) {
     where = { status: EmployeeStatus.active };
   } else {
-    const teams = await prisma.team.findMany({
-      where: { teamLeadId: workUnit.teamLeadId },
-      select: { id: true },
-    });
     where = {
       status: EmployeeStatus.active,
-      OR: [{ teamId: { in: teams.map((t) => t.id) } }, { id: workUnit.teamLeadId }],
+      OR: [
+        { departmentId: workUnit.departmentId, role: { in: rolesAtOrBelow(role) } },
+        { id: workUnit.projectLeadId },
+      ],
     };
   }
 

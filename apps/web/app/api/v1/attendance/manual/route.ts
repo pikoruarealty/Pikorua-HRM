@@ -1,19 +1,19 @@
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
-import { Role } from "@/lib/rbac";
+import { FINANCE_ROLES } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { computeHours } from "@/lib/attendance/time";
 import { AttendanceApprovalStatus, AttendanceSource } from "@prisma/client";
 import { audit, clientIp } from "@/lib/audit";
 
-// Admin manual override (2026-07-15). POST /api/v1/attendance/manual —
-// **Admin only**: create (or overwrite the approved times of) an attendance
-// record for any employee/date — e.g. someone who couldn't log in at all
-// that day. The record is written pre-approved (approved times + approver
-// stamp) since an admin entering it by hand IS the approval. Raw clock
-// values are never touched — if the employee did clock something, it stays
-// for audit.
+// Manual override (2026-07-15, widened to Admin/HR 2026-08-07). POST
+// /api/v1/attendance/manual — **Admin/HR**: create (or overwrite the
+// approved times of) an attendance record for any employee/date — e.g.
+// someone who couldn't log in at all that day. The record is written
+// pre-approved (approved times + approver stamp) since the person entering
+// it by hand IS the approval. Raw clock values are never touched — if the
+// employee did clock something, it stays for audit.
 
 const manualSchema = z.object({
   employee_id: z.string().uuid(),
@@ -26,7 +26,7 @@ const manualSchema = z.object({
 export async function POST(req: Request) {
   const session = await getSession();
   if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
-  if (session.role !== Role.admin) return failFor(ErrorCode.FORBIDDEN);
+  if (!FINANCE_ROLES.includes(session.role)) return failFor(ErrorCode.FORBIDDEN);
 
   let body: unknown;
   try {

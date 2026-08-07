@@ -1,20 +1,21 @@
-import { AttendanceApprovalStatus, RequestStatus, RequestType } from "@prisma/client";
+import { AttendanceApprovalStatus, EmploymentType, RequestStatus, RequestType } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
+import { addDays, buildMovedOffDateByWeek, isOffDay, resolveDefaultOffDay, weekStartOf } from "@/lib/attendance/week";
 
 // Track A (2026-07-17). Reporting-only day-by-day attendance classification —
 // present/absent/leave/holiday/compensation counts for a calendar month.
-// Does NOT feed the payroll deduction formula (lib/payroll/calc.ts still
-// reads only lib/attendance/summary.ts's late/half-day/unpaid-leave counts);
-// this is purely for display (employee profile, admin monthly table, payslip
-// generation preview).
+// Feeds payslip preview, employee profile, and the admin monthly table.
 //
-// Weekend rule (confirmed with Umang, 2026-07-17): only SUNDAY is a day off.
-// Saturday is a normal working day. If an employee has an *approved*
-// attendance record with a clock-in on a Sunday, that day counts as a
-// COMPENSATION day (shown as its own stat, never netted against absences) —
-// a new concept, not previously in the system. Every other day (Mon-Sat) is
-// classified in priority order: holiday > present/half-day > paid leave >
-// unpaid leave > absent.
+// Weekly-off rule (rewritten 2026-08-08, owner request):
+// 1. Full-time employees: have a default off-day (Employee.defaultWeeklyOffDay
+//    > Team.defaultWeeklyOffDay > Sunday 0), overridable per week via WeeklyOffMove.
+//    Clocking in on an off day counts as a compensation day.
+// 2. Part-time / Interns (with requiredDaysPerWeek, e.g. 3 days/week):
+//    Flexible schedule: can clock in any days of the week. Quota is evaluated
+//    per ISO week. If an employee clocks in more than requiredDaysPerWeek in a
+//    week, the extra days count as compensation days! If they clock in fewer
+//    days in a completed week, the missing days count as absences. Compensation
+//    days add to earnings and naturally offset past absences.
 
 export type MonthlyBreakdown = {
   presentDays: number;
@@ -24,16 +25,22 @@ export type MonthlyBreakdown = {
   unpaidLeaveDays: number;
   absentDays: number;
   compensationDays: number;
-  /** Mon-Sat days considered so far (present+half+holiday+paidLeave+unpaidLeave+absent). */
+  /** Expected working days considered so far (present+half+holiday+paidLeave+unpaidLeave+absent). */
   workingDaysElapsed: number;
 };
 
-type DayAttendance = { hasClockIn: boolean; isHalfDay: boolean };
+type DayAttendance = { hasClockIn: boolean; isHalfDay: boolean; isCompensation: boolean };
 
 type MonthLookups = {
   attendanceByDate: Map<string, DayAttendance>;
   leaveTypeByDate: Map<string, RequestType>;
   holidayDates: Set<string>;
+  /** 0=Sunday..6=Saturday — the employee's effective default off day. */
+  defaultOffDay: number;
+  /** weekStart date-key -> off-date-key, for weeks with an active WeeklyOffMove. */
+  movedOffDateByWeek: Map<string, string>;
+  employmentType?: EmploymentType;
+  requiredDaysPerWeek?: number | null;
 };
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -68,29 +75,147 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
   };
 
   const through = lastElapsedDay(month, year);
-  for (let day = 1; day <= through; day++) {
-    const date = new Date(Date.UTC(year, month - 1, day));
-    const key = dateKey(date);
-    const attendance = lookups.attendanceByDate.get(key);
+  if (through === 0) return result;
 
-    if (date.getUTCDay() === 0) {
-      // Sunday: off unless the employee actually clocked in (approved).
-      if (attendance?.hasClockIn) result.compensationDays += 1;
-      continue;
+  const isFlexible =
+    lookups.employmentType !== "fulltime" &&
+    lookups.requiredDaysPerWeek != null &&
+    lookups.requiredDaysPerWeek > 0 &&
+    lookups.requiredDaysPerWeek < 7;
+
+  if (!isFlexible) {
+    // Standard full-time (or fixed schedule) day-by-day classification
+    for (let day = 1; day <= through; day++) {
+      const date = new Date(Date.UTC(year, month - 1, day));
+      const key = dateKey(date);
+      const attendance = lookups.attendanceByDate.get(key);
+
+      if (isOffDay(date, lookups.defaultOffDay, lookups.movedOffDateByWeek)) {
+        // Off day (default, or this employee's WeeklyOffMove for this
+        // week): skipped unless the employee actually clocked in (approved).
+        if (attendance?.hasClockIn) result.compensationDays += 1;
+        continue;
+      }
+
+      if (attendance?.isCompensation) {
+        // Manually flagged compensation day — same treatment as an
+        // off-day comp day: paid, but not counted as a regular working day.
+        result.compensationDays += 1;
+        continue;
+      }
+
+      result.workingDaysElapsed += 1;
+
+      if (lookups.holidayDates.has(key)) {
+        result.holidayDays += 1;
+      } else if (attendance?.hasClockIn) {
+        if (attendance.isHalfDay) result.halfDays += 1;
+        else result.presentDays += 1;
+      } else {
+        const leaveType = lookups.leaveTypeByDate.get(key);
+        if (leaveType === RequestType.leave_paid) result.paidLeaveDays += 1;
+        else if (leaveType === RequestType.leave_unpaid) result.unpaidLeaveDays += 1;
+        else result.absentDays += 1;
+      }
     }
 
-    result.workingDaysElapsed += 1;
+    return result;
+  }
 
-    if (lookups.holidayDates.has(key)) {
-      result.holidayDays += 1;
-    } else if (attendance?.hasClockIn) {
-      if (attendance.isHalfDay) result.halfDays += 1;
-      else result.presentDays += 1;
+  // Flexible schedule (part-time / flexible intern):
+  // Group days in the month by ISO week. Quota is evaluated per week.
+  const required = lookups.requiredDaysPerWeek!;
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const now = new Date();
+  const todayUTC = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+
+  const weeksMap = new Map<string, { weekStart: Date; allDaysInMonth: Date[]; elapsedDays: Date[] }>();
+  for (let day = 1; day <= daysInMonth; day++) {
+    const date = new Date(Date.UTC(year, month - 1, day));
+    const wStart = weekStartOf(date);
+    const wKey = dateKey(wStart);
+    let entry = weeksMap.get(wKey);
+    if (!entry) {
+      entry = { weekStart: wStart, allDaysInMonth: [], elapsedDays: [] };
+      weeksMap.set(wKey, entry);
+    }
+    entry.allDaysInMonth.push(date);
+    if (day <= through) {
+      entry.elapsedDays.push(date);
+    }
+  }
+
+  for (const week of weeksMap.values()) {
+    if (week.elapsedDays.length === 0) continue;
+
+    const daysInThisMonthChunk = week.allDaysInMonth.length;
+    const targetForChunk =
+      daysInThisMonthChunk >= 7 ? required : Math.max(1, Math.round((daysInThisMonthChunk / 7) * required));
+
+    let weekPresent = 0;
+    let weekHalf = 0;
+    let weekPaidLeave = 0;
+    let weekUnpaidLeave = 0;
+    let weekHoliday = 0;
+
+    for (const date of week.elapsedDays) {
+      const key = dateKey(date);
+      const attendance = lookups.attendanceByDate.get(key);
+
+      if (attendance?.isCompensation) {
+        result.compensationDays += 1;
+        continue;
+      }
+
+      if (lookups.holidayDates.has(key)) {
+        weekHoliday += 1;
+      } else if (attendance?.hasClockIn) {
+        if (attendance.isHalfDay) weekHalf += 1;
+        else weekPresent += 1;
+      } else {
+        const leaveType = lookups.leaveTypeByDate.get(key);
+        if (leaveType === RequestType.leave_paid) weekPaidLeave += 1;
+        else if (leaveType === RequestType.leave_unpaid) weekUnpaidLeave += 1;
+      }
+    }
+
+    const creditedDays = weekPresent + weekHalf * 0.5 + weekPaidLeave + weekHoliday;
+
+    result.halfDays += weekHalf;
+    result.paidLeaveDays += weekPaidLeave;
+    result.unpaidLeaveDays += weekUnpaidLeave;
+    result.holidayDays += weekHoliday;
+
+    if (creditedDays > targetForChunk) {
+      const extra = creditedDays - targetForChunk;
+      result.compensationDays += extra;
+      result.presentDays += Math.max(0, weekPresent - extra);
+      result.workingDaysElapsed += targetForChunk;
     } else {
-      const leaveType = lookups.leaveTypeByDate.get(key);
-      if (leaveType === RequestType.leave_paid) result.paidLeaveDays += 1;
-      else if (leaveType === RequestType.leave_unpaid) result.unpaidLeaveDays += 1;
-      else result.absentDays += 1;
+      result.presentDays += weekPresent;
+
+      const endOfWeek = addDays(week.weekStart, 6);
+      const isWeekPast = endOfWeek.getTime() < todayUTC;
+
+      if (isWeekPast) {
+        const missing = Math.max(0, targetForChunk - creditedDays);
+        result.absentDays += missing;
+        result.workingDaysElapsed += targetForChunk;
+      } else {
+        let daysLeftInWeek = 0;
+        for (let i = 0; i < 7; i++) {
+          const d = addDays(week.weekStart, i);
+          if (d.getTime() > todayUTC) daysLeftInWeek += 1;
+        }
+        const maxPossible = creditedDays + daysLeftInWeek;
+        if (maxPossible < targetForChunk) {
+          const unavoidableAbsent = targetForChunk - maxPossible;
+          result.absentDays += unavoidableAbsent;
+          result.workingDaysElapsed += creditedDays + unavoidableAbsent;
+        } else {
+          result.workingDaysElapsed += creditedDays;
+        }
+      }
     }
   }
 
@@ -116,6 +241,46 @@ function expandLeaveIntoMonth(
   }
 }
 
+/** Effective default off-day + this employee's active WeeklyOffMoves overlapping
+ *  [rangeStart, rangeEnd) — the context isOffDay() and classification need. */
+async function getOffDayContext(
+  employeeId: string,
+  rangeStart: Date,
+  rangeEnd: Date,
+): Promise<{
+  defaultOffDay: number;
+  movedOffDateByWeek: Map<string, string>;
+  employmentType?: EmploymentType;
+  requiredDaysPerWeek?: number | null;
+}> {
+  const [employee, moves] = await Promise.all([
+    prisma.employee.findUnique({
+      where: { id: employeeId },
+      select: {
+        employmentType: true,
+        requiredDaysPerWeek: true,
+        defaultWeeklyOffDay: true,
+        team: { select: { defaultWeeklyOffDay: true } },
+      },
+    }),
+    prisma.weeklyOffMove.findMany({
+      where: {
+        employeeId,
+        active: true,
+        weekStart: { gte: addDays(weekStartOf(rangeStart), -7), lt: addDays(rangeEnd, 7) },
+      },
+      select: { weekStart: true, date: true },
+    }),
+  ]);
+
+  return {
+    defaultOffDay: resolveDefaultOffDay(employee?.defaultWeeklyOffDay, employee?.team?.defaultWeeklyOffDay),
+    movedOffDateByWeek: buildMovedOffDateByWeek(moves),
+    employmentType: employee?.employmentType,
+    requiredDaysPerWeek: employee?.requiredDaysPerWeek,
+  };
+}
+
 export async function getMonthlyAttendanceBreakdown(
   employeeId: string,
   month: number,
@@ -124,14 +289,14 @@ export async function getMonthlyAttendanceBreakdown(
   const periodStart = new Date(Date.UTC(year, month - 1, 1));
   const periodEnd = new Date(Date.UTC(year, month, 1));
 
-  const [records, leaves, holidays] = await Promise.all([
+  const [records, leaves, holidays, offDayContext] = await Promise.all([
     prisma.attendanceRecord.findMany({
       where: {
         employeeId,
         approvalStatus: AttendanceApprovalStatus.approved,
         date: { gte: periodStart, lt: periodEnd },
       },
-      select: { date: true, clockInApproved: true, isHalfDay: true },
+      select: { date: true, clockInApproved: true, isHalfDay: true, isCompensation: true },
     }),
     prisma.request.findMany({
       where: {
@@ -147,11 +312,16 @@ export async function getMonthlyAttendanceBreakdown(
       where: { date: { gte: periodStart, lt: periodEnd } },
       select: { date: true },
     }),
+    getOffDayContext(employeeId, periodStart, periodEnd),
   ]);
 
   const attendanceByDate = new Map<string, DayAttendance>();
   for (const r of records) {
-    attendanceByDate.set(dateKey(r.date), { hasClockIn: !!r.clockInApproved, isHalfDay: r.isHalfDay });
+    attendanceByDate.set(dateKey(r.date), {
+      hasClockIn: !!r.clockInApproved,
+      isHalfDay: r.isHalfDay,
+      isCompensation: r.isCompensation,
+    });
   }
 
   const leaveTypeByDate = new Map<string, RequestType>();
@@ -164,12 +334,67 @@ export async function getMonthlyAttendanceBreakdown(
 
   const holidayDates = new Set(holidays.map((h) => dateKey(h.date)));
 
-  return classifyMonth(month, year, { attendanceByDate, leaveTypeByDate, holidayDates });
+  return classifyMonth(month, year, { attendanceByDate, leaveTypeByDate, holidayDates, ...offDayContext });
+}
+
+/** Count of compensation days for one employee within an arbitrary inclusive
+ *  date range — used by leave balance to credit compensation days back. */
+export async function getCompensationDaysInRange(
+  employeeId: string,
+  start: Date,
+  end: Date,
+): Promise<number> {
+  const [records, offDayContext] = await Promise.all([
+    prisma.attendanceRecord.findMany({
+      where: {
+        employeeId,
+        approvalStatus: AttendanceApprovalStatus.approved,
+        clockInApproved: { not: null },
+        date: { gte: start, lte: end },
+      },
+      select: { date: true, isCompensation: true },
+    }),
+    getOffDayContext(employeeId, start, end),
+  ]);
+
+  if (
+    offDayContext.employmentType &&
+    offDayContext.employmentType !== "fulltime" &&
+    offDayContext.requiredDaysPerWeek != null &&
+    offDayContext.requiredDaysPerWeek > 0
+  ) {
+    const req = offDayContext.requiredDaysPerWeek;
+    const recordsByWeek = new Map<string, { total: number; manualComp: number }>();
+    for (const r of records) {
+      const wKey = dateKey(weekStartOf(r.date));
+      let entry = recordsByWeek.get(wKey);
+      if (!entry) {
+        entry = { total: 0, manualComp: 0 };
+        recordsByWeek.set(wKey, entry);
+      }
+      if (r.isCompensation) {
+        entry.manualComp += 1;
+      } else {
+        entry.total += 1;
+      }
+    }
+    let totalComp = 0;
+    for (const w of recordsByWeek.values()) {
+      totalComp += w.manualComp + Math.max(0, w.total - req);
+    }
+    return totalComp;
+  }
+
+  return records.filter(
+    (r) => r.isCompensation || isOffDay(r.date, offDayContext.defaultOffDay, offDayContext.movedOffDateByWeek),
+  ).length;
 }
 
 export type EmployeeMonthlyBreakdown = MonthlyBreakdown & {
   employeeId: string;
   fullName: string;
+  employmentType: EmploymentType;
+  requiredDaysPerWeek: number | null;
   team: { id: string; name: string } | null;
   department: { id: string; name: string } | null;
 };
@@ -183,13 +408,16 @@ export async function getMonthlyAttendanceBreakdownForAllEmployees(
   const periodStart = new Date(Date.UTC(year, month - 1, 1));
   const periodEnd = new Date(Date.UTC(year, month, 1));
 
-  const [employees, records, leaves, holidays] = await Promise.all([
+  const [employees, records, leaves, holidays, moves] = await Promise.all([
     prisma.employee.findMany({
       where: { status: "active" },
       select: {
         id: true,
         fullName: true,
-        team: { select: { id: true, name: true } },
+        employmentType: true,
+        requiredDaysPerWeek: true,
+        defaultWeeklyOffDay: true,
+        team: { select: { id: true, name: true, defaultWeeklyOffDay: true } },
         department: { select: { id: true, name: true } },
       },
       orderBy: { fullName: "asc" },
@@ -199,7 +427,7 @@ export async function getMonthlyAttendanceBreakdownForAllEmployees(
         approvalStatus: AttendanceApprovalStatus.approved,
         date: { gte: periodStart, lt: periodEnd },
       },
-      select: { employeeId: true, date: true, clockInApproved: true, isHalfDay: true },
+      select: { employeeId: true, date: true, clockInApproved: true, isHalfDay: true, isCompensation: true },
     }),
     prisma.request.findMany({
       where: {
@@ -214,9 +442,23 @@ export async function getMonthlyAttendanceBreakdownForAllEmployees(
       where: { date: { gte: periodStart, lt: periodEnd } },
       select: { date: true },
     }),
+    prisma.weeklyOffMove.findMany({
+      where: {
+        active: true,
+        weekStart: { gte: addDays(weekStartOf(periodStart), -7), lt: addDays(periodEnd, 7) },
+      },
+      select: { employeeId: true, weekStart: true, date: true },
+    }),
   ]);
 
   const holidayDates = new Set(holidays.map((h) => dateKey(h.date)));
+
+  const movesByEmployee = new Map<string, { weekStart: Date; date: Date }[]>();
+  for (const m of moves) {
+    const list = movesByEmployee.get(m.employeeId);
+    if (list) list.push(m);
+    else movesByEmployee.set(m.employeeId, [m]);
+  }
 
   const attendanceByEmployee = new Map<string, Map<string, DayAttendance>>();
   for (const r of records) {
@@ -225,7 +467,11 @@ export async function getMonthlyAttendanceBreakdownForAllEmployees(
       m = new Map();
       attendanceByEmployee.set(r.employeeId, m);
     }
-    m.set(dateKey(r.date), { hasClockIn: !!r.clockInApproved, isHalfDay: r.isHalfDay });
+    m.set(dateKey(r.date), {
+      hasClockIn: !!r.clockInApproved,
+      isHalfDay: r.isHalfDay,
+      isCompensation: r.isCompensation,
+    });
   }
 
   const leaveByEmployee = new Map<string, Map<string, RequestType>>();
@@ -246,10 +492,16 @@ export async function getMonthlyAttendanceBreakdownForAllEmployees(
       attendanceByDate: attendanceByEmployee.get(e.id) ?? new Map(),
       leaveTypeByDate: leaveByEmployee.get(e.id) ?? new Map(),
       holidayDates,
+      defaultOffDay: resolveDefaultOffDay(e.defaultWeeklyOffDay, e.team?.defaultWeeklyOffDay),
+      movedOffDateByWeek: buildMovedOffDateByWeek(movesByEmployee.get(e.id) ?? []),
+      employmentType: e.employmentType,
+      requiredDaysPerWeek: e.requiredDaysPerWeek,
     });
     return {
       employeeId: e.id,
       fullName: e.fullName,
+      employmentType: e.employmentType,
+      requiredDaysPerWeek: e.requiredDaysPerWeek,
       team: e.team,
       department: e.department,
       ...breakdown,

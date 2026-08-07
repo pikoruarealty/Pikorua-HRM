@@ -13,6 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -30,6 +31,7 @@ type Team = {
   teamLeadId: string | null;
   teamLead: { id: string; fullName: string } | null;
   expectedStartTime: string | null;
+  defaultWeeklyOffDay: number;
 };
 
 type Member = {
@@ -116,8 +118,12 @@ export function TeamDetail({ teamId, canManage }: { teamId: string; canManage: b
             {team.teamLead?.fullName ?? "— unassigned —"}
           </div>
           <div>
-            <span className="text-muted-foreground">Expected start: </span>
-            {team.expectedStartTime ?? "— not set —"}
+            <span className="text-muted-foreground">Expected start time: </span>
+            {team.expectedStartTime ?? "11:00"}
+          </div>
+          <div>
+            <span className="text-muted-foreground">Default day off: </span>
+            {DAY_NAMES[team.defaultWeeklyOffDay] ?? "Sunday"}
           </div>
         </CardContent>
       </Card>
@@ -185,10 +191,13 @@ export function TeamDetail({ teamId, canManage }: { teamId: string; canManage: b
   );
 }
 
+const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
 function EditTeamForm({ team, onSaved }: { team: Team; onSaved: () => void }) {
   const [name, setName] = useState(team.name);
   const [teamLeadId, setTeamLeadId] = useState(team.teamLeadId ?? "");
-  const [expectedStartTime, setExpectedStartTime] = useState(team.expectedStartTime ?? "");
+  const [expectedStartTime, setExpectedStartTime] = useState(team.expectedStartTime ?? "11:00");
+  const [defaultWeeklyOffDay, setDefaultWeeklyOffDay] = useState(String(team.defaultWeeklyOffDay ?? 0));
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -205,6 +214,7 @@ function EditTeamForm({ team, onSaved }: { team: Team; onSaved: () => void }) {
             name,
             ...(teamLeadId ? { team_lead_id: teamLeadId } : {}),
             expected_start_time: expectedStartTime || null,
+            default_weekly_off_day: parseInt(defaultWeeklyOffDay, 10),
           }),
         }),
       );
@@ -227,13 +237,26 @@ function EditTeamForm({ team, onSaved }: { team: Team; onSaved: () => void }) {
         <Input id="edit_lead" value={teamLeadId} onChange={(e) => setTeamLeadId(e.target.value)} />
       </div>
       <div className="flex flex-col gap-2">
-        <Label htmlFor="edit_expected_start_time">Expected start (HH:MM)</Label>
+        <Label htmlFor="edit_expected_start_time">Expected start time (HH:MM)</Label>
         <Input
           id="edit_expected_start_time"
           type="time"
           value={expectedStartTime}
           onChange={(e) => setExpectedStartTime(e.target.value)}
         />
+      </div>
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="edit_default_weekly_off_day">Default day off</Label>
+        <Select value={defaultWeeklyOffDay} onValueChange={setDefaultWeeklyOffDay}>
+          <SelectTrigger id="edit_default_weekly_off_day">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {DAY_NAMES.map((d, i) => (
+              <SelectItem key={i} value={String(i)}>{d}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
       {error && <p className="text-sm text-destructive">{error}</p>}
       <Button type="submit" disabled={submitting}>

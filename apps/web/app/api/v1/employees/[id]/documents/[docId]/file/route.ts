@@ -20,7 +20,7 @@ const CONTENT_TYPES: Record<string, string> = {
   ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 };
 
-export async function GET(_req: Request, { params }: { params: { id: string; docId: string } }) {
+export async function GET(req: Request, { params }: { params: { id: string; docId: string } }) {
   const session = await getSession();
   if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
 
@@ -42,11 +42,15 @@ export async function GET(_req: Request, { params }: { params: { id: string; doc
 
   const ext = document.fileUrl.slice(document.fileUrl.lastIndexOf(".")).toLowerCase();
   const contentType = CONTENT_TYPES[ext] ?? "application/octet-stream";
+  // ?download=1 forces a Save-As prompt (Content-Disposition: attachment);
+  // default stays inline so the "View" link opens PDFs/images in-tab.
+  const forceDownload = new URL(req.url).searchParams.get("download") === "1";
+  const disposition = forceDownload ? "attachment" : "inline";
 
   return new Response(new Uint8Array(bytes), {
     headers: {
       "Content-Type": contentType,
-      "Content-Disposition": `inline; filename="${document.docType.replace(/[^a-zA-Z0-9 ._-]/g, "")}${ext}"`,
+      "Content-Disposition": `${disposition}; filename="${document.docType.replace(/[^a-zA-Z0-9 ._-]/g, "")}${ext}"`,
     },
   });
 }

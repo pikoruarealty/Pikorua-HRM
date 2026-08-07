@@ -44,6 +44,38 @@ export function hasRole(role: Role, allowed: readonly Role[]): boolean {
   return allowed.includes(role);
 }
 
+/** Hierarchy tier for WorkUnit "project lead" assignment scoping only
+ * (2026-08-07) — a project lead (WorkUnit.projectLeadId, which can now be any
+ * employee, not just a Lead-role one) may assign SubUnits/WorkItems to anyone
+ * at their tier or a less-senior one. Lower number = more authority. Flat
+ * across Tech/Sales verticals — NOT used for any other authorization check
+ * in the app (approvals, RBAC gates elsewhere are unaffected). */
+const ROLE_TIER: Record<Role, number> = {
+  [Role.admin]: 0,
+  [Role.hr]: 0,
+  [Role.tech_lead]: 1,
+  [Role.sales_lead]: 1,
+  [Role.tech_employee]: 2,
+  [Role.sales_employee]: 2,
+  [Role.bde]: 2,
+};
+
+export function roleTier(role: Role): number {
+  return ROLE_TIER[role];
+}
+
+/** Can `actorRole` (a WorkUnit's project lead) assign work to `targetRole`?
+ * True when the target is at the actor's tier or a less-senior one. */
+export function canAssignAtOrBelow(actorRole: Role, targetRole: Role): boolean {
+  return ROLE_TIER[actorRole] <= ROLE_TIER[targetRole];
+}
+
+/** All roles a project lead of `actorRole` may assign work to (self-tier and
+ * below) — for use in a Prisma `role: { in: [...] }` filter. */
+export function rolesAtOrBelow(actorRole: Role): Role[] {
+  return (Object.keys(ROLE_TIER) as Role[]).filter((r) => ROLE_TIER[r] >= ROLE_TIER[actorRole]);
+}
+
 /** Thrown by requireRole; catch at the route boundary and map to failFor(). */
 export class AuthzError extends Error {
   constructor(

@@ -14,6 +14,8 @@ import { validatePhotoFile, withPhotoPath } from "@/lib/employees/photo";
 // creates the Employee row and its linked User login in the same call
 // (open decision resolved: combined, see docs/TRACK_A_TASKS.md §1.3).
 
+import { EmploymentType } from "@prisma/client";
+
 const PUBLIC_SELECT = {
   id: true,
   fullName: true,
@@ -22,6 +24,9 @@ const PUBLIC_SELECT = {
   departmentId: true,
   teamId: true,
   role: true,
+  employmentType: true,
+  requiredDaysPerWeek: true,
+  defaultWeeklyOffDay: true,
   dateOfBirth: true,
   dateOfJoining: true,
   deviceUid: true,
@@ -93,6 +98,11 @@ export async function GET(req: Request) {
       : undefined;
   const roleParam = searchParams.get("role") ?? undefined;
   const roleFilter = roleParam && (Object.values(Role) as string[]).includes(roleParam) ? (roleParam as Role) : undefined;
+  const employmentTypeParam = searchParams.get("employment_type") ?? undefined;
+  const employmentTypeFilter =
+    employmentTypeParam && (Object.values(EmploymentType) as string[]).includes(employmentTypeParam)
+      ? (employmentTypeParam as EmploymentType)
+      : undefined;
   const q = searchParams.get("q")?.trim() || undefined;
   const searchFilter = q
     ? {
@@ -113,6 +123,7 @@ export async function GET(req: Request) {
         ...(teamIdFilter ? { teamId: teamIdFilter } : {}),
         ...(statusFilter ? { status: statusFilter } : {}),
         ...(roleFilter ? { role: roleFilter } : {}),
+        ...(employmentTypeFilter ? { employmentType: employmentTypeFilter } : {}),
         ...searchFilter,
       },
       select: FINANCE_SELECT,
@@ -162,6 +173,9 @@ const createSchema = z.object({
   department_id: z.string().uuid().optional(),
   team_id: z.string().uuid().optional(),
   role: z.nativeEnum(Role),
+  employment_type: z.nativeEnum(EmploymentType).optional(),
+  required_days_per_week: z.coerce.number().int().min(1).max(7).optional(),
+  default_weekly_off_day: z.coerce.number().int().min(0).max(6).optional(),
   date_of_birth: z.string().optional(),
   date_of_joining: z.string(),
   base_salary: z.coerce.number().positive(),
@@ -254,6 +268,9 @@ export async function POST(req: Request) {
       departmentId: d.department_id,
       teamId: d.team_id,
       role: d.role,
+      employmentType: d.employment_type ?? EmploymentType.fulltime,
+      requiredDaysPerWeek: d.required_days_per_week,
+      defaultWeeklyOffDay: d.default_weekly_off_day,
       dateOfBirth: d.date_of_birth ? new Date(d.date_of_birth) : undefined,
       dateOfJoining: new Date(d.date_of_joining),
       baseSalary: d.base_salary,

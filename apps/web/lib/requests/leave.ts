@@ -1,6 +1,11 @@
 import { prisma } from "@/lib/db/prisma";
 import { RequestStatus, RequestType } from "@prisma/client";
-import { periodBounds, countDaysClippedToPeriod } from "@/lib/requests/leave-math";
+import {
+  periodBounds,
+  countDaysClippedToPeriod,
+  yearBounds,
+  countDaysClippedToYear,
+} from "@/lib/requests/leave-math";
 
 // CROSS-TRACK CONTRACT — added 2026-07-13 (not in the original Phase 0
 // agreement, which only covered getApprovedReimbursementTotal and
@@ -56,5 +61,61 @@ export async function getApprovedUnpaidLeaveDays(
     totalDays += countDaysClippedToPeriod(r.dateFrom, r.dateTo, month, year);
   }
 
+  return totalDays;
+}
+
+// Added 2026-08-07 (leave-balance feature, owner request). Mirrors
+// getApprovedUnpaidLeaveDays above but for `leave_paid` — count of APPROVED
+// paid-leave days for the employee, clipped to the given month. Used against
+// the admin-configured monthly allowance (lib/leave/config.ts) to show
+// used/remaining, not by payroll (payroll's earned-day math already counts
+// paid-leave days directly via lib/attendance/monthly-breakdown.ts).
+export async function getApprovedPaidLeaveDays(
+  employeeId: string,
+  month: number,
+  year: number,
+): Promise<number> {
+  const { start: periodStart, lastDay: periodLastDay } = periodBounds(month, year);
+
+  const requests = await prisma.request.findMany({
+    where: {
+      employeeId,
+      type: RequestType.leave_paid,
+      status: RequestStatus.approved,
+      dateFrom: { lte: periodLastDay },
+      dateTo: { gte: periodStart },
+    },
+    select: { dateFrom: true, dateTo: true },
+  });
+
+  let totalDays = 0;
+  for (const r of requests) {
+    if (!r.dateFrom || !r.dateTo) continue;
+    totalDays += countDaysClippedToPeriod(r.dateFrom, r.dateTo, month, year);
+  }
+  return totalDays;
+}
+
+/** Same as getApprovedPaidLeaveDays but clipped to a whole calendar year —
+ *  used against the yearly allowance. */
+export async function getApprovedPaidLeaveDaysForYear(employeeId: string, year: number): Promise<number> {
+  const { start: yearStart, lastDay: yearLastDay } = yearBounds(year);
+
+  const requests = await prisma.request.findMany({
+    where: {
+      employeeId,
+      type: RequestType.leave_paid,
+      status: RequestStatus.approved,
+      dateFrom: { lte: yearLastDay },
+      dateTo: { gte: yearStart },
+    },
+    select: { dateFrom: true, dateTo: true },
+  });
+
+  let totalDays = 0;
+  for (const r of requests) {
+    if (!r.dateFrom || !r.dateTo) continue;
+    totalDays += countDaysClippedToYear(r.dateFrom, r.dateTo, year);
+  }
   return totalDays;
 }

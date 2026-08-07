@@ -27,3 +27,20 @@ export function countDaysClippedToPeriod(
   const days = Math.floor((end.getTime() - start.getTime()) / MS_PER_DAY) + 1;
   return days > 0 ? days : 0;
 }
+
+/** [start, end] of the calendar year as inclusive UTC-midnight dates. */
+export function yearBounds(year: number): { start: Date; lastDay: Date } {
+  const start = new Date(Date.UTC(year, 0, 1));
+  const lastDay = new Date(Date.UTC(year + 1, 0, 1) - MS_PER_DAY);
+  return { start, lastDay };
+}
+
+/** Same as countDaysClippedToPeriod but clipped to a whole calendar year
+ *  (2026-08-07, leave-balance feature) — used for the yearly allowance. */
+export function countDaysClippedToYear(dateFrom: Date, dateTo: Date, year: number): number {
+  const { start: yearStart, lastDay: yearLastDay } = yearBounds(year);
+  const start = dateFrom < yearStart ? yearStart : dateFrom;
+  const end = dateTo > yearLastDay ? yearLastDay : dateTo;
+  const days = Math.floor((end.getTime() - start.getTime()) / MS_PER_DAY) + 1;
+  return days > 0 ? days : 0;
+}

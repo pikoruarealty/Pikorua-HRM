@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
-import { isFinanceRole, isLeadRole } from "@/lib/rbac";
+import { isFinanceRole, isLeadRole, rolesAtOrBelow } from "@/lib/rbac";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { WorkItemFrequency, WorkItemMode } from "@prisma/client";
 import {
@@ -63,8 +63,8 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   if (!workUnit || workUnit.deletedAt) return failFor(ErrorCode.NOT_FOUND);
 
   const role = session.role;
-  const isOwningLead = isLeadRole(role) && session.employeeId === workUnit.teamLeadId;
-  if (!isFinanceRole(role) && !isOwningLead) {
+  const isProjectLead = session.employeeId === workUnit.projectLeadId;
+  if (!isFinanceRole(role) && !isProjectLead) {
     // Don't reveal existence of WorkUnits outside the caller's scope.
     if (!isLeadRole(role)) return failFor(ErrorCode.FORBIDDEN);
     return failFor(ErrorCode.NOT_FOUND);
@@ -90,30 +90,22 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     label?.workItemMode ??
     (workUnit.department.typeKey === "tech" ? WorkItemMode.atomic : WorkItemMode.metric);
 
-  // For a Lead, the teams they lead — assignees must belong to one of them (or
-  // be the Lead themselves). A Lead can lead more than one team. Resolved once.
-  const ownTeamIds =
-    isOwningLead && !isFinanceRole(role)
-      ? new Set(
-          (
-            await prisma.team.findMany({
-              where: { teamLeadId: session.employeeId! },
-              select: { id: true },
-            })
-          ).map((t) => t.id),
-        )
-      : null;
+  // For a non-finance project lead, assignees must be in the WorkUnit's own
+  // department at the lead's hierarchy tier or below (or be the lead
+  // themselves) — lib/rbac's canAssignAtOrBelow/rolesAtOrBelow.
+  const assignableRoles = isProjectLead && !isFinanceRole(role) ? new Set(rolesAtOrBelow(role)) : null;
 
   async function validateAssignee(assigneeId: string): Promise<string | null> {
     const assignee = await prisma.employee.findUnique({
       where: { id: assigneeId },
-      select: { id: true, teamId: true },
+      select: { id: true, departmentId: true, role: true },
     });
     if (!assignee) return "An assignee does not reference an existing employee.";
-    if (ownTeamIds) {
-      const inOwnTeam = assignee.teamId != null && ownTeamIds.has(assignee.teamId);
-      if (!inOwnTeam && assignee.id !== session!.employeeId) {
-        return "Leads can only assign tasks to their own team's members.";
+    if (assignableRoles) {
+      const inScope =
+        assignee.departmentId === workUnit!.departmentId && assignableRoles.has(assignee.role);
+      if (!inScope && assignee.id !== session!.employeeId) {
+        return "Project leads can only assign tasks to their own department, at their level or below.";
       }
     }
     return null;

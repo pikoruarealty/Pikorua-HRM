@@ -120,7 +120,7 @@ export async function computePayslipPreview(
   }
 
   const baseSalary = Number(employee.baseSalary);
-  const perDayRate = computePerDayRate(baseSalary);
+  const perDayRate = computePerDayRate(baseSalary, employee.requiredDaysPerWeek);
 
   const earnedBasePay = computeEarnedBasePay(
     {

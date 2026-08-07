@@ -12,6 +12,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { formatDate } from "@/lib/format-date";
 
 // Profile page panels (2026-07-15): the employee's request history and
 // payslips, so the individual profile shows everything about a person in one
@@ -42,9 +43,7 @@ const STATUS_VARIANTS: Record<RequestRow["status"], "default" | "destructive" | 
   pending: "outline",
 };
 
-function fmtDate(iso: string | null) {
-  return iso ? new Date(iso).toLocaleDateString() : "—";
-}
+const fmtDate = formatDate;
 
 export function EmployeeRequestsPanel({
   employeeId,

@@ -13,6 +13,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { apiFetch } from "@/components/_lib/api";
+import { formatDate } from "@/lib/format-date";
 
 // Task activity history for one employee — which tasks they worked on, which
 // project/sub-unit each belongs to, when assigned, when completed — over a
@@ -54,10 +55,7 @@ const PERIOD_LABELS: Record<Period, string> = {
   total: "All time",
 };
 
-function fmtDate(iso: string | null) {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleDateString();
-}
+const fmtDate = formatDate;
 
 export function EmployeeTaskActivityPanel({ employeeId }: { employeeId: string }) {
   const [period, setPeriod] = useState<Period>("weekly");

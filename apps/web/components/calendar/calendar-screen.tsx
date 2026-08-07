@@ -5,6 +5,7 @@ import { ChevronLeft, ChevronRight, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
@@ -16,7 +17,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 type CalendarItem = {
   id: string;
-  kind: "holiday" | "birthday" | "anniversary" | "meeting" | "leave";
+  kind: "holiday" | "birthday" | "anniversary" | "meeting" | "leave" | "custom";
   date: string;
   title: string;
   subtitle?: string;
@@ -31,6 +32,7 @@ const KIND_STYLES: Record<CalendarItem["kind"], { chip: string; dot: string; lab
   anniversary: { chip: "bg-violet-500/15 text-violet-700 dark:text-violet-400", dot: "bg-violet-500", label: "Anniversary" },
   meeting: { chip: "bg-blue-500/15 text-blue-700 dark:text-blue-400", dot: "bg-blue-500", label: "Meeting" },
   leave: { chip: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400", dot: "bg-emerald-500", label: "Leave" },
+  custom: { chip: "bg-cyan-500/15 text-cyan-700 dark:text-cyan-400", dot: "bg-cyan-500", label: "Event" },
 };
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -207,13 +209,7 @@ export function CalendarScreen({ canManageHolidays }: { canManageHolidays: boole
             <form onSubmit={onAddHoliday} className="flex flex-wrap items-end gap-3">
               <div className="flex flex-col gap-2">
                 <Label htmlFor="holiday_date">Date</Label>
-                <Input
-                  id="holiday_date"
-                  type="date"
-                  value={holidayDate}
-                  onChange={(e) => setHolidayDate(e.target.value)}
-                  required
-                />
+                <DatePicker id="holiday_date" value={holidayDate} onChange={setHolidayDate} required />
               </div>
               <div className="flex min-w-56 flex-1 flex-col gap-2">
                 <Label htmlFor="holiday_name">Name</Label>

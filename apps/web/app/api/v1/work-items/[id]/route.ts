@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
-import { isFinanceRole, isLeadRole } from "@/lib/rbac";
+import { isFinanceRole, rolesAtOrBelow } from "@/lib/rbac";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { Prisma, WorkItemMode, WorkItemStatus } from "@prisma/client";
 import { isClockedInNow } from "@/lib/attendance/status";
@@ -28,9 +28,9 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   if (!workItem || workItem.deletedAt) return failFor(ErrorCode.NOT_FOUND);
 
   const role = session.role;
-  const isOwningLead = isLeadRole(role) && session.employeeId === workItem.subUnit.workUnit.teamLeadId;
+  const isProjectLead = session.employeeId === workItem.subUnit.workUnit.projectLeadId;
   const isAssignee = session.employeeId === workItem.assignedTo;
-  const canEditAll = isFinanceRole(role) || isOwningLead;
+  const canEditAll = isFinanceRole(role) || isProjectLead;
 
   if (!canEditAll && !isAssignee) {
     return failFor(ErrorCode.FORBIDDEN);
@@ -80,18 +80,20 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     if (!assignee) {
       return failFor(ErrorCode.VALIDATION, "assignedTo does not reference an existing employee.");
     }
-    if (isOwningLead && !isFinanceRole(role)) {
-      // A Lead may lead more than one team — the assignee must belong to any of
-      // them, or be the Lead themselves (matches assignable-members' scope).
-      const ownTeams = await prisma.team.findMany({
-        where: { teamLeadId: session.employeeId },
-        select: { id: true },
-      });
-      const ownTeamIds = new Set(ownTeams.map((t) => t.id));
-      const inOwnTeam = assignee.teamId != null && ownTeamIds.has(assignee.teamId);
+    if (isProjectLead && !isFinanceRole(role)) {
+      // The project lead can be any role (2026-08-07) — the assignee must be
+      // in the WorkUnit's own department at the lead's tier or below (matches
+      // assignable-members' scope), or be the lead themselves.
+      const assignableRoles = rolesAtOrBelow(role);
+      const inScope =
+        assignee.departmentId === workItem.subUnit.workUnit.departmentId &&
+        assignableRoles.includes(assignee.role);
       const isSelf = assignee.id === session.employeeId;
-      if (!inOwnTeam && !isSelf) {
-        return failFor(ErrorCode.VALIDATION, "Leads can only assign WorkItems to their own team's members.");
+      if (!inScope && !isSelf) {
+        return failFor(
+          ErrorCode.VALIDATION,
+          "Project leads can only assign WorkItems to their own department, at their level or below.",
+        );
       }
     }
   }
@@ -177,8 +179,8 @@ export async function DELETE(_req: Request, { params }: { params: { id: string }
   if (!workItem || workItem.deletedAt) return failFor(ErrorCode.NOT_FOUND);
 
   const role = session.role;
-  const isOwningLead = isLeadRole(role) && session.employeeId === workItem.subUnit.workUnit.teamLeadId;
-  if (!isFinanceRole(role) && !isOwningLead) {
+  const isProjectLead = session.employeeId === workItem.subUnit.workUnit.projectLeadId;
+  if (!isFinanceRole(role) && !isProjectLead) {
     return failFor(ErrorCode.FORBIDDEN);
   }
 

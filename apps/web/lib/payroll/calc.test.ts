@@ -13,9 +13,18 @@ import {
 // percentage penalty on top of days actually worked.
 
 describe("computePerDayRate", () => {
-  test("divides base salary by a fixed 30-day month", () => {
+  test("divides base salary by a fixed 30-day month for full-time", () => {
     expect(computePerDayRate(30000)).toBe(1000);
     expect(computePerDayRate(50000)).toBeCloseTo(1666.6667, 3);
+  });
+
+  test("calculates rate based on required days per week for part-time/intern", () => {
+    // 3 days a week = 13 days a month on average (3 * 52/12)
+    // 26000 / 13 = 2000 per day
+    expect(computePerDayRate(26000, 3)).toBeCloseTo(2000, 2);
+    // 6 days a week intern = 26 days a month on average
+    // 26000 / 26 = 1000 per day
+    expect(computePerDayRate(26000, 6)).toBeCloseTo(1000, 2);
   });
 });
 
