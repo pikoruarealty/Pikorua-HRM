@@ -276,6 +276,8 @@ model Employee {
   payslips           Payslip[]
   requests           Request[]
   recognitionSnapshots RecognitionSnapshot[]
+  performanceReviews      PerformanceReview[]  @relation("PerformanceReviewSubject")
+  performanceReviewsGiven PerformanceReview[]  @relation("PerformanceReviewReviewer")
   documents          EmployeeDocument[]
   assets             Asset[]
   eventsAbout        Event[]              @relation("EventSubject")
@@ -619,6 +621,37 @@ model RecognitionSnapshot {
   @@index([periodType, periodStart, departmentId])
   @@index([isEmployeeOfMonth, publishedAt])
   @@map("recognition_snapshots")
+}
+
+// Monthly, Lead-entered quality review (Pillar 3, 2026-08-08). The deliberately
+// human counterweight to the automatic, countable signals (points, attendance,
+// metric attainment): one 1-5 rating plus an optional note, per employee per
+// month, written by the Lead who actually works with them.
+//
+// Scope is intentionally tiny — no goals table, no self-assessment, no
+// employee-facing workflow. The employee sees it only as a read-only entry on
+// their own profile if they go looking. Rows are per (employee, reviewer,
+// period) so an Admin/HR review never overwrites the owning Lead's, and vice
+// versa; a second attempt at the same triple is a 409 (mirrors the
+// period-uniqueness pattern on RecognitionSnapshot/Payslip). Corrections go
+// through PATCH /performance-reviews/:id rather than a duplicate insert.
+model PerformanceReview {
+  id          String   @id @default(uuid()) @db.Uuid
+  employeeId  String   @map("employee_id") @db.Uuid
+  employee    Employee @relation("PerformanceReviewSubject", fields: [employeeId], references: [id], onDelete: Cascade)
+  reviewerId  String   @map("reviewer_id") @db.Uuid
+  reviewer    Employee @relation("PerformanceReviewReviewer", fields: [reviewerId], references: [id])
+  periodYear  Int      @map("period_year")
+  periodMonth Int      @map("period_month") // 1-12
+  rating      Int      // 1-5, validated in lib/performance/review.ts
+  note        String?
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@unique([employeeId, reviewerId, periodYear, periodMonth])
+  @@index([employeeId, periodYear, periodMonth])
+  @@index([reviewerId, periodYear, periodMonth])
+  @@map("performance_reviews")
 }
 
 model Notification {

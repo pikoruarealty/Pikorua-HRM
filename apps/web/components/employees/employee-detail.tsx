@@ -13,6 +13,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmployeeAttendancePanel } from "@/components/attendance/employee-attendance-panel";
 import { EmployeeWorkPanel } from "@/components/employees/employee-work-panel";
 import { EmployeeTaskActivityPanel } from "@/components/employees/employee-task-activity-panel";
+import { EmployeePerformanceReviewPanel } from "@/components/employees/employee-performance-review-panel";
 import { EmployeeAvatar } from "@/components/employees/employee-avatar";
 import { EmployeeEventsPanel } from "@/components/employees/employee-events-panel";
 import { EmployeeLeaveBalancePanel } from "@/components/employees/employee-leave-balance-panel";
@@ -615,6 +616,11 @@ export function EmployeeDetail({
       {canViewAttendance && <EmployeeWorkPanel employeeId={employeeId} />}
 
       {canViewAttendance && <EmployeeTaskActivityPanel employeeId={employeeId} />}
+
+      {/* Monthly Lead review (Pillar 3): same audience as the API allows —
+          self, the owning Lead, Admin/HR. Read-only here; reviews are written
+          on /performance/review. */}
+      {canViewAttendance && <EmployeePerformanceReviewPanel employeeId={employeeId} />}
 
       {/* Leave balance: Admin/HR viewing anyone, or the employee viewing
           their own — same tenure-prorated numbers either way. */}

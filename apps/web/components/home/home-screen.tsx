@@ -18,6 +18,7 @@ import {
   ArrowUpRight,
   AlertCircle,
   ClipboardCheck,
+  Star,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -123,6 +124,10 @@ export function HomeScreen({
   // see the whole company, everyone else gets an empty list.
   const [awaitingReview, setAwaitingReview] = useState<number | null>(null);
 
+  // People this Lead/Admin still owes a monthly review for (Pillar 3). Same
+  // self-scoping endpoint the /performance/review sheet reads.
+  const [reviewsPending, setReviewsPending] = useState<number | null>(null);
+
   // WorkUnits count for admin snapshot.
   const [workUnits, setWorkUnits] = useState<{ id: string; status: string }[] | null>(null);
 
@@ -163,6 +168,9 @@ export function HomeScreen({
       );
       apiFetch<{ id: string }[]>("/work-items/review-queue").then((r) =>
         setAwaitingReview(r.data?.length ?? 0),
+      );
+      apiFetch<{ summary: { pending: number } }>("/performance-reviews/queue").then((r) =>
+        setReviewsPending(r.data?.summary.pending ?? 0),
       );
     }
 
@@ -353,6 +361,13 @@ export function HomeScreen({
               value={awaitingReview}
               hint="Points are credited when you accept"
               href="/work/review"
+            />
+            <StatTile
+              icon={<Star className="size-4" />}
+              label="Monthly reviews left"
+              value={reviewsPending}
+              hint="Your read on this month, one rating each"
+              href="/performance/review"
             />
           </div>
         </section>

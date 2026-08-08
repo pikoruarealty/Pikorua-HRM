@@ -11,6 +11,7 @@ import {
   Settings2,
   FileText,
   Trophy,
+  Star,
   Megaphone,
   CalendarDays,
   CalendarRange,
@@ -55,6 +56,15 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/teams", label: "Teams", icon: UsersRound },
       { href: "/departments", label: "Departments", icon: Building2, show: (c) => c.isFinance },
       { href: "/attendance", label: "Attendance", icon: Clock },
+      // Monthly quality review (Pillar 3) — a Lead/Admin-side entry sheet. An
+      // employee has nothing to do here; they read their own ratings off their
+      // profile instead, so the tab stays hidden for them.
+      {
+        href: "/performance/review",
+        label: "Monthly Review",
+        icon: Star,
+        show: (c) => c.isFinance || c.isLead,
+      },
     ],
   },
   {

@@ -129,6 +129,10 @@
 | Method | Path | Roles | Notes |
 |---|---|---|---|
 | GET | `/recognition` | Any | filters: `period_type` (weekly/monthly), `department_id` — leaderboard view, includes `is_employee_of_month` flag |
+| GET | `/performance-reviews/queue` | Any (self-scoping) | Added 2026-08-08 (Pillar 3). `?year=&month=` (defaults to the current month). The caller's monthly-review worklist: employees they may review, each with **their own** review for the period or `null`, plus a `{ reviewable, reviewed, pending }` summary. Admin/HR see everyone, a Lead sees their team, everyone else gets an empty list (not a 403). Future periods → 422 |
+| GET | `/employees/:id/performance-review` | Self, owning Lead, Admin/HR | Added 2026-08-08. Full multi-reviewer history + `{ reviewCount, averageRating, latestRating }`. Each row carries `canEdit` for the caller |
+| POST | `/employees/:id/performance-review` | Owning Lead, Admin/HR — **never self** | Added 2026-08-08. `{ rating (1-5), note?, periodYear?, periodMonth? }` (period defaults to the current month). 409 on a repeat for the same (employee, reviewer, period); 422 for a future period or one before the employee joined. Audited as `performance_review.create` |
+| PATCH | `/performance-reviews/:id` | The review's author, **or Admin** | Added 2026-08-08. `{ rating?, note? }` (`note: null` clears it) — the only way a rating changes after the fact, since creating a duplicate is a 409. A Lead can never rewrite another reviewer's row. Audited as `performance_review.update` with the previous rating |
 | GET | `/notifications` | Any (self) | current user's notifications |
 | PATCH | `/notifications/:id/read` | Any (self) | |
 | GET | `/announcements` | Any | server scopes results: all-company + specific-team announcements matching the user's team + team announcements for the user's own team |

@@ -257,6 +257,22 @@ Weekly/Monthly aggregate leaderboard snapshots, computed **per department**.
 | rank | integer | rank within their department for that period |
 | is_employee_of_month | boolean | true for `rank = 1` in a `monthly` snapshot for that department — this is what feeds `payslips.employee_of_month_ref` |
 
+### `performance_reviews` (added 2026-08-08, overhaul Pillar 3)
+The human counterweight to the automatic, countable signals. One 1–5 rating per employee per month per reviewer, entered by the Lead who owns their team (or Admin/HR). No employee-facing workflow: it is written on `/performance/review` and read back on the employee's own profile.
+| Column | Type | Notes |
+|---|---|---|
+| id | uuid PK | |
+| employee_id | uuid FK → employees.id | the person being reviewed; `ON DELETE CASCADE` |
+| reviewer_id | uuid FK → employees.id | the Lead/Admin/HR who wrote it; `ON DELETE RESTRICT` |
+| period_year | integer | |
+| period_month | integer | 1–12 |
+| rating | integer | 1–5; bounds + labels live in `lib/performance/review.ts` |
+| note | text? | optional one-liner on what drove the rating |
+| created_at | timestamptz | |
+| updated_at | timestamptz | |
+
+**Unique** `(employee_id, reviewer_id, period_year, period_month)` — a repeat insert is a 409, so a rating is never silently overwritten; corrections go through `PATCH /performance-reviews/:id`. Two *different* reviewers may rate the same employee for the same month (the Lead's read and Admin's are separate rows). Feeds the **Quality** component of the Pillar 6 composite performance score.
+
 ### `notifications`
 | Column | Type | Notes |
 |---|---|---|
