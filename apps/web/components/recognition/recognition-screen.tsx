@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { ChevronDown } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -8,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { apiFetch } from "@/components/_lib/api";
 import { formatDate } from "@/lib/format-date";
+import { ScoreBreakdown, type ScoreComponents } from "./score-breakdown";
 
 type LeaderboardRow = {
   employeeId: string;
@@ -17,6 +19,9 @@ type LeaderboardRow = {
   score: number;
   rank: number;
   isEmployeeOfMonth: boolean;
+  // Monthly composite breakdown (Pillar 6). Null on weekly snapshots and on
+  // monthly rows computed before Pillar 6 — those show a bare score.
+  components: ScoreComponents | null;
 };
 type RecognitionResponse = {
   periodType: "weekly" | "monthly";
@@ -32,6 +37,7 @@ export function RecognitionScreen() {
   const [recomputing, setRecomputing] = useState(false);
   const [publishingId, setPublishingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   async function lookup(pt: "weekly" | "monthly") {
     setError(null);
@@ -104,6 +110,9 @@ export function RecognitionScreen() {
         <h1 className="text-2xl font-bold tracking-tight">Recognition</h1>
         <p className="text-sm text-muted-foreground">
           Weekly / monthly leaderboard per department.{" "}
+          {periodType === "monthly"
+            ? "Monthly scores are a 0-100 composite of output, quality, attendance, timeliness and commitments kept — open a score to see the breakdown. "
+            : "Weekly scores are raw output only. "}
           {isAdmin
             ? "Employee of the Week/Month is now an admin pick — publish a winner from the leaderboard below."
             : "Employee of the Week/Month is published by an admin."}
@@ -149,33 +158,60 @@ export function RecognitionScreen() {
               {result.leaderboard.length === 0 && (
                 <p className="text-sm text-muted-foreground">No snapshot yet.</p>
               )}
-              {result.leaderboard.map((r) => (
-                <div
-                  key={`${r.departmentId}-${r.employeeId}`}
-                  className="flex items-center justify-between rounded border p-3 text-sm"
-                >
-                  <span>
-                    <strong>#{r.rank}</strong> {r.employeeName}{" "}
-                    <span className="text-muted-foreground">· {r.departmentName}</span>
-                  </span>
-                  <div className="flex items-center gap-2">
-                    <span className="text-muted-foreground">score {r.score}</span>
-                    {r.isEmployeeOfMonth && (
-                      <Badge>{periodType === "weekly" ? "Employee of the Week" : "Employee of the Month"}</Badge>
-                    )}
-                    {isAdmin && !r.isEmployeeOfMonth && (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => publish(r)}
-                        disabled={publishingId === r.employeeId}
-                      >
-                        {publishingId === r.employeeId ? "Publishing…" : "Publish"}
-                      </Button>
+              {result.leaderboard.map((r) => {
+                const rowId = `${r.departmentId}-${r.employeeId}`;
+                const expanded = expandedId === rowId;
+                return (
+                  <div key={rowId} className="rounded border text-sm">
+                    <div className="flex items-center justify-between p-3">
+                      <span>
+                        <strong>#{r.rank}</strong> {r.employeeName}{" "}
+                        <span className="text-muted-foreground">· {r.departmentName}</span>
+                      </span>
+                      <div className="flex items-center gap-2">
+                        {r.components ? (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-auto px-2 py-1 font-normal text-muted-foreground"
+                            aria-expanded={expanded}
+                            onClick={() => setExpandedId(expanded ? null : rowId)}
+                          >
+                            score {r.score} / 100
+                            <ChevronDown
+                              className={`ml-1 h-3.5 w-3.5 transition-transform ${expanded ? "rotate-180" : ""}`}
+                            />
+                          </Button>
+                        ) : (
+                          <span className="text-muted-foreground">score {r.score}</span>
+                        )}
+                        {r.isEmployeeOfMonth && (
+                          <Badge>
+                            {periodType === "weekly"
+                              ? "Employee of the Week"
+                              : "Employee of the Month"}
+                          </Badge>
+                        )}
+                        {isAdmin && !r.isEmployeeOfMonth && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => publish(r)}
+                            disabled={publishingId === r.employeeId}
+                          >
+                            {publishingId === r.employeeId ? "Publishing…" : "Publish"}
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                    {expanded && r.components && (
+                      <div className="border-t bg-muted/30 p-3">
+                        <ScoreBreakdown data={r.components} />
+                      </div>
                     )}
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </CardContent>

@@ -253,7 +253,8 @@ Weekly/Monthly aggregate leaderboard snapshots, computed **per department**.
 | period_start | date | |
 | department_id | uuid FK → departments.id | aggregation and ranking are scoped per department |
 | employee_id | uuid FK → employees.id | |
-| score | numeric | task points (Tech) or aggregated target performance (Sales/BD) |
+| score | numeric | **`weekly`:** raw task points (Tech) or aggregated target performance (Sales/BD). **`monthly` (changed 2026-08-08, Pillar 6):** a 0–100 weighted composite — see `components` |
+| components | jsonb NULL | Added 2026-08-08 (Pillar 6). The breakdown behind a monthly composite score: `{ score, components: [{ key, label, weight, nominalWeight, value, detail }], unavailable: [key] }`. `weight` is the **renormalised** share (always totals 100 across the listed components); `value` is that component's own 0–100 result. **Null on `weekly` rows and on rows computed before Pillar 6** — consumers must handle null and fall back to showing the bare score. Weights live in `lib/performance/composite.ts`: output 40, quality 20, attendance 20, timeliness 10, commitments-kept 10, plus a `salesOutcome` slot at **weight 0** reserved for CRM deal outcomes (Pillars 4/5, not built). A component with no data for the period is *unavailable*, not zero — it is dropped and the remaining weights are renormalised, so a first-month hire with no review yet is not penalised for it |
 | rank | integer | rank within their department for that period |
 | is_employee_of_month | boolean | true for `rank = 1` in a `monthly` snapshot for that department — this is what feeds `payslips.employee_of_month_ref` |
 

@@ -1,0 +1,249 @@
+import { prisma } from "@/lib/db/prisma";
+import { getMonthlyAttendanceBreakdownForAllEmployees } from "@/lib/attendance/monthly-breakdown";
+import type { MonthlyBreakdown } from "@/lib/attendance/monthly-breakdown";
+import {
+  attendanceToScore,
+  computeComposite,
+  ratingToScore,
+  ratioToScore,
+  relativeToBest,
+  type ComponentInput,
+  type ComponentKey,
+  type CompositeResult,
+} from "@/lib/performance/composite";
+
+// Pillar 6 (2026-08-08) — the DB half of the composite monthly score. The
+// weighting maths lives in ./composite.ts (pure, unit-tested); this file only
+// gathers raw inputs and hands them over.
+//
+// Everything is fetched ORG-WIDE in one pass (six queries total, regardless of
+// department or headcount) because computeAndReplace loops over departments and
+// a per-department fetch would be 6*N round-trips. The recognition cron already
+// runs weekly + monthly for every department, so this matters.
+
+export type EmployeeRawInputs = {
+  /** Verified task points credited in the period (Atomic/Tech). */
+  points: number;
+  /** Average metric attainment %, or null when the employee has no metric items. */
+  metricAttainment: number | null;
+  /** Average Lead review rating 1-5, or null when unreviewed. */
+  reviewAvg: number | null;
+  attendance: MonthlyBreakdown | null;
+  /** Due-dated tasks completed in the period, and how many of those were on time. */
+  timeliness: { onTime: number; total: number };
+  /** Distinct tasks committed to in Daily Planning, and how many reached completed. */
+  adherence: { completed: number; total: number };
+};
+
+export type MonthlyInputs = Map<string, EmployeeRawInputs>;
+
+function blank(): EmployeeRawInputs {
+  return {
+    points: 0,
+    metricAttainment: null,
+    reviewAvg: null,
+    attendance: null,
+    timeliness: { onTime: 0, total: 0 },
+    adherence: { completed: 0, total: 0 },
+  };
+}
+
+function entry(map: MonthlyInputs, employeeId: string): EmployeeRawInputs {
+  let e = map.get(employeeId);
+  if (!e) {
+    e = blank();
+    map.set(employeeId, e);
+  }
+  return e;
+}
+
+/** UTC calendar day of an instant, as a comparable epoch — due dates are date-only. */
+function utcDay(d: Date): number {
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+}
+
+/**
+ * Gather every composite input for one month, for every active employee.
+ * `periodEnd` is exclusive.
+ */
+export async function gatherMonthlyInputs(
+  periodStart: Date,
+  periodEnd: Date,
+): Promise<MonthlyInputs> {
+  const month = periodStart.getUTCMonth() + 1;
+  const year = periodStart.getUTCFullYear();
+  const inputs: MonthlyInputs = new Map();
+
+  const [ledger, metricItems, reviews, attendance, dueDated, selections] = await Promise.all([
+    prisma.employeePointLedger.groupBy({
+      by: ["employeeId"],
+      where: { creditedAt: { gte: periodStart, lt: periodEnd } },
+      _sum: { points: true },
+    }),
+    prisma.workItem.findMany({
+      where: {
+        mode: "metric",
+        periodMonth: month,
+        periodYear: year,
+        deletedAt: null,
+      },
+      select: { assignedTo: true, targetValue: true, currentValue: true },
+    }),
+    prisma.performanceReview.groupBy({
+      by: ["employeeId"],
+      where: { periodYear: year, periodMonth: month },
+      _avg: { rating: true },
+    }),
+    getMonthlyAttendanceBreakdownForAllEmployees(month, year),
+    prisma.workItem.findMany({
+      where: {
+        deletedAt: null,
+        dueDate: { not: null },
+        completedAt: { gte: periodStart, lt: periodEnd },
+      },
+      select: { assignedTo: true, dueDate: true, completedAt: true },
+    }),
+    // Commitment adherence. The plan originally specified a strict same-day
+    // join (selected on day D and completed on day D); that would score a
+    // well-run five-day task as four broken commitments, which directly fights
+    // Pillar 2's push toward larger, verified tasks. So this measures DISTINCT
+    // tasks committed to during the period that actually reached completed —
+    // "did what you signed up for land?" rather than "did it land today?".
+    prisma.dailyTaskSelection.findMany({
+      where: { date: { gte: periodStart, lt: periodEnd } },
+      select: {
+        employeeId: true,
+        workItemId: true,
+        workItem: { select: { completedAt: true, deletedAt: true } },
+      },
+    }),
+  ]);
+
+  for (const row of ledger) {
+    entry(inputs, row.employeeId).points = row._sum.points ?? 0;
+  }
+
+  const metricPcts = new Map<string, number[]>();
+  for (const item of metricItems) {
+    const target = Number(item.targetValue ?? 0);
+    const current = Number(item.currentValue ?? 0);
+    const pct = target > 0 ? (current / target) * 100 : 0;
+    const list = metricPcts.get(item.assignedTo) ?? [];
+    list.push(pct);
+    metricPcts.set(item.assignedTo, list);
+  }
+  for (const [employeeId, pcts] of metricPcts) {
+    entry(inputs, employeeId).metricAttainment =
+      pcts.reduce((a, b) => a + b, 0) / pcts.length;
+  }
+
+  for (const row of reviews) {
+    entry(inputs, row.employeeId).reviewAvg = row._avg.rating ?? null;
+  }
+
+  for (const row of attendance) {
+    entry(inputs, row.employeeId).attendance = row;
+  }
+
+  for (const item of dueDated) {
+    if (!item.dueDate || !item.completedAt) continue;
+    const t = entry(inputs, item.assignedTo).timeliness;
+    t.total += 1;
+    if (utcDay(item.completedAt) <= utcDay(item.dueDate)) t.onTime += 1;
+  }
+
+  // A task selected on several days is one commitment, not several.
+  const seen = new Set<string>();
+  for (const sel of selections) {
+    if (sel.workItem.deletedAt) continue;
+    const key = `${sel.employeeId}:${sel.workItemId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const a = entry(inputs, sel.employeeId).adherence;
+    a.total += 1;
+    if (sel.workItem.completedAt && sel.workItem.completedAt < periodEnd) a.completed += 1;
+  }
+
+  return inputs;
+}
+
+/** The department-relative ceiling the `output` component is measured against. */
+export type DepartmentBest = { bestPoints: number };
+
+export function departmentBest(
+  employeeIds: string[],
+  inputs: MonthlyInputs,
+): DepartmentBest {
+  let bestPoints = 0;
+  for (const id of employeeIds) {
+    const raw = inputs.get(id);
+    if (raw && raw.points > bestPoints) bestPoints = raw.points;
+  }
+  return { bestPoints };
+}
+
+/**
+ * Turn one employee's raw inputs into a composite score.
+ *
+ * `isMetricDepartment` selects how "output" is measured: Tech earns discrete
+ * task points (compared against the department's top scorer, since a raw point
+ * total means nothing in isolation), while Sales/BD work to numeric targets
+ * where attainment against target is already an absolute 0-100 measure.
+ */
+export function scoreEmployee(
+  employeeId: string,
+  inputs: MonthlyInputs,
+  best: DepartmentBest,
+  isMetricDepartment: boolean,
+): CompositeResult {
+  const raw = inputs.get(employeeId) ?? blank();
+  const components: Partial<Record<ComponentKey, ComponentInput>> = {};
+
+  if (isMetricDepartment) {
+    components.output = {
+      value: raw.metricAttainment,
+      detail:
+        raw.metricAttainment === null
+          ? undefined
+          : `${Math.round(raw.metricAttainment)}% of target`,
+    };
+  } else {
+    components.output = {
+      value: relativeToBest(raw.points, best.bestPoints),
+      detail: best.bestPoints > 0 ? `${raw.points} of ${best.bestPoints} pts` : undefined,
+    };
+  }
+
+  components.quality = {
+    value: ratingToScore(raw.reviewAvg),
+    detail: raw.reviewAvg === null ? undefined : `${raw.reviewAvg.toFixed(1)} / 5 rating`,
+  };
+
+  components.attendance = raw.attendance
+    ? {
+        value: attendanceToScore(raw.attendance),
+        detail: `${raw.attendance.presentDays + raw.attendance.halfDays * 0.5} of ${raw.attendance.workingDaysElapsed} days`,
+      }
+    : { value: null };
+
+  components.timeliness = {
+    value: ratioToScore(raw.timeliness.onTime, raw.timeliness.total),
+    detail:
+      raw.timeliness.total > 0
+        ? `${raw.timeliness.onTime} of ${raw.timeliness.total} on time`
+        : undefined,
+  };
+
+  components.adherence = {
+    value: ratioToScore(raw.adherence.completed, raw.adherence.total),
+    detail:
+      raw.adherence.total > 0
+        ? `${raw.adherence.completed} of ${raw.adherence.total} completed`
+        : undefined,
+  };
+
+  // components.salesOutcome stays unset — the CRM slot (Pillars 4/5) is not
+  // built yet, and its nominal weight is 0 so supplying it would change nothing.
+
+  return computeComposite(components);
+}

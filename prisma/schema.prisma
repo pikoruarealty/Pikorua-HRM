@@ -608,6 +608,12 @@ model RecognitionSnapshot {
   employeeId       String   @map("employee_id") @db.Uuid
   employee         Employee @relation(fields: [employeeId], references: [id])
   score            Decimal  @db.Decimal(14, 2)
+  // Pillar 6 (2026-08-08): for MONTHLY snapshots `score` is now a 0-100
+  // composite (see lib/performance/composite.ts) and `components` stores the
+  // weighted breakdown that produced it, so a score is always explainable
+  // after the fact even if the inputs later change. Null on weekly snapshots
+  // (still raw single-signal scoring) and on pre-Pillar-6 rows.
+  components       Json?
   rank             Int
   isEmployeeOfMonth Boolean @default(false) @map("is_employee_of_month")
   // 2026-08-07: auto-computation no longer sets isEmployeeOfMonth on its own

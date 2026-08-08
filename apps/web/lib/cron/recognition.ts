@@ -1,12 +1,24 @@
 import { prisma } from "@/lib/db/prisma";
-import { RecognitionPeriodType, EmployeeStatus } from "@prisma/client";
+import { RecognitionPeriodType, EmployeeStatus, Prisma } from "@prisma/client";
 import { notifyAllActiveUsers } from "@/lib/notifications/push";
+import {
+  departmentBest,
+  gatherMonthlyInputs,
+  scoreEmployee,
+} from "@/lib/performance/monthly-score";
 
 // Track B — Milestone 3.1 core logic, extracted from the cron route so both
 // the CRON_SECRET-gated HTTP route AND the in-process scheduler
 // (instrumentation.ts) can invoke it without going through HTTP. Tech scores
 // off point-ledger, Sales/BD off metric achieved-%, idempotent per
 // (period_type, period_start).
+//
+// 2026-08-08 (Pillar 6): MONTHLY snapshots are no longer that single signal.
+// They are now a 0-100 weighted composite of output, Lead quality rating,
+// attendance, timeliness and commitments kept — see lib/performance/composite.ts
+// for the weights and lib/performance/monthly-score.ts for the inputs. The
+// breakdown is stored alongside the score in `components` so a rank stays
+// explainable later. WEEKLY is untouched and still uses the raw scoring below.
 //
 // 2026-08-07: this snapshot is now reference-only leaderboard data — it no
 // longer sets isEmployeeOfMonth on its own. "Employee of the Week/Month" is
@@ -55,16 +67,36 @@ export async function computeAndReplace(
     departmentId: string;
     employeeId: string;
     score: number;
+    components?: Prisma.InputJsonValue;
     rank: number;
     isEmployeeOfMonth: boolean;
   }[] = [];
 
+  // Monthly is a composite of output + quality + attendance + timeliness +
+  // commitments kept (Pillar 6). Weekly deliberately stays on the original raw
+  // single-signal scoring: monthly attendance and a monthly quality review say
+  // nothing meaningful about a 7-day window.
+  const isMonthly = periodType === RecognitionPeriodType.monthly;
+  const monthlyInputs = isMonthly ? await gatherMonthlyInputs(periodStart, end) : null;
+
   for (const dept of departments) {
     if (dept.employees.length === 0) continue;
 
-    const scored: { employeeId: string; score: number }[] = [];
+    const scored: { employeeId: string; score: number; components?: Prisma.InputJsonValue }[] = [];
 
-    if (dept.typeKey === "tech") {
+    if (monthlyInputs) {
+      const employeeIds = dept.employees.map((e) => e.id);
+      const best = departmentBest(employeeIds, monthlyInputs);
+      const isMetricDepartment = dept.typeKey !== "tech";
+      for (const emp of dept.employees) {
+        const result = scoreEmployee(emp.id, monthlyInputs, best, isMetricDepartment);
+        scored.push({
+          employeeId: emp.id,
+          score: result.score,
+          components: result as unknown as Prisma.InputJsonValue,
+        });
+      }
+    } else if (dept.typeKey === "tech") {
       const ledgerSums = await prisma.employeePointLedger.groupBy({
         by: ["employeeId"],
         where: {
@@ -114,6 +146,7 @@ export async function computeAndReplace(
         departmentId: dept.id,
         employeeId: s.employeeId,
         score: s.score,
+        ...(s.components === undefined ? {} : { components: s.components }),
         rank,
         // No longer auto-set — see the file-header note. Admin picks and
         // publishes the winner via POST /recognition/publish.
