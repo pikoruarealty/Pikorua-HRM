@@ -17,6 +17,7 @@ import {
   Activity,
   ArrowUpRight,
   AlertCircle,
+  ClipboardCheck,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -117,6 +118,11 @@ export function HomeScreen({
   const [publishedPicks, setPublishedPicks] = useState<PublishedPick[]>([]);
   const [dismissed, setDismissed] = useState<string[]>([]);
 
+  // Tasks the viewer has to sign off before their points are credited
+  // (Pillar 2). The endpoint self-scopes: leads see their own units, Admin/HR
+  // see the whole company, everyone else gets an empty list.
+  const [awaitingReview, setAwaitingReview] = useState<number | null>(null);
+
   // WorkUnits count for admin snapshot.
   const [workUnits, setWorkUnits] = useState<{ id: string; status: string }[] | null>(null);
 
@@ -154,6 +160,9 @@ export function HomeScreen({
     if (isLead || isFinance) {
       apiFetch<RequestRow[]>("/requests?status=pending").then((r) =>
         setPendingApprovals(r.data?.length ?? 0),
+      );
+      apiFetch<{ id: string }[]>("/work-items/review-queue").then((r) =>
+        setAwaitingReview(r.data?.length ?? 0),
       );
     }
 
@@ -337,6 +346,13 @@ export function HomeScreen({
               value={null}
               hint="Manage projects & tasks"
               href="/work"
+            />
+            <StatTile
+              icon={<ClipboardCheck className="size-4" />}
+              label="Tasks awaiting your review"
+              value={awaitingReview}
+              hint="Points are credited when you accept"
+              href="/work/review"
             />
           </div>
         </section>

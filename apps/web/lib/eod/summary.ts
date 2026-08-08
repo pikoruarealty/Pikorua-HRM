@@ -6,9 +6,13 @@ import { WorkItemMode, WorkItemStatus } from "@prisma/client";
 //
 // The day's plan comes from Track B's DailyTaskSelection (chosen at clock-in);
 // outcomes come from the current WorkItem state plus the point-ledger rows
-// credited *today*. Points are credited immediately on completion (Track B's
-// verified transactional logic in work-items/:id/complete + PATCH), so this is
-// a read-only summary — it never credits or mutates anything.
+// credited *today*. This is a read-only summary — it never credits or mutates.
+//
+// Tiered review (Pillar 2, 2026-08-08): points are credited immediately for
+// small tasks, but a task above the review threshold sits in `in_review` until
+// a Lead accepts it — so it counts toward `inReviewCount` today and only lands
+// in `completedCount`/`pointsEarnedToday` on the day it's accepted. That's
+// deliberate: the day's point total means "points actually banked".
 
 export type EodItem = {
   workItemId: string;
@@ -29,6 +33,8 @@ export type EodSummary = {
   date: string; // YYYY-MM-DD
   plannedCount: number;
   completedCount: number;
+  /** Planned tasks handed in but not yet accepted by a Lead (Pillar 2). */
+  inReviewCount: number;
   pointsEarnedToday: number;
   items: EodItem[];
 };
@@ -91,6 +97,9 @@ export async function buildEodSummary(
   const completedCount = items.filter(
     (i) => i.status === WorkItemStatus.completed,
   ).length;
+  const inReviewCount = items.filter(
+    (i) => i.status === WorkItemStatus.in_review,
+  ).length;
 
   // Points earned today across *all* ledger entries for the day, even if the
   // completed item wasn't in today's plan (e.g. finished an unplanned task).
@@ -103,6 +112,7 @@ export async function buildEodSummary(
     date: dayStart.toISOString().slice(0, 10),
     plannedCount: items.length,
     completedCount,
+    inReviewCount,
     pointsEarnedToday,
     items,
   };

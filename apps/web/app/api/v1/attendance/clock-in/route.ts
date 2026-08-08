@@ -59,8 +59,15 @@ export async function POST(req: Request) {
   } else {
     // No tasks picked: require at least one IF the employee has active tasks to
     // pick from. Someone with nothing assigned can still clock in.
+    // `in_review` counts as not-actionable alongside `completed`: the task is
+    // out of the employee's hands until their lead accepts or sends it back, so
+    // it can't be what they plan to work on today.
     const activeCount = await prisma.workItem.count({
-      where: { assignedTo: employeeId, status: { not: WorkItemStatus.completed }, deletedAt: null },
+      where: {
+        assignedTo: employeeId,
+        status: { notIn: [WorkItemStatus.completed, WorkItemStatus.in_review] },
+        deletedAt: null,
+      },
     });
     if (activeCount > 0) {
       return fail(

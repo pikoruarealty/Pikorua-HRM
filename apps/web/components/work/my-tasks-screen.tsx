@@ -5,10 +5,10 @@ import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 import { apiFetch } from "@/components/_lib/api";
 import { useAttendanceStatus } from "@/components/_lib/use-attendance-status";
 import { DueDateBadge } from "@/components/work/due-date";
+import { WorkItemStatusBadge } from "@/components/work/status-badge";
 
 type WorkItem = {
   id: string;
@@ -20,6 +20,7 @@ type WorkItem = {
   taskPoints?: number | null;
   targetValue?: string | null;
   currentValue?: string | null;
+  reviewNote?: string | null;
 };
 
 function ExplainBlock({ workItemId }: { workItemId: string }) {
@@ -87,11 +88,18 @@ function WorkItemRow({
           {wi.description && (
             <p className="mt-1 whitespace-pre-wrap text-xs text-muted-foreground">{wi.description}</p>
           )}
+          {/* Only surfaced when the task is back in the employee's hands —
+              on an accepted task the note is the lead's sign-off, not an
+              action item, and would just add noise here. */}
+          {wi.status === "wip" && wi.reviewNote && (
+            <p className="mt-1 text-xs text-warning">Sent back: {wi.reviewNote}</p>
+          )}
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
           <DueDateBadge dueDate={wi.dueDate} completed={wi.status === "completed"} />
-          <Badge variant="outline">{wi.status}</Badge>
+          <WorkItemStatusBadge status={wi.status} />
           {wi.status !== "completed" &&
+            wi.status !== "in_review" &&
             (wi.mode === "atomic" ? (
               <Button size="sm" onClick={() => onComplete(wi.id)} disabled={disabled}>
                 Complete
@@ -168,7 +176,8 @@ export function MyTasksScreen() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">My Tasks</h1>
         <p className="text-sm text-muted-foreground">
-          Your assigned work items. Completing an atomic task credits its points immediately.
+          Your assigned work items. Completing an atomic task credits its points immediately — larger
+          tasks go to your lead for a quick check first, then the points land.
         </p>
       </div>
       {error && <p className="text-sm text-destructive">{error}</p>}
@@ -213,7 +222,7 @@ export function MyTasksScreen() {
           {completed.map((wi) => (
             <div key={wi.id} className="flex items-center justify-between rounded border p-3 text-sm">
               <span className="text-muted-foreground">{wi.title}</span>
-              <Badge variant="outline">{wi.status}</Badge>
+              <WorkItemStatusBadge status={wi.status} />
             </div>
           ))}
         </CardContent>

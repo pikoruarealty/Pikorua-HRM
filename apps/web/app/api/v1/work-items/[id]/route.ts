@@ -5,6 +5,8 @@ import { isFinanceRole, rolesAtOrBelow } from "@/lib/rbac";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { Prisma, WorkItemMode, WorkItemStatus } from "@prisma/client";
 import { isClockedInNow } from "@/lib/attendance/status";
+import { requiresReview } from "@/lib/work/review";
+import { notifyReviewSubmitted } from "@/lib/work/notify";
 
 // Track B. PATCH/DELETE /api/v1/work-items/:id — Milestone 1.2 (atomic) + 2.2 (metric).
 
@@ -101,6 +103,19 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     if (isMetric && status !== undefined) {
       return failFor(ErrorCode.FORBIDDEN, "Metric-mode status is derived from currentValue, not set directly.");
     }
+    // `in_review` is never set by hand — it's the automatic result of an
+    // assignee completing a task above the review threshold.
+    if (status === WorkItemStatus.in_review) {
+      return failFor(
+        ErrorCode.FORBIDDEN,
+        "Mark the task complete instead — review is applied automatically for large tasks.",
+      );
+    }
+    // Once submitted, only a Lead can move it (accept or send back), otherwise
+    // an assignee could pull a task out of the queue after the fact.
+    if (workItem.status === WorkItemStatus.in_review) {
+      return failFor(ErrorCode.FORBIDDEN, "This task is waiting on review — your lead has it now.");
+    }
   }
 
   if (assignedTo) {
@@ -150,19 +165,65 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
   const wasCompleted = workItem.status === WorkItemStatus.completed;
   const nowCompleted = status === WorkItemStatus.completed;
+
+  // Tiered review (Pillar 2): an *assignee* marking a threshold-crossing task
+  // done submits it for review rather than completing it — same rule as
+  // POST /work-items/:id/complete, so the two paths can't disagree. A Lead/Admin
+  // setting `completed` here is the correction/override path and credits
+  // straight away: their edit *is* the review.
+  const effectivePoints = taskPoints ?? workItem.taskPoints;
+  const submittingForReview =
+    nowCompleted && !wasCompleted && !canEditAll && requiresReview(effectivePoints);
+
+  if (submittingForReview) {
+    const submitted = await prisma.workItem.update({
+      where: { id: params.id },
+      data: {
+        status: WorkItemStatus.in_review,
+        submittedAt: new Date(),
+        reviewedBy: null,
+        reviewedAt: null,
+        reviewNote: null,
+      },
+    });
+    const assignee = await prisma.employee.findUnique({
+      where: { id: workItem.assignedTo },
+      select: { fullName: true },
+    });
+    await notifyReviewSubmitted(
+      workItem.subUnit.workUnit.projectLeadId,
+      assignee?.fullName ?? "An employee",
+      workItem.title,
+    );
+    return ok(submitted);
+  }
+
   const completingNow = nowCompleted && !wasCompleted;
 
   // Completion always credits task_points to the ledger, regardless of whether
   // it happens here or via POST /work-items/:id/complete. The ledger's
   // unique(work_item_id) constraint guarantees at most one credit even if this
   // route races the other one — the losing transaction rolls back (P2002) and
-  // we surface a conflict instead of double-crediting.
+  // we surface a conflict instead of double-crediting. A task accepted out of
+  // `in_review` via POST /work-items/:id/review takes the same guard.
   if (completingNow) {
     try {
       const [updatedItem] = await prisma.$transaction([
         prisma.workItem.update({
           where: { id: params.id },
-          data: { title, description, dueDate, assignedTo, taskPoints, status, completedAt: new Date() },
+          data: {
+            title,
+            description,
+            dueDate,
+            assignedTo,
+            taskPoints,
+            status,
+            completedAt: new Date(),
+            // A Lead completing an item straight out of review is the reviewer.
+            ...(workItem.status === WorkItemStatus.in_review
+              ? { reviewedBy: session.employeeId, reviewedAt: new Date() }
+              : {}),
+          },
         }),
         prisma.employeePointLedger.create({
           data: {

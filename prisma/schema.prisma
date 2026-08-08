@@ -60,9 +60,15 @@ enum WorkUnitStatus {
   archived
 }
 
+// `in_review` (Pillar 2, 2026-08-08) sits between wip and completed: an atomic
+// task worth more than the auto-credit threshold (WORK_ITEM_REVIEW_THRESHOLD,
+// default 3 pts) lands here when the assignee marks it done, and only becomes
+// `completed` — and only then credits points — when a Lead accepts it.
+// Small tasks skip this state entirely and credit instantly, as before.
 enum WorkItemStatus {
   pending
   wip
+  in_review
   completed
 }
 
@@ -263,6 +269,7 @@ model Employee {
   ledTeams           Team[]               @relation("TeamLead")
   ledWorkUnits       WorkUnit[]           @relation("WorkUnitProjectLead")
   assignedWorkItems  WorkItem[]           @relation("WorkItemAssignee")
+  reviewedWorkItems  WorkItem[]           @relation("WorkItemReviewer")
   dailySelections    DailyTaskSelection[]
   pointLedger        EmployeePointLedger[]
   attendanceRecords  AttendanceRecord[]
@@ -350,6 +357,17 @@ model WorkItem {
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
   completedAt DateTime? @map("completed_at") @db.Timestamptz(6)
+  // Lead review trail (Pillar 2, 2026-08-08). `submittedAt` is when the
+  // assignee marked a threshold-crossing task done; the reviewed* fields are
+  // stamped when the Lead accepts or sends it back. `reviewNote` is the Lead's
+  // reason — required when rejecting or when crediting fewer points than
+  // taskPoints. Points actually awarded live in EmployeePointLedger, not here:
+  // taskPoints stays the nominal size of the task.
+  submittedAt DateTime? @map("submitted_at") @db.Timestamptz(6)
+  reviewedBy  String?   @map("reviewed_by") @db.Uuid
+  reviewer    Employee? @relation("WorkItemReviewer", fields: [reviewedBy], references: [id])
+  reviewedAt  DateTime? @map("reviewed_at") @db.Timestamptz(6)
+  reviewNote  String?   @map("review_note")
   // Soft delete — the points ledger keeps referencing this row for audit even
   // after deletion; deleted rows are just filtered out of normal operation.
   deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(6)
@@ -359,6 +377,8 @@ model WorkItem {
 
   @@index([assignedTo])
   @@index([mode, periodYear, periodMonth, periodDay])
+  // Backs the Lead review queue (status = in_review) — a small, hot filter.
+  @@index([status])
   @@map("work_items")
 }
 

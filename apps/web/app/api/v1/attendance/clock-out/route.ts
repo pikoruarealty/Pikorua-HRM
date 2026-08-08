@@ -57,6 +57,7 @@ export async function POST() {
       session.userId,
       "eod_summary",
       `EOD: completed ${eod.completedCount}/${eod.plannedCount} planned task(s)` +
+        (eod.inReviewCount > 0 ? `, ${eod.inReviewCount} awaiting review` : "") +
         (eod.pointsEarnedToday > 0 ? `, +${eod.pointsEarnedToday} pts today.` : "."),
     ).catch(() => {});
   }
@@ -96,6 +97,7 @@ async function notifyEodToManagement(
 
   const message =
     `${employee.fullName}'s EOD: completed ${eod.completedCount}/${eod.plannedCount} planned task(s)` +
+    (eod.inReviewCount > 0 ? `, ${eod.inReviewCount} awaiting review` : "") +
     (eod.pointsEarnedToday > 0 ? `, +${eod.pointsEarnedToday} pts today.` : ".");
 
   await Promise.allSettled(

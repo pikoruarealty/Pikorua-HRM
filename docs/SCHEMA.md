@@ -106,12 +106,18 @@ Config table implementing the generic label mapping described in PRD §4.1.
 | period_month | integer? | required if mode = metric |
 | period_year | integer? | required if mode = metric |
 | period_day | integer? | required if mode = metric && frequency = daily, else null |
-| status | enum | `pending`, `wip`, `completed` — for atomic mode; for metric mode used loosely (`pending`/`wip`/`completed` when current >= target) |
+| status | enum | `pending`, `wip`, `in_review`, `completed` — for atomic mode; for metric mode used loosely (`pending`/`wip`/`completed` when current >= target; metric items never enter `in_review`) |
 | created_at | timestamptz | |
 | updated_at | timestamptz | |
 | completed_at | timestamptz? | |
+| submitted_at | timestamptz? | Tiered review (2026-08-08) — when the assignee handed a threshold-crossing task in. Survives a send-back, so a resubmitted task keeps its original hand-in time. |
+| reviewed_by | uuid? FK → employees.id | The Lead who accepted or sent the task back. Null until reviewed. |
+| reviewed_at | timestamptz? | When that verdict was given. Cleared on resubmission. |
+| review_note | text? | The Lead's reason. Required to send a task back, or to credit fewer points than `task_points`. Cleared on resubmission. |
 | deleted_at | timestamptz? | Soft delete (2026-07-18) — the points ledger keeps its row for audit even after the WorkItem is deleted; deleted rows are filtered out of every normal read. |
 
+> **Tiered point crediting (2026-08-08):** atomic tasks worth **more than** `WORK_ITEM_REVIEW_THRESHOLD` (default 3) don't complete when the assignee marks them done — they move to `in_review` and wait for the WorkUnit's project lead (or Admin/HR) to accept via `POST /work-items/:id/review`. **`employee_point_ledger` is written only on acceptance**, so a task in review has earned nothing yet; the ledger's `unique(work_item_id)` constraint still guarantees at most one credit across all three crediting paths (`/complete`, `PATCH`, `/review`). Tasks at or below the threshold are unchanged — instant credit. See `lib/work/review.ts`.
+>
 > **Monthly reset implementation (resolved 2026-07-13):** a new metric `work_item` row is created each period rather than resetting `current_value` in place, so `recognition_snapshots` and `payslips.employee_of_month_ref` key off `period_month`/`period_year` (+ `period_day` for daily), never a single ever-growing `current_value`.
 >
 > **Daily frequency (2026-07-18):** a `daily`-frequency metric task always starts "today" (server computes `period_month`/`period_year`/`period_day` at creation, ignoring any client-supplied period) and rolls forward automatically — a cron job (`lib/cron/metric-daily-rollover.ts`, daily at 00:10 UTC) clones the latest non-deleted daily row per `(sub_unit_id, assigned_to)` forward to a fresh row for today (`current_value` reset to 0, `target_value` carried forward). Soft-deleting the latest row stops the chain. `monthly`-frequency tasks are unchanged — still a Lead manually creating the next month's row.

@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { apiFetch } from "@/components/_lib/api";
 import { useAttendanceStatus } from "@/components/_lib/use-attendance-status";
 import { DueDateBadge } from "@/components/work/due-date";
+import { WorkItemStatusBadge, statusLabel } from "@/components/work/status-badge";
 
 type WorkItem = { id: string; title: string; status: string; dueDate?: string | null };
 type Selection = { id: string; workItemId: string; workItem: WorkItem };
@@ -21,6 +22,7 @@ type Eod = {
   date: string;
   plannedCount: number;
   completedCount: number;
+  inReviewCount: number;
   pointsEarnedToday: number;
   items: EodItem[];
 };
@@ -51,7 +53,10 @@ export function PlanningScreen({ isAdmin = false }: { isAdmin?: boolean }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const activeItems = mine.filter((wi) => wi.status !== "completed");
+  // `in_review` tasks are out of the employee's hands until their lead acts, so
+  // they're not pickable for today's plan — same rule the clock-in route
+  // enforces server-side.
+  const activeItems = mine.filter((wi) => wi.status !== "completed" && wi.status !== "in_review");
   // Must pick ≥1 task to clock in when there are active tasks to pick from
   // (mirrors the server rule); someone with nothing assigned can still clock in.
   const clockInBlocked = activeItems.length > 0 && Object.values(checked).every((v) => !v);
@@ -142,7 +147,7 @@ export function PlanningScreen({ isAdmin = false }: { isAdmin?: boolean }) {
                       checked={!!checked[wi.id]}
                       onChange={(e) => setChecked((c) => ({ ...c, [wi.id]: e.target.checked }))}
                     />
-                    {wi.title} <span className="text-muted-foreground">({wi.status})</span>
+                    {wi.title} <span className="text-muted-foreground">({statusLabel(wi.status)})</span>
                     <DueDateBadge dueDate={wi.dueDate} />
                   </label>
                 ))}
@@ -211,7 +216,7 @@ export function PlanningScreen({ isAdmin = false }: { isAdmin?: boolean }) {
           {today.map((s) => (
             <div key={s.id} className="flex items-center justify-between rounded border p-2 text-sm">
               <span>{s.workItem?.title}</span>
-              <Badge variant="outline">{s.workItem?.status}</Badge>
+              <WorkItemStatusBadge status={s.workItem?.status ?? "pending"} />
             </div>
           ))}
         </CardContent>
@@ -225,15 +230,26 @@ export function PlanningScreen({ isAdmin = false }: { isAdmin?: boolean }) {
           <CardContent className="flex flex-col gap-2 text-sm">
             <p>
               Planned <strong>{eod.plannedCount}</strong> · completed{" "}
-              <strong>{eod.completedCount}</strong> · earned{" "}
-              <strong>{eod.pointsEarnedToday}</strong> pts today
+              <strong>{eod.completedCount}</strong>
+              {eod.inReviewCount > 0 && (
+                <>
+                  {" "}
+                  · awaiting review <strong>{eod.inReviewCount}</strong>
+                </>
+              )}{" "}
+              · earned <strong>{eod.pointsEarnedToday}</strong> pts today
             </p>
+            {eod.inReviewCount > 0 && (
+              <p className="text-xs text-muted-foreground">
+                Points for tasks awaiting review are credited once your lead accepts them.
+              </p>
+            )}
             {eod.items.map((i) => (
               <div key={i.workItemId} className="flex items-center justify-between rounded border p-2">
                 <span>{i.title}</span>
                 <div className="flex items-center gap-2">
                   {i.completedToday && <Badge>done today</Badge>}
-                  <Badge variant="outline">{i.status}</Badge>
+                  <WorkItemStatusBadge status={i.status} />
                 </div>
               </div>
             ))}

@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { DatePicker } from "@/components/ui/date-picker";
 import { EmployeeAvatar } from "@/components/employees/employee-avatar";
+import { WorkItemStatusBadge } from "@/components/work/status-badge";
 
 // Lead/Admin "what is everyone doing right now" live view (companion to the
 // employee-facing planning-screen.tsx EOD card): every scoped employee's
@@ -31,6 +32,7 @@ type TaskProgressRow = {
   clockOut: string | null;
   plannedCount: number;
   completedCount: number;
+  inReviewCount: number;
   pointsEarnedToday: number;
   items: TaskProgressItem[];
 };
@@ -114,6 +116,7 @@ export function TeamTaskProgressPanel() {
                     <Progress value={pct} />
                     <span className="text-xs text-muted-foreground">
                       {r.completedCount}/{r.plannedCount} tasks
+                      {r.inReviewCount > 0 && ` · ${r.inReviewCount} to review`}
                     </span>
                   </div>
                   <span className="text-xs text-muted-foreground">+{r.pointsEarnedToday} pts today</span>
@@ -142,7 +145,7 @@ export function TeamTaskProgressPanel() {
                         </span>
                         <div className="flex items-center gap-2">
                           {i.completedToday && <Badge>done today</Badge>}
-                          <Badge variant="outline">{i.status}</Badge>
+                          <WorkItemStatusBadge status={i.status} />
                         </div>
                       </div>
                     ))}

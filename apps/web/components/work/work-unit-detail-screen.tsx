@@ -13,6 +13,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Progress } from "@/components/ui/progress";
 import { apiFetch } from "@/components/_lib/api";
 import { DueDateBadge } from "@/components/work/due-date";
+import { WorkItemStatusBadge } from "@/components/work/status-badge";
+import { formatDate } from "@/lib/format-date";
 
 type WorkItem = {
   id: string;
@@ -28,6 +30,8 @@ type WorkItem = {
   periodMonth?: number | null;
   periodYear?: number | null;
   periodDay?: number | null;
+  submittedAt?: string | null;
+  reviewNote?: string | null;
   assignee?: { id: string; fullName: string } | null;
 };
 type SubUnit = { id: string; name: string; workItems: WorkItem[] };
@@ -341,6 +345,82 @@ function ReassignControl({
         ))}
       </SelectContent>
     </Select>
+  );
+}
+
+// Lead-side gate for tiered point crediting (Pillar 2). Only rendered for items
+// sitting in `in_review`; accepting is what writes the point-ledger row, so the
+// points field defaults to the task's nominal value and only demands a reason
+// when the lead pays out less (or sends the task back).
+function ReviewControl({ wi, onReviewed }: { wi: WorkItem; onReviewed: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [points, setPoints] = useState(String(wi.taskPoints ?? ""));
+  const [note, setNote] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function submit(action: "accept" | "reject") {
+    setError(null);
+    const body: Record<string, unknown> = { action };
+    if (note.trim()) body.note = note.trim();
+    if (action === "accept") {
+      const n = Number(points);
+      if (!Number.isInteger(n) || n <= 0) return setError("Points must be a positive whole number.");
+      body.points = n;
+    }
+    setBusy(true);
+    const res = await apiFetch(`/work-items/${wi.id}/review`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    setBusy(false);
+    if (res.error) return setError(`${res.error.code}: ${res.error.message}`);
+    setOpen(false);
+    setNote("");
+    onReviewed();
+  }
+
+  if (!open) {
+    return (
+      <Button size="sm" onClick={() => setOpen(true)}>
+        Review
+      </Button>
+    );
+  }
+
+  return (
+    <div className="flex w-full flex-wrap items-center gap-2 rounded border p-2">
+      <span className="text-xs text-muted-foreground">
+        Submitted{wi.submittedAt ? ` ${formatDate(wi.submittedAt)}` : ""} · worth {wi.taskPoints} pts
+      </span>
+      <Input
+        className="h-8 w-24"
+        type="number"
+        min={1}
+        aria-label="Points to credit"
+        value={points}
+        onChange={(e) => setPoints(e.target.value)}
+        placeholder="points"
+      />
+      <Textarea
+        className="w-full"
+        rows={2}
+        aria-label="Review note"
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        placeholder="Reason — required to send back, or to credit fewer points than the task is worth."
+      />
+      <Button size="sm" onClick={() => submit("accept")} disabled={busy}>
+        Accept &amp; credit
+      </Button>
+      <Button size="sm" variant="outline" onClick={() => submit("reject")} disabled={busy}>
+        Send back
+      </Button>
+      <Button size="sm" variant="ghost" onClick={() => setOpen(false)} disabled={busy}>
+        Cancel
+      </Button>
+      {error && <p className="w-full text-sm text-destructive">{error}</p>}
+    </div>
   );
 }
 
@@ -849,6 +929,7 @@ export function WorkUnitDetailScreen({
 
   const allItems = (workUnit.subUnits ?? []).flatMap((su) => su.workItems ?? []);
   const completedCount = allItems.filter((wi) => wi.status === "completed").length;
+  const inReviewCount = allItems.filter((wi) => wi.status === "in_review").length;
   const progressPercent = allItems.length > 0 ? Math.round((completedCount / allItems.length) * 100) : 0;
 
   return (
@@ -885,6 +966,7 @@ export function WorkUnitDetailScreen({
             <Progress value={progressPercent} />
             <span className="whitespace-nowrap text-xs text-muted-foreground">
               {completedCount}/{allItems.length} done
+              {inReviewCount > 0 && ` · ${inReviewCount} awaiting review`}
             </span>
           </div>
         )}
@@ -1003,11 +1085,19 @@ export function WorkUnitDetailScreen({
                           {wi.description}
                         </span>
                       )}
+                      {wi.status === "wip" && wi.reviewNote && (
+                        <span className="mt-0.5 block text-xs text-warning">
+                          Sent back: {wi.reviewNote}
+                        </span>
+                      )}
                     </span>
                   </span>
                   <span className="flex flex-wrap items-center gap-2">
                     <DueDateBadge dueDate={wi.dueDate} completed={wi.status === "completed"} />
-                    <Badge variant="outline">{wi.status}</Badge>
+                    <WorkItemStatusBadge status={wi.status} />
+                    {canManage && wi.status === "in_review" && (
+                      <ReviewControl wi={wi} onReviewed={refresh} />
+                    )}
                     {canManage && (
                       <>
                         <ReassignControl

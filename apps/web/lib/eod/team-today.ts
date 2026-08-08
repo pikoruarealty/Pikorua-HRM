@@ -15,6 +15,8 @@ export type TeamTodayRow = {
   clockOut: Date | null;
   plannedCount: number;
   completedCount: number;
+  /** Planned tasks handed in but not yet accepted by a Lead (Pillar 2). */
+  inReviewCount: number;
   pointsEarnedToday: number;
   items: EodItem[];
 };
@@ -92,6 +94,7 @@ export async function buildTeamTodaySummary(
     });
 
     const completedCount = items.filter((i) => i.status === WorkItemStatus.completed).length;
+    const inReviewCount = items.filter((i) => i.status === WorkItemStatus.in_review).length;
     const pointsEarnedToday = Array.from(creditedTodayByItem.values()).reduce((a, b) => a + b, 0);
 
     return {
@@ -102,6 +105,7 @@ export async function buildTeamTodaySummary(
       clockOut: record?.clockOutRaw ?? null,
       plannedCount: items.length,
       completedCount,
+      inReviewCount,
       pointsEarnedToday,
       items,
     };

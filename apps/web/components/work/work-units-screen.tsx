@@ -5,7 +5,7 @@ import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
@@ -32,6 +32,9 @@ export function WorkUnitsScreen() {
   const [projectLeadId, setProjectLeadId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // Count of tasks waiting on the viewer's sign-off (Pillar 2). Self-scoped by
+  // the endpoint, so this is 0 for anyone who leads nothing.
+  const [reviewCount, setReviewCount] = useState<number | null>(null);
 
   async function refresh() {
     const res = await apiFetch<WorkUnit[]>("/work-units");
@@ -42,6 +45,9 @@ export function WorkUnitsScreen() {
     refresh();
     apiFetch<Department[]>("/departments").then((r) => r.data && setDepartments(r.data));
     apiFetch<Employee[]>("/employees").then((r) => r.data && setEmployees(r.data));
+    apiFetch<{ id: string }[]>("/work-items/review-queue").then((r) =>
+      setReviewCount(r.data?.length ?? 0),
+    );
   }, []);
 
   async function handleCreate(e: React.FormEvent) {
@@ -70,12 +76,17 @@ export function WorkUnitsScreen() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Work Units</h1>
-        <p className="text-sm text-muted-foreground">
-          Projects / Campaigns — the top of the work hierarchy. Click one to manage its sub-units,
-          tasks and AI task generation.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Work Units</h1>
+          <p className="text-sm text-muted-foreground">
+            Projects / Campaigns — the top of the work hierarchy. Click one to manage its sub-units,
+            tasks and AI task generation.
+          </p>
+        </div>
+        <Link href="/work/review" className={buttonVariants({ variant: "outline", size: "sm" })}>
+          Task review{reviewCount === null ? "" : ` (${reviewCount})`}
+        </Link>
       </div>
 
       <Card>
