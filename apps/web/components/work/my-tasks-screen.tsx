@@ -8,10 +8,13 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { apiFetch } from "@/components/_lib/api";
 import { useAttendanceStatus } from "@/components/_lib/use-attendance-status";
+import { DueDateBadge } from "@/components/work/due-date";
 
 type WorkItem = {
   id: string;
   title: string;
+  description?: string | null;
+  dueDate?: string | null;
   mode: "atomic" | "metric";
   status: string;
   taskPoints?: number | null;
@@ -74,15 +77,19 @@ function WorkItemRow({
 }) {
   return (
     <div className="rounded border p-3 text-sm">
-      <div className="flex items-center justify-between gap-3">
-        <div>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
           <span className="font-medium">{wi.title}</span>{" "}
           <span className="text-muted-foreground">({wi.mode})</span>
           <div className="text-muted-foreground">
             {wi.mode === "atomic" ? `${wi.taskPoints} pts` : `${wi.currentValue}/${wi.targetValue}`}
           </div>
+          {wi.description && (
+            <p className="mt-1 whitespace-pre-wrap text-xs text-muted-foreground">{wi.description}</p>
+          )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <DueDateBadge dueDate={wi.dueDate} completed={wi.status === "completed"} />
           <Badge variant="outline">{wi.status}</Badge>
           {wi.status !== "completed" &&
             (wi.mode === "atomic" ? (
@@ -144,7 +151,16 @@ export function MyTasksScreen() {
     refresh();
   }
 
-  const active = items.filter((wi) => wi.status !== "completed");
+  // Soonest-due first so what's urgent is at the top; undated tasks keep their
+  // server order (newest first) behind the dated ones.
+  const active = items
+    .filter((wi) => wi.status !== "completed")
+    .sort((a, b) => {
+      if (a.dueDate === b.dueDate) return 0;
+      if (!a.dueDate) return 1;
+      if (!b.dueDate) return -1;
+      return a.dueDate < b.dueDate ? -1 : 1;
+    });
   const completed = items.filter((wi) => wi.status === "completed");
 
   return (

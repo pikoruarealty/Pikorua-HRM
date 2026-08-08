@@ -332,6 +332,12 @@ model WorkItem {
   assignedTo  String   @map("assigned_to") @db.Uuid
   assignee    Employee @relation("WorkItemAssignee", fields: [assignedTo], references: [id])
   title       String
+  // Acceptance criteria / definition of done for this one item — plain text,
+  // deliberately not a separately-trackable checklist table (Pillar 1, 2026-08-08).
+  description String?
+  // Lead-set target date (AI may propose one at generation; the Lead confirms).
+  // Date-only: a due date is a calendar day, not an instant.
+  dueDate     DateTime? @map("due_date") @db.Date
   mode        WorkItemMode
   taskPoints  Int?     @map("task_points")     // required if atomic
   targetValue Decimal? @map("target_value") @db.Decimal(12, 2) // required if metric; editable anytime

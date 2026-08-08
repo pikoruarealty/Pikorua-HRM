@@ -12,10 +12,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Progress } from "@/components/ui/progress";
 import { apiFetch } from "@/components/_lib/api";
+import { DueDateBadge } from "@/components/work/due-date";
 
 type WorkItem = {
   id: string;
   title: string;
+  description?: string | null;
+  dueDate?: string | null;
   mode: "atomic" | "metric";
   status: string;
   taskPoints?: number | null;
@@ -39,7 +42,14 @@ type WorkUnitDetail = {
 };
 type Member = { id: string; fullName: string; role: string };
 
-type DraftWorkItem = { title: string; taskPoints?: number; targetValue?: number };
+type DraftWorkItem = {
+  title: string;
+  description?: string;
+  /** `YYYY-MM-DD`, AI-proposed and Lead-editable before it's persisted. */
+  dueDate?: string;
+  taskPoints?: number;
+  targetValue?: number;
+};
 type DraftSubUnit = { name: string; workItems: DraftWorkItem[] };
 type GenerateResult = {
   mode: "atomic" | "metric";
@@ -98,6 +108,27 @@ function PlanTasksPanel({
     setAssignAll("");
   }
 
+  /** Lead confirms/adjusts the AI's proposed due date before anything is saved. */
+  function setItemDueDate(si: number, wj: number, value: string) {
+    setDraft((d) =>
+      d
+        ? {
+            ...d,
+            subUnits: d.subUnits.map((su, i) =>
+              i !== si
+                ? su
+                : {
+                    ...su,
+                    workItems: su.workItems.map((wi, j) =>
+                      j !== wj ? wi : { ...wi, dueDate: value || undefined },
+                    ),
+                  },
+            ),
+          }
+        : d,
+    );
+  }
+
   function setAssignAllTo(memberId: string) {
     setAssignAll(memberId);
     if (!draft) return;
@@ -121,6 +152,8 @@ function PlanTasksPanel({
         name: su.name,
         workItems: su.workItems.map((wi, wj) => ({
           title: wi.title,
+          description: wi.description ?? null,
+          dueDate: wi.dueDate ?? null,
           ...(draft.mode === "atomic"
             ? { taskPoints: wi.taskPoints }
             : { targetValue: wi.targetValue }),
@@ -204,7 +237,7 @@ function PlanTasksPanel({
                 <p className="text-sm font-medium">{su.name}</p>
                 <div className="mt-1 flex flex-col gap-1.5">
                   {su.workItems.map((wi, wj) => (
-                    <div key={wj} className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                    <div key={wj} className="flex flex-wrap items-start justify-between gap-2 text-sm">
                       <span className="min-w-0 flex-1">
                         {wi.title}
                         <span className="text-muted-foreground">
@@ -212,7 +245,19 @@ function PlanTasksPanel({
                             ? ` — ${wi.taskPoints ?? "?"} pts`
                             : ` · target ${wi.targetValue ?? "?"}`}
                         </span>
+                        {wi.description && (
+                          <span className="mt-0.5 block whitespace-pre-wrap text-xs text-muted-foreground">
+                            {wi.description}
+                          </span>
+                        )}
                       </span>
+                      <Input
+                        type="date"
+                        aria-label={`Due date for ${wi.title}`}
+                        className="h-8 w-40"
+                        value={wi.dueDate ?? ""}
+                        onChange={(e) => setItemDueDate(si, wj, e.target.value)}
+                      />
                       <Select
                         value={assignees[key(si, wj)] || undefined}
                         onValueChange={(v) => setAssignees((a) => ({ ...a, [key(si, wj)]: v }))}
@@ -302,6 +347,9 @@ function ReassignControl({
 function EditWorkItemControl({ wi, onSaved }: { wi: WorkItem; onSaved: () => void }) {
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState(wi.title);
+  const [description, setDescription] = useState(wi.description ?? "");
+  // `<input type="date">` wants YYYY-MM-DD; the API sends an ISO instant.
+  const [dueDate, setDueDate] = useState(wi.dueDate ? wi.dueDate.slice(0, 10) : "");
   const [taskPoints, setTaskPoints] = useState(String(wi.taskPoints ?? ""));
   const [targetValue, setTargetValue] = useState(wi.targetValue ?? "");
   const [error, setError] = useState<string | null>(null);
@@ -310,7 +358,11 @@ function EditWorkItemControl({ wi, onSaved }: { wi: WorkItem; onSaved: () => voi
   async function save() {
     setError(null);
     setBusy(true);
-    const body: Record<string, unknown> = { title };
+    const body: Record<string, unknown> = {
+      title,
+      description: description.trim() || null,
+      dueDate: dueDate || null,
+    };
     if (wi.mode === "atomic") body.taskPoints = Number(taskPoints);
     else body.targetValue = Number(targetValue);
     const res = await apiFetch(`/work-items/${wi.id}`, { method: "PATCH", body: JSON.stringify(body) });
@@ -348,6 +400,21 @@ function EditWorkItemControl({ wi, onSaved }: { wi: WorkItem; onSaved: () => voi
           placeholder="target"
         />
       )}
+      <Input
+        className="h-8 w-40"
+        type="date"
+        aria-label="Due date"
+        value={dueDate}
+        onChange={(e) => setDueDate(e.target.value)}
+      />
+      <Textarea
+        className="w-full"
+        rows={3}
+        aria-label="Acceptance criteria"
+        value={description}
+        onChange={(e) => setDescription(e.target.value)}
+        placeholder="Acceptance criteria — what must be true for this to count as done?"
+      />
       <Button size="sm" onClick={save} disabled={busy}>
         Save
       </Button>
@@ -524,6 +591,8 @@ function NewWorkItemForm({
   onCreated: () => void;
 }) {
   const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [dueDate, setDueDate] = useState("");
   const [assignedTo, setAssignedTo] = useState("");
   const [mode, setMode] = useState<"atomic" | "metric">("atomic");
   const [taskPoints, setTaskPoints] = useState("");
@@ -536,7 +605,13 @@ function NewWorkItemForm({
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    const body: Record<string, unknown> = { title, assignedTo, mode };
+    const body: Record<string, unknown> = {
+      title,
+      assignedTo,
+      mode,
+      description: description.trim() || null,
+      dueDate: dueDate || null,
+    };
     if (mode === "atomic") body.taskPoints = Number(taskPoints);
     else {
       body.targetValue = Number(targetValue);
@@ -552,6 +627,8 @@ function NewWorkItemForm({
     });
     if (res.error) return setError(`${res.error.code}: ${res.error.message}`);
     setTitle("");
+    setDescription("");
+    setDueDate("");
     onCreated();
   }
 
@@ -560,6 +637,19 @@ function NewWorkItemForm({
       <div className="flex flex-col gap-1.5">
         <Label>Title</Label>
         <Input value={title} onChange={(e) => setTitle(e.target.value)} required />
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <Label>Due date</Label>
+        <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+      </div>
+      <div className="flex flex-col gap-1.5 sm:col-span-2">
+        <Label>Acceptance criteria (optional)</Label>
+        <Textarea
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          rows={3}
+          placeholder="What must be true for this to count as done?"
+        />
       </div>
       <div className="flex flex-col gap-1.5">
         <Label>Assigned employee</Label>
@@ -908,9 +998,15 @@ export function WorkUnitDetailScreen({
                       {wi.assignee && (
                         <span className="text-muted-foreground"> · assigned to {wi.assignee.fullName}</span>
                       )}
+                      {wi.description && (
+                        <span className="mt-0.5 block whitespace-pre-wrap text-xs text-muted-foreground">
+                          {wi.description}
+                        </span>
+                      )}
                     </span>
                   </span>
                   <span className="flex flex-wrap items-center gap-2">
+                    <DueDateBadge dueDate={wi.dueDate} completed={wi.status === "completed"} />
                     <Badge variant="outline">{wi.status}</Badge>
                     {canManage && (
                       <>

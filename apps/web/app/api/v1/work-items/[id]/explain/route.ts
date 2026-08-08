@@ -32,7 +32,9 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
       workItemTitle: workItem.title,
       subUnitName: workItem.subUnit.name,
       workUnitName: workItem.subUnit.workUnit.name,
-      description: workItem.subUnit.workUnit.description,
+      projectDescription: workItem.subUnit.workUnit.description,
+      itemDescription: workItem.description,
+      dueDate: workItem.dueDate ? workItem.dueDate.toISOString().slice(0, 10) : null,
       mode: workItem.mode,
     });
     return ok({ explanation });

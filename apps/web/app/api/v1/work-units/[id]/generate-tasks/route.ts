@@ -30,8 +30,23 @@ import {
 const DEFAULT_TASK_POINTS = 3;
 const DEFAULT_TARGET_VALUE = 100;
 
+/** `YYYY-MM-DD` → a UTC-midnight Date for the `@db.Date` column (same
+ *  convention as the attendance routes); anything falsy → null. */
+function toDueDate(value?: string | null): Date | null {
+  return value ? new Date(`${value}T00:00:00.000Z`) : null;
+}
+
 const persistItemSchema = z.object({
   title: z.string().min(1).max(300),
+  // AI-proposed acceptance criteria + due date, as confirmed/edited by the Lead
+  // in the assign step (Pillar 1). Both optional — an older client that doesn't
+  // send them still persists exactly as before.
+  description: z.string().max(2000).nullable().optional(),
+  dueDate: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "dueDate must be YYYY-MM-DD")
+    .nullable()
+    .optional(),
   taskPoints: z.number().positive().optional(),
   targetValue: z.number().positive().optional(),
   assignedTo: z.string().uuid(),
@@ -140,6 +155,8 @@ export async function POST(req: Request, { params }: { params: { id: string } })
                       subUnitId: subUnit.id,
                       assignedTo: wi.assignedTo,
                       title: wi.title,
+                      description: wi.description?.trim() || null,
+                      dueDate: toDueDate(wi.dueDate),
                       mode: WorkItemMode.atomic,
                       taskPoints: wi.taskPoints ? Math.max(1, Math.round(wi.taskPoints)) : DEFAULT_TASK_POINTS,
                     }
@@ -147,6 +164,8 @@ export async function POST(req: Request, { params }: { params: { id: string } })
                       subUnitId: subUnit.id,
                       assignedTo: wi.assignedTo,
                       title: wi.title,
+                      description: wi.description?.trim() || null,
+                      dueDate: toDueDate(wi.dueDate),
                       mode: WorkItemMode.metric,
                       targetValue: wi.targetValue ?? DEFAULT_TARGET_VALUE,
                       currentValue: 0,
@@ -210,6 +229,8 @@ export async function POST(req: Request, { params }: { params: { id: string } })
                     subUnitId: subUnit.id,
                     assignedTo: defaultAssigneeId,
                     title: wi.title,
+                    description: wi.description ?? null,
+                    dueDate: toDueDate(wi.dueDate),
                     mode: WorkItemMode.atomic,
                     taskPoints: wi.taskPoints ?? DEFAULT_TASK_POINTS,
                   }
@@ -217,6 +238,8 @@ export async function POST(req: Request, { params }: { params: { id: string } })
                     subUnitId: subUnit.id,
                     assignedTo: defaultAssigneeId,
                     title: wi.title,
+                    description: wi.description ?? null,
+                    dueDate: toDueDate(wi.dueDate),
                     mode: WorkItemMode.metric,
                     targetValue: wi.targetValue ?? DEFAULT_TARGET_VALUE,
                     currentValue: 0,

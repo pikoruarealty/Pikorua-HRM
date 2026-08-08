@@ -10,6 +10,14 @@ import { isClockedInNow } from "@/lib/attendance/status";
 
 const patchSchema = z.object({
   title: z.string().min(1).optional(),
+  // Acceptance criteria + Lead-set due date (Pillar 1). Management-only, like
+  // title/points — an assignee can still only move their own progress.
+  description: z.string().max(2000).nullable().optional(),
+  dueDate: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "dueDate must be YYYY-MM-DD")
+    .nullable()
+    .optional(),
   assignedTo: z.string().uuid().optional(),
   taskPoints: z.number().int().positive().optional(),
   targetValue: z.number().positive().optional(),
@@ -50,9 +58,22 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   }
   const parsed = patchSchema.safeParse(body);
   if (!parsed.success) {
-    return failFor(ErrorCode.VALIDATION, "Invalid request body.");
+    const issue = parsed.error.issues[0];
+    return failFor(
+      ErrorCode.VALIDATION,
+      issue ? `${issue.path.join(".") || "body"}: ${issue.message}` : "Invalid request body.",
+    );
   }
   const { title, assignedTo, taskPoints, targetValue, currentValue, status } = parsed.data;
+  // `undefined` = field untouched (Prisma skips it); explicit `null`/"" = clear it.
+  const description =
+    parsed.data.description === undefined ? undefined : parsed.data.description?.trim() || null;
+  const dueDate =
+    parsed.data.dueDate === undefined
+      ? undefined
+      : parsed.data.dueDate
+        ? new Date(`${parsed.data.dueDate}T00:00:00.000Z`)
+        : null;
   const isMetric = workItem.mode === WorkItemMode.metric;
 
   if (targetValue !== undefined && !isMetric) {
@@ -67,7 +88,14 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
   if (!canEditAll) {
     // Assigned Employee: status only (atomic) or currentValue only (metric).
-    if (title !== undefined || assignedTo !== undefined || taskPoints !== undefined || targetValue !== undefined) {
+    if (
+      title !== undefined ||
+      assignedTo !== undefined ||
+      taskPoints !== undefined ||
+      targetValue !== undefined ||
+      description !== undefined ||
+      dueDate !== undefined
+    ) {
       return failFor(ErrorCode.FORBIDDEN, "You can only update this task's progress.");
     }
     if (isMetric && status !== undefined) {
@@ -108,6 +136,8 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       where: { id: params.id },
       data: {
         title,
+        description,
+        dueDate,
         assignedTo,
         targetValue,
         currentValue,
@@ -132,7 +162,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       const [updatedItem] = await prisma.$transaction([
         prisma.workItem.update({
           where: { id: params.id },
-          data: { title, assignedTo, taskPoints, status, completedAt: new Date() },
+          data: { title, description, dueDate, assignedTo, taskPoints, status, completedAt: new Date() },
         }),
         prisma.employeePointLedger.create({
           data: {
@@ -155,6 +185,8 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     where: { id: params.id },
     data: {
       title,
+      description,
+      dueDate,
       assignedTo,
       taskPoints,
       status,

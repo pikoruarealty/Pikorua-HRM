@@ -11,6 +11,14 @@ const currentYear = new Date().getFullYear();
 
 const createSchema = z.object({
   title: z.string().min(1),
+  // Acceptance criteria / definition of done (Pillar 1) — optional on both
+  // modes; "" from an untouched form field means "not set", not an empty spec.
+  description: z.string().max(2000).nullable().optional(),
+  dueDate: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "dueDate must be YYYY-MM-DD")
+    .nullable()
+    .optional(),
   assignedTo: z.string().uuid(),
   mode: z.nativeEnum(WorkItemMode),
   taskPoints: z.number().int().positive().optional(),
@@ -45,10 +53,18 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   }
   const parsed = createSchema.safeParse(body);
   if (!parsed.success) {
-    return failFor(ErrorCode.VALIDATION, "title, assignedTo, and mode are required.");
+    // Surface the specific field problem (e.g. a malformed dueDate) rather than
+    // always blaming the required trio — the schema has optional fields now.
+    const issue = parsed.error.issues[0];
+    return failFor(
+      ErrorCode.VALIDATION,
+      issue ? `${issue.path.join(".") || "body"}: ${issue.message}` : "title, assignedTo, and mode are required.",
+    );
   }
   const { title, assignedTo, mode, taskPoints, targetValue, frequency } = parsed.data;
   let { periodMonth, periodYear } = parsed.data;
+  const description = parsed.data.description?.trim() || null;
+  const dueDate = parsed.data.dueDate ? new Date(`${parsed.data.dueDate}T00:00:00.000Z`) : null;
 
   const assignee = await prisma.employee.findUnique({ where: { id: assignedTo } });
   if (!assignee) {
@@ -78,6 +94,8 @@ export async function POST(req: Request, { params }: { params: { id: string } })
         subUnitId: subUnit.id,
         assignedTo,
         title,
+        description,
+        dueDate,
         mode: WorkItemMode.atomic,
         taskPoints,
       },
@@ -126,6 +144,8 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       subUnitId: subUnit.id,
       assignedTo,
       title,
+      description,
+      dueDate,
       mode: WorkItemMode.metric,
       targetValue,
       currentValue: 0,

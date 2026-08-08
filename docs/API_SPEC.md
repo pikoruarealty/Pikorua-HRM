@@ -73,8 +73,8 @@
 | GET | `/sub-units/:id` | Lead (own), Admin/HR | (2026-07-18) |
 | PATCH | `/sub-units/:id` | Lead (own), Admin/HR | (2026-07-18) `{ name }` — rename |
 | DELETE | `/sub-units/:id` | Lead (own), Admin/HR | (2026-07-18) soft delete — cascades to its work_items |
-| POST | `/sub-units/:id/work-items` | Lead (own), Admin/HR | `{ title, assigned_to, mode, task_points? , target_value?, frequency? , period_month?, period_year? }` — Lead sets task_points for atomic mode; metric mode requires `frequency` (`daily`\|`monthly`, 2026-07-18): `monthly` requires `period_month`/`period_year`, `daily` computes the period server-side (always "today") |
-| PATCH | `/work-items/:id` | Assigned Employee (status/current_value only, requires the assignee to be currently clocked in — 2026-07-18), Lead (all fields) | Employees update their own task's status (atomic) or current_value (metric); Leads can reassign/edit points/title/target |
+| POST | `/sub-units/:id/work-items` | Lead (own), Admin/HR | `{ title, assigned_to, mode, description?, dueDate?, task_points? , target_value?, frequency? , period_month?, period_year? }` — `description` = acceptance criteria, `dueDate` = `YYYY-MM-DD` (both 2026-08-08, optional, both modes); Lead sets task_points for atomic mode; metric mode requires `frequency` (`daily`\|`monthly`, 2026-07-18): `monthly` requires `period_month`/`period_year`, `daily` computes the period server-side (always "today") |
+| PATCH | `/work-items/:id` | Assigned Employee (status/current_value only, requires the assignee to be currently clocked in — 2026-07-18), Lead (all fields) | Employees update their own task's status (atomic) or current_value (metric); Leads can reassign/edit points/title/target, plus `description`/`dueDate` (2026-08-08 — management-only, send `null` to clear either) |
 | DELETE | `/work-items/:id` | Lead (own), Admin/HR | Soft delete (2026-07-18) — the points ledger keeps its row for audit |
 | GET | `/work-items/mine` | Employee | tasks assigned to the current employee, across work units |
 

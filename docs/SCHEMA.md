@@ -96,6 +96,8 @@ Config table implementing the generic label mapping described in PRD §4.1.
 | sub_unit_id | uuid FK → sub_units.id | |
 | assigned_to | uuid FK → employees.id | |
 | title | text | |
+| description | text? | Acceptance criteria / definition of done for this one item (2026-08-08). Plain text — deliberately not a separately-trackable checklist table. AI-proposed at generation, Lead-editable; read-only to the assignee. |
+| due_date | date? | Target completion day (2026-08-08). AI proposes a date at generation (from a relative offset), the Lead confirms/edits it. Nullable — an item with no due date is simply undated, never overdue. |
 | mode | enum | `atomic` or `metric` (inherited from department default, but stored per-item in case of override) |
 | task_points | integer? | required if mode = atomic; assigned by Team Lead |
 | target_value | numeric? | required if mode = metric, e.g. 100 (calls). **Editable at any time** (Team Lead can adjust mid-period). |

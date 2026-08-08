@@ -13,9 +13,32 @@ export { GroqError };
 
 export const MAX_SUB_UNITS = 12;
 export const MAX_ITEMS_PER_SUB_UNIT = 15;
+/** Cap on a single item's acceptance-criteria text (Pillar 1). */
+export const MAX_ITEM_DESCRIPTION_CHARS = 1000;
+/** Clamp for the LLM's relative due-date offset — 1 day .. ~1 year out. */
+const MIN_DUE_IN_DAYS = 1;
+const MAX_DUE_IN_DAYS = 365;
+
+/** `YYYY-MM-DD` for `today + days`, computed in UTC (matches how WorkItem
+ *  periods are derived elsewhere in the codebase). */
+export function dueDateFromOffset(days: number, today = new Date()): string {
+  const clamped = Math.min(MAX_DUE_IN_DAYS, Math.max(MIN_DUE_IN_DAYS, Math.round(days)));
+  const d = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+  d.setUTCDate(d.getUTCDate() + clamped);
+  return d.toISOString().slice(0, 10);
+}
 
 export type GeneratedWorkItem = {
   title: string;
+  /** Concrete acceptance criteria / definition of done for this one item. */
+  description?: string;
+  /**
+   * Suggested due date as `YYYY-MM-DD`. Derived server-side from the LLM's
+   * relative `dueInDays` offset — asking for an absolute date is unreliable
+   * (the model has no dependable notion of "today"). The Lead confirms/edits
+   * it before anything is persisted.
+   */
+  dueDate?: string;
   /** Suggested effort/story points — atomic mode only. */
   taskPoints?: number;
   /** Suggested numeric goal for the period — metric mode only. */
@@ -42,6 +65,8 @@ const llmBreakdownSchema = z.object({
           .array(
             z.object({
               title: z.string().min(1).max(300),
+              description: z.string().max(MAX_ITEM_DESCRIPTION_CHARS).optional(),
+              dueInDays: z.number().optional(),
               taskPoints: z.number().positive().optional(),
               targetValue: z.number().positive().optional(),
             }),
@@ -76,10 +101,12 @@ function buildSystemPrompt(input: GenerateBreakdownInput): string {
     `You are a senior project-planning assistant for an internal HR/work-management system. Think carefully and reason step by step before answering, then output ONLY the final JSON.`,
     `You break a ${input.workUnitLabel} down into a hierarchy: a ${input.workUnitLabel} contains several "${input.subUnitLabel}" groups, and each "${input.subUnitLabel}" contains several "${input.workItemLabel}" items.`,
     modeGuidance,
+    `Every item ALSO needs a "description": the acceptance criteria — what specifically must be true for this item to count as done. Name the concrete artefacts, states, or numbers involved (files/screens/endpoints/data, the checks that must pass, the edge cases that must be handled). 1-3 sentences or up to 4 short "- " bullet lines. It must be checkable by someone else: never restate the title, never write filler like "complete the task properly" or "as required".`,
+    `Every item ALSO needs "dueInDays": a whole number of days from TODAY by which the item should realistically be finished, sized to its effort and to its position in the sequence (items in later ${input.subUnitLabel} groups, or that depend on earlier ones, must be due later). Use a relative offset only — never an absolute date.`,
     `Quality bar: every item must be specific, actionable, and independently ownable. No vague items ("misc", "other", "improve things"). No two items should overlap. Group related items under a coherent "${input.subUnitLabel}". Order sub-units in a sensible sequence of work. Collectively the items must fully achieve the expected outcome — nothing essential missing, no scope invented beyond what the brief and outcome imply.`,
-    `Constraints: at most ${input.maxSubUnits ?? MAX_SUB_UNITS} "${input.subUnitLabel}" groups, and at most ${input.maxItemsPerSubUnit ?? MAX_ITEMS_PER_SUB_UNIT} "${input.workItemLabel}" items per group. Keep titles short (a few words), concrete, and starting with a verb where natural.`,
+    `Constraints: at most ${input.maxSubUnits ?? MAX_SUB_UNITS} "${input.subUnitLabel}" groups, and at most ${input.maxItemsPerSubUnit ?? MAX_ITEMS_PER_SUB_UNIT} "${input.workItemLabel}" items per group. Keep titles short (a few words), concrete, and starting with a verb where natural. Keep each description under ${MAX_ITEM_DESCRIPTION_CHARS} characters.`,
     `Respond with a single JSON object ONLY (no prose, no markdown, no reasoning in the output) of the exact shape:`,
-    `{ "subUnits": [ { "name": string, "workItems": [ { "title": string${input.mode === WorkItemMode.atomic ? `, "taskPoints": number` : `, "targetValue": number`} } ] } ] }`,
+    `{ "subUnits": [ { "name": string, "workItems": [ { "title": string, "description": string, "dueInDays": number${input.mode === WorkItemMode.atomic ? `, "taskPoints": number` : `, "targetValue": number`} } ] } ] }`,
   ].join("\n\n");
 }
 
@@ -126,6 +153,9 @@ export async function generateTaskBreakdown(
 
   const maxSub = input.maxSubUnits ?? MAX_SUB_UNITS;
   const maxItems = input.maxItemsPerSubUnit ?? MAX_ITEMS_PER_SUB_UNIT;
+  // One "today" for the whole breakdown so every relative due date resolves
+  // against the same day, even if the mapping straddles midnight.
+  const today = new Date();
 
   const subUnits: GeneratedSubUnit[] = result.data.subUnits
     .slice(0, maxSub)
@@ -135,6 +165,11 @@ export async function generateTaskBreakdown(
         .slice(0, maxItems)
         .map((wi) => {
           const item: GeneratedWorkItem = { title: wi.title.trim() };
+          const description = wi.description?.trim().slice(0, MAX_ITEM_DESCRIPTION_CHARS);
+          if (description) item.description = description;
+          if (wi.dueInDays !== undefined && Number.isFinite(wi.dueInDays)) {
+            item.dueDate = dueDateFromOffset(wi.dueInDays, today);
+          }
           if (input.mode === WorkItemMode.atomic) {
             if (wi.taskPoints !== undefined) {
               item.taskPoints = Math.max(1, Math.round(wi.taskPoints));
@@ -194,7 +229,12 @@ export type ExplainWorkItemInput = {
   workItemTitle: string;
   subUnitName: string;
   workUnitName: string;
-  description?: string | null;
+  /** The parent WorkUnit's brief — wider context, not this item's own spec. */
+  projectDescription?: string | null;
+  /** This item's own acceptance criteria, when the Lead/AI set one. */
+  itemDescription?: string | null;
+  /** `YYYY-MM-DD`, when set. */
+  dueDate?: string | null;
   mode: WorkItemMode;
 };
 
@@ -208,6 +248,9 @@ export async function explainWorkItem(
   const system = [
     `You are a helpful team lead explaining a task to the employee assigned to it.`,
     `Explain, in plain, encouraging language, what is expected of them to complete this task well, and how it contributes to the wider project. If useful, mention a couple of concrete things "done" looks like.`,
+    ...(input.itemDescription
+      ? [`The task's acceptance criteria are given below — stay faithful to them; don't invent extra requirements or contradict them.`]
+      : []),
     input.mode === WorkItemMode.metric
       ? `This is a metric task — progress is measured by a number reaching a target, so frame it around hitting that goal.`
       : `This is an atomic task — it is done when the concrete deliverable is finished.`,
@@ -217,7 +260,9 @@ export async function explainWorkItem(
     `Project: ${input.workUnitName}`,
     `Group: ${input.subUnitName}`,
     `Task: ${input.workItemTitle}`,
-    ...(input.description ? [`Project context: ${input.description}`] : []),
+    ...(input.itemDescription ? [`Acceptance criteria: ${input.itemDescription}`] : []),
+    ...(input.dueDate ? [`Due by: ${input.dueDate}`] : []),
+    ...(input.projectDescription ? [`Project context: ${input.projectDescription}`] : []),
   ].join("\n");
 
   const raw = await groqChat({ system, user, temperature: 0.5 });

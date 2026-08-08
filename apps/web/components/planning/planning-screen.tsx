@@ -6,8 +6,9 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { apiFetch } from "@/components/_lib/api";
 import { useAttendanceStatus } from "@/components/_lib/use-attendance-status";
+import { DueDateBadge } from "@/components/work/due-date";
 
-type WorkItem = { id: string; title: string; status: string };
+type WorkItem = { id: string; title: string; status: string; dueDate?: string | null };
 type Selection = { id: string; workItemId: string; workItem: WorkItem };
 type EodItem = {
   workItemId: string;
@@ -142,6 +143,7 @@ export function PlanningScreen({ isAdmin = false }: { isAdmin?: boolean }) {
                       onChange={(e) => setChecked((c) => ({ ...c, [wi.id]: e.target.checked }))}
                     />
                     {wi.title} <span className="text-muted-foreground">({wi.status})</span>
+                    <DueDateBadge dueDate={wi.dueDate} />
                   </label>
                 ))}
               </div>
@@ -174,6 +176,7 @@ export function PlanningScreen({ isAdmin = false }: { isAdmin?: boolean }) {
                           onChange={(e) => setChecked((c) => ({ ...c, [wi.id]: e.target.checked }))}
                         />
                         {wi.title}
+                        <DueDateBadge dueDate={wi.dueDate} />
                       </label>
                     ))}
                   <Button variant="outline" className="w-fit" onClick={addTasks} disabled={busy}>
