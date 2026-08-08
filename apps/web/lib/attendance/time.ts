@@ -39,7 +39,40 @@ export function computeHours(clockIn: Date, clockOut: Date): { totalHours: numbe
   return { totalHours, isHalfDay: totalHours > 1.5 && totalHours < 5 };
 }
 
+/**
+ * Computes default clock-out Date for an attendance record.
+ * Uses the record's date and the team's expectedStartTime + 9 hours (default 20:00),
+ * or 8 hours after clockIn if clockIn was after the standard end time.
+ */
+export function getDefaultClockOut(
+  dateOrClockIn: Date,
+  expectedStartTime: string | null = "11:00",
+): Date {
+  const base = new Date(dateOrClockIn);
+  let endHour = 20; // 8:00 PM default (11:00 AM + 9 hours)
+  let endMinute = 0;
+
+  if (expectedStartTime && isValidHHMM(expectedStartTime)) {
+    const [h, m] = expectedStartTime.split(":").map(Number);
+    const totalMinutes = h * 60 + m + 9 * 60; // 9-hour workday standard
+    endHour = Math.floor(totalMinutes / 60) % 24;
+    endMinute = totalMinutes % 60;
+  }
+
+  const defaultOut = new Date(base);
+  defaultOut.setHours(endHour, endMinute, 0, 0);
+
+  // If clockIn is on the same day and happened after the default end time,
+  // set default clock-out to 8 hours after clockIn.
+  if (defaultOut.getTime() <= base.getTime()) {
+    return new Date(base.getTime() + 8 * 3600 * 1000);
+  }
+
+  return defaultOut;
+}
+
 /** Server-local "today" as a Date at UTC midnight, matching the @db.Date column. */
 export function todayDateOnly(): Date {
   return new Date(new Date().toISOString().slice(0, 10));
 }
+

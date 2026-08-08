@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { computeHours, isLateArrival, isValidHHMM } from "./time";
+import { computeHours, getDefaultClockOut, isLateArrival, isValidHHMM } from "./time";
 
 describe("isValidHHMM", () => {
   test("accepts 24h HH:MM", () => {
@@ -71,3 +71,28 @@ describe("computeHours", () => {
     expect(totalHours).toBe(8.33);
   });
 });
+
+describe("getDefaultClockOut", () => {
+  test("defaults to 20:00 when expected start is 11:00", () => {
+    const date = new Date(2026, 6, 15, 11, 0);
+    const out = getDefaultClockOut(date, "11:00");
+    expect(out.getHours()).toBe(20);
+    expect(out.getMinutes()).toBe(0);
+    expect(out.getDate()).toBe(15);
+  });
+
+  test("uses expected start time + 9h when configured differently (e.g. 09:00 -> 18:00)", () => {
+    const date = new Date(2026, 6, 15, 9, 15);
+    const out = getDefaultClockOut(date, "09:00");
+    expect(out.getHours()).toBe(18);
+    expect(out.getMinutes()).toBe(0);
+  });
+
+  test("handles clockIn after standard end time by adding 8 hours", () => {
+    const lateNightIn = new Date(2026, 6, 15, 21, 30);
+    const out = getDefaultClockOut(lateNightIn, "11:00");
+    expect(out.getTime()).toBeGreaterThan(lateNightIn.getTime());
+    expect(out.getTime() - lateNightIn.getTime()).toBe(8 * 3600 * 1000);
+  });
+});
+

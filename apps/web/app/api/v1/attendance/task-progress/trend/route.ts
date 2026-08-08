@@ -15,8 +15,12 @@ export async function GET() {
   if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
   if (!FINANCE_ROLES.includes(session.role)) return failFor(ErrorCode.FORBIDDEN);
 
+  // Admin does not clock in or track tasks, so they are excluded from the trend.
   const active = await prisma.employee.findMany({
-    where: { status: EmployeeStatus.active },
+    where: {
+      status: EmployeeStatus.active,
+      role: { not: "admin" },
+    },
     select: { id: true },
   });
   const employeeIds = active.map((e) => e.id);

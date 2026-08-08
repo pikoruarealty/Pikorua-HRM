@@ -37,8 +37,13 @@ export async function GET(req: Request) {
 
   let employeeIds: string[];
   if (isFinance) {
+    // Only Admin is exempt from clocking in and task progress tracking.
+    // HR, leads, and employees all clock in and track work.
     const active = await prisma.employee.findMany({
-      where: { status: EmployeeStatus.active },
+      where: {
+        status: EmployeeStatus.active,
+        role: { not: "admin" },
+      },
       select: { id: true },
     });
     employeeIds = active.map((e) => e.id);

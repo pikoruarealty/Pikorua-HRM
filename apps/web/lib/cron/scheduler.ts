@@ -2,6 +2,7 @@ import cron from "node-cron";
 import { runBirthdayCheck } from "@/lib/cron/birthday";
 import { runMeetingReminders } from "@/lib/cron/meeting-reminders";
 import { runMetricDailyRollover } from "@/lib/cron/metric-daily-rollover";
+import { runAttendanceEodCleanup } from "@/lib/cron/attendance-eod-cleanup";
 
 // In-process scheduler (PRD §6 — "a lightweight scheduled-jobs mechanism").
 // Registered once at server boot from instrumentation.ts. Assumes a single
@@ -43,6 +44,15 @@ export function startScheduler(): void {
     safeRun("birthday-check", () => runBirthdayCheck());
   });
   safeRun("birthday-check-boot-catchup", () => runBirthdayCheck());
+
+  // Attendance EOD auto clock-out & phantom cleanup — daily at 00:01 UTC,
+  // plus an immediate run on boot as catch-up. Auto-populates default clock-out
+  // for any past records where employees clocked in but didn't clock out,
+  // and deletes dangling empty records.
+  cron.schedule("1 0 * * *", () => {
+    safeRun("attendance-eod-cleanup", () => runAttendanceEodCleanup());
+  });
+  safeRun("attendance-eod-cleanup-boot-catchup", () => runAttendanceEodCleanup());
 
   // Metric daily-frequency rollover — daily at 00:10 UTC, before recognition.
   cron.schedule("10 0 * * *", () => {

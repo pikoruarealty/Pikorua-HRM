@@ -23,6 +23,14 @@ import {
   EmployeePayslipsPanel,
 } from "@/components/employees/employee-profile-panels";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
 
 type Employee = {
   id: string;
@@ -79,7 +87,12 @@ class ApiError extends Error {
 
 async function getJson(res: Response) {
   const json = await res.json();
-  if (json.error) throw new ApiError(json.error.code, json.error.message);
+  if (json.error) {
+    const err = new ApiError(json.error.code, json.error.message);
+    // Attach meta from enriched error responses (e.g. requiresReassignment)
+    (err as ApiError & { meta?: Record<string, unknown> }).meta = json.meta;
+    throw err;
+  }
   return json.data;
 }
 
@@ -120,6 +133,15 @@ export function EmployeeDetail({
   const [notice, setNotice] = useState<string | null>(null);
   const [hardDeleteError, setHardDeleteError] = useState<string | null>(null);
   const [hardDeleting, setHardDeleting] = useState(false);
+
+  // Reassignment dialog state
+  type ActiveEmployee = { id: string; fullName: string; role: string };
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleteDialogLoading, setDeleteDialogLoading] = useState(false);
+  const [pendingWorkCounts, setPendingWorkCounts] = useState<{ assignedWorkItems: number; ledWorkUnits: number } | null>(null);
+  const [activeEmployees, setActiveEmployees] = useState<ActiveEmployee[]>([]);
+  const [reassignToId, setReassignToId] = useState("");
+
   const router = useRouter();
 
   async function load() {
@@ -230,18 +252,56 @@ export function EmployeeDetail({
     load();
   }
 
-  async function onHardDelete() {
-    if (
-      !confirm(
-        "Permanently delete this employee? This cannot be undone and only works if they have zero attendance/payslip/request/task history.",
-      )
-    ) {
+  async function openDeleteDialog() {
+    setDeleteDialogOpen(true);
+    setDeleteDialogLoading(true);
+    setHardDeleteError(null);
+    setReassignToId("");
+    setPendingWorkCounts(null);
+    try {
+      // Fetch pending work counts and full active-employees list in parallel
+      const [countsRes, empRes] = await Promise.all([
+        fetch(`/api/v1/employees/${employeeId}/hard-delete`),
+        fetch("/api/v1/employees"),
+      ]);
+      const counts = await countsRes.json();
+      const emps = await empRes.json();
+      setPendingWorkCounts(counts.data ?? { assignedWorkItems: 0, ledWorkUnits: 0 });
+      setActiveEmployees(
+        (emps.data ?? []).filter(
+          (e: ActiveEmployee & { status?: string }) =>
+            e.id !== employeeId && e.status === "active",
+        ),
+      );
+    } catch {
+      setHardDeleteError("Failed to load deletion details. Please try again.");
+      setDeleteDialogOpen(false);
+    } finally {
+      setDeleteDialogLoading(false);
+    }
+  }
+
+  async function confirmHardDelete() {
+    const needsReassign =
+      pendingWorkCounts &&
+      (pendingWorkCounts.assignedWorkItems > 0 || pendingWorkCounts.ledWorkUnits > 0);
+
+    if (needsReassign && !reassignToId) {
+      setHardDeleteError("Please select an employee to reassign their work to.");
       return;
     }
+
     setHardDeleting(true);
     setHardDeleteError(null);
     try {
-      await getJson(await fetch(`/api/v1/employees/${employeeId}/hard-delete`, { method: "DELETE" }));
+      await getJson(
+        await fetch(`/api/v1/employees/${employeeId}/hard-delete`, {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(needsReassign && reassignToId ? { reassign_to: reassignToId } : {}),
+        }),
+      );
+      setDeleteDialogOpen(false);
       router.push("/employees");
     } catch (e) {
       setHardDeleteError(e instanceof Error ? e.message : "Failed to permanently delete employee.");
@@ -583,17 +643,69 @@ export function EmployeeDetail({
               Reactivate employee
             </Button>
           )}
-          {/* Permanent removal — Admin-only, only reachable once deactivated,
-              and blocked server-side unless the employee has zero history
-              (attendance/payslip/request/task/etc.) — real employees stay
-              soft-deleted only. */}
+          {/* Permanent removal — Admin-only, only reachable once deactivated.
+              Shows a dialog asking the admin to pick a reassignment target
+              if the employee has active work items or led projects. */}
           {isAdmin && employee.status === "inactive" && (
-            <Button variant="destructive" onClick={onHardDelete} disabled={hardDeleting} className="w-fit">
-              {hardDeleting ? "Deleting…" : "Delete permanently"}
+            <Button variant="destructive" onClick={openDeleteDialog} disabled={hardDeleting} className="w-fit">
+              Delete permanently
             </Button>
           )}
         </div>
-        {hardDeleteError && <p className="text-sm text-destructive">{hardDeleteError}</p>}
+        {hardDeleteError && !deleteDialogOpen && <p className="text-sm text-destructive">{hardDeleteError}</p>}
+
+        {/* Reassignment / confirmation dialog */}
+        <Dialog open={deleteDialogOpen} onOpenChange={(open) => { if (!hardDeleting) setDeleteDialogOpen(open); }}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle className="text-destructive">Permanently delete employee</DialogTitle>
+              <DialogDescription>
+                {deleteDialogLoading
+                  ? "Loading…"
+                  : pendingWorkCounts && (pendingWorkCounts.assignedWorkItems > 0 || pendingWorkCounts.ledWorkUnits > 0)
+                  ? <>This employee has <strong>{pendingWorkCounts.assignedWorkItems} task(s)</strong> and leads <strong>{pendingWorkCounts.ledWorkUnits} project(s)</strong>. Choose an active employee to take over their work before deleting. This action cannot be undone.</>
+                  : "This will permanently remove the employee and all their records. This action cannot be undone."}
+              </DialogDescription>
+            </DialogHeader>
+
+            {!deleteDialogLoading && pendingWorkCounts && (pendingWorkCounts.assignedWorkItems > 0 || pendingWorkCounts.ledWorkUnits > 0) && (
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="reassign-to">Reassign work to</Label>
+                <Select value={reassignToId} onValueChange={setReassignToId}>
+                  <SelectTrigger id="reassign-to">
+                    <SelectValue placeholder="Select an employee…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {activeEmployees.map((e) => (
+                      <SelectItem key={e.id} value={e.id}>
+                        {e.fullName} <span className="text-muted-foreground">({humanizeRole(e.role)})</span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            {hardDeleteError && <p className="text-sm text-destructive">{hardDeleteError}</p>}
+
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setDeleteDialogOpen(false)}
+                disabled={hardDeleting}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={confirmHardDelete}
+                disabled={hardDeleting || deleteDialogLoading}
+              >
+                {hardDeleting ? "Deleting…" : "Delete permanently"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   );

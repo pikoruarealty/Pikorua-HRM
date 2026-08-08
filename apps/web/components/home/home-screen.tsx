@@ -13,6 +13,10 @@ import {
   CalendarClock,
   CalendarOff,
   ShieldCheck,
+  FolderKanban,
+  Activity,
+  ArrowUpRight,
+  AlertCircle,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -113,6 +117,9 @@ export function HomeScreen({
   const [publishedPicks, setPublishedPicks] = useState<PublishedPick[]>([]);
   const [dismissed, setDismissed] = useState<string[]>([]);
 
+  // WorkUnits count for admin snapshot.
+  const [workUnits, setWorkUnits] = useState<{ id: string; status: string }[] | null>(null);
+
   useEffect(() => {
     // Fire each request independently; a forbidden/empty endpoint just leaves
     // its widget in the loading/zero state (every endpoint self-scopes by role).
@@ -158,6 +165,7 @@ export function HomeScreen({
 
     if (isFinance) {
       apiFetch<AttendanceOverview>("/attendance/overview").then((r) => setAttendance(r.data));
+      apiFetch<{ id: string; status: string }[]>("/work-units").then((r) => setWorkUnits(r.data ?? []));
     }
   }, [hasEmployee, isLead, isFinance, isAdmin]);
 
@@ -387,22 +395,105 @@ export function HomeScreen({
           )}
         </Panel>
 
-        {/* Latest payslip for the individual; a compact link for admins —
-            the live feed moved out in favor of the task-progress charts
-            above (2026-08-07 dashboard redesign). */}
+        {/* Operations snapshot for admin (replaced bare audit trail card). */}
         {isAdmin ? (
           <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Audit trail</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <Link
-                href="/audit"
-                className="flex items-center gap-2 text-sm text-primary hover:underline"
-              >
-                <ShieldCheck className="size-4" />
-                View audit log →
+            <CardHeader className="flex flex-row items-center justify-between space-y-0">
+              <CardTitle className="text-base">Operations Snapshot</CardTitle>
+              <Link href="/requests" className="text-xs text-primary hover:underline">
+                Manage →
               </Link>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3">
+              {/* Mini metric grid */}
+              <div className="grid grid-cols-3 gap-2">
+                <Link
+                  href="/employees"
+                  className="flex flex-col rounded-md border p-2.5 transition-colors hover:bg-accent/40"
+                >
+                  <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <Users className="size-3.5" />
+                    Team
+                  </span>
+                  <span className="mt-1 text-lg font-bold">
+                    {attendance ? attendance.counts.total : "—"}
+                  </span>
+                  <span className="text-[11px] text-muted-foreground">Active staff</span>
+                </Link>
+
+                <Link
+                  href="/attendance"
+                  className="flex flex-col rounded-md border p-2.5 transition-colors hover:bg-accent/40"
+                >
+                  <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <Activity className="size-3.5" />
+                    Turnout
+                  </span>
+                  <span className="mt-1 text-lg font-bold">
+                    {attendance && attendance.counts.total > 0
+                      ? `${Math.round(((attendance.counts.present + attendance.counts.halfDay) / attendance.counts.total) * 100)}%`
+                      : "—"}
+                  </span>
+                  <span className="text-[11px] text-muted-foreground">
+                    {attendance ? `${attendance.counts.present + attendance.counts.halfDay} present` : "Today"}
+                  </span>
+                </Link>
+
+                <Link
+                  href="/work"
+                  className="flex flex-col rounded-md border p-2.5 transition-colors hover:bg-accent/40"
+                >
+                  <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <FolderKanban className="size-3.5" />
+                    Projects
+                  </span>
+                  <span className="mt-1 text-lg font-bold">
+                    {workUnits ? workUnits.filter((w) => w.status === "active").length : "—"}
+                  </span>
+                  <span className="text-[11px] text-muted-foreground">Active units</span>
+                </Link>
+              </div>
+
+              {/* Pending Action Items Bar */}
+              <div className="rounded-md bg-muted/50 p-2.5 text-xs">
+                <div className="mb-1.5 flex items-center justify-between font-medium text-muted-foreground">
+                  <span className="flex items-center gap-1.5">
+                    <AlertCircle className="size-3.5" />
+                    Action required
+                  </span>
+                  {(pendingApprovals ?? 0) + (attendance?.counts.pendingApproval ?? 0) === 0 ? (
+                    <Badge variant="outline" className="text-[10px] text-emerald-500">
+                      All clear
+                    </Badge>
+                  ) : (
+                    <Badge variant="secondary" className="text-[10px]">
+                      {(pendingApprovals ?? 0) + (attendance?.counts.pendingApproval ?? 0)} pending
+                    </Badge>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-2 pt-1">
+                  <Link
+                    href="/requests"
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded border px-2 py-1 transition-colors hover:border-primary/50",
+                      (pendingApprovals ?? 0) > 0 ? "border-primary/40 bg-primary/5 font-medium" : "text-muted-foreground"
+                    )}
+                  >
+                    <span>Requests:</span>
+                    <strong className="text-foreground">{pendingApprovals ?? 0}</strong>
+                  </Link>
+                  <Link
+                    href="/attendance?approval_status=pending"
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded border px-2 py-1 transition-colors hover:border-primary/50",
+                      (attendance?.counts.pendingApproval ?? 0) > 0 ? "border-primary/40 bg-primary/5 font-medium" : "text-muted-foreground"
+                    )}
+                  >
+                    <span>Attendance:</span>
+                    <strong className="text-foreground">{attendance?.counts.pendingApproval ?? 0}</strong>
+                  </Link>
+                </div>
+              </div>
             </CardContent>
           </Card>
         ) : (

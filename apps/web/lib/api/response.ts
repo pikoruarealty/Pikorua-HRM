@@ -15,6 +15,8 @@ export type ApiError = {
 export type ApiResponse<T> = {
   data: T | null;
   error: ApiError | null;
+  // Optional structured metadata for enriched error responses (e.g. requiresReassignment).
+  meta?: Record<string, unknown>;
 };
 
 /** Common error codes — extend as needed, keep stable for clients. */
@@ -48,10 +50,11 @@ export function fail(
   code: ErrorCodeValue | string,
   message: string,
   status = 400,
+  meta?: Record<string, unknown>,
 ): NextResponse {
   logger[status >= 500 ? "error" : "warn"](`response ${code} (${status}): ${message}`);
   return NextResponse.json<ApiResponse<never>>(
-    { data: null, error: { code, message } },
+    { data: null, error: { code, message }, ...(meta ? { meta } : {}) },
     { status },
   );
 }
@@ -60,6 +63,7 @@ export function fail(
 export function failFor(
   code: (typeof ErrorCode)[keyof typeof ErrorCode],
   message?: string,
+  meta?: Record<string, unknown>,
 ): NextResponse {
   const defaults: Record<string, { status: number; message: string }> = {
     UNAUTHENTICATED: { status: 401, message: "Authentication required." },
@@ -71,5 +75,5 @@ export function failFor(
     NOT_IMPLEMENTED: { status: 501, message: "Not implemented yet." },
   };
   const d = defaults[code];
-  return fail(code, message ?? d.message, d.status);
+  return fail(code, message ?? d.message, d.status, meta);
 }

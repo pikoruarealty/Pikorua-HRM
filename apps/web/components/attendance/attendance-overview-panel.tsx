@@ -148,7 +148,7 @@ export function AttendanceOverviewPanel() {
                 <span className="text-muted-foreground">{overview.holiday.name} — absences not counted.</span>
               </p>
             )}
-            <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
+            <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               {tiles.map((t) => (
                 <div key={t.label} className="rounded-lg border p-3">
                   <dt className="text-xs text-muted-foreground">{t.label}</dt>

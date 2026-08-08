@@ -75,6 +75,9 @@ export function AttendanceScreen({
 
       {canReview && <AttendanceOverviewPanel />}
 
+      {/* Attendance Records sits right after the daily overview */}
+      <AttendanceTable canReview={canReview} canSeeAll={canSeeAll} employeeId={employeeId} />
+
       {canReview && <AttendanceMonthlyPanel />}
 
       {canSeeAll && <TeamTaskProgressPanel />}
@@ -82,11 +85,11 @@ export function AttendanceScreen({
       {canReview && <ManualRecordSection />}
 
       {canReview && <WeeklyOffMovesSection />}
-
-      <AttendanceTable canReview={canReview} canSeeAll={canSeeAll} employeeId={employeeId} />
     </div>
   );
 }
+
+const PAGE_SIZE = 10;
 
 function AttendanceTable({
   canReview,
@@ -100,12 +103,15 @@ function AttendanceTable({
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<"" | "pending" | "approved">("");
+  const [statusFilter, setStatusFilter] = useState<"" | "pending" | "approved">("pending");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [removingId, setRemovingId] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
 
   async function load() {
     setLoading(true);
+    setPage(0);
     try {
       const qs = statusFilter ? `?approval_status=${statusFilter}` : "";
       const data = await getJson(await fetch(`/api/v1/attendance${qs}`));
@@ -135,27 +141,64 @@ function AttendanceTable({
     }
   }
 
+  async function removeRecord(id: string) {
+    if (!window.confirm("Remove this incomplete attendance record? This cannot be undone.")) return;
+    setRemovingId(id);
+    setError(null);
+    try {
+      await getJson(await fetch(`/api/v1/attendance/${id}`, { method: "DELETE" }));
+      setRecords((prev) => prev.filter((r) => r.id !== id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to remove record.");
+    } finally {
+      setRemovingId(null);
+    }
+  }
+
+  // Group records by date (YYYY-MM-DD) for the date-grouped view
+  const grouped = records.reduce<Record<string, AttendanceRecord[]>>((acc, r) => {
+    const key = r.date.slice(0, 10);
+    (acc[key] ??= []).push(r);
+    return acc;
+  }, {});
+  const dateKeys = Object.keys(grouped).sort((a, b) => b.localeCompare(a)); // newest first
+
+  // Flatten for pagination, preserving date order
+  const flatRecords = dateKeys.flatMap((d) => grouped[d]);
+  const totalPages = Math.ceil(flatRecords.length / PAGE_SIZE);
+  const pageRecords = flatRecords.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+
+  // Re-group the current page's records by date for the section headers
+  const pageGrouped = pageRecords.reduce<Record<string, AttendanceRecord[]>>((acc, r) => {
+    const key = r.date.slice(0, 10);
+    (acc[key] ??= []).push(r);
+    return acc;
+  }, {});
+  const pageDateKeys = Object.keys(pageGrouped).sort((a, b) => b.localeCompare(a));
+
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle>{canSeeAll ? "Attendance records" : "My attendance"}</CardTitle>
-        {canReview && (
-          <Select
-            value={statusFilter || "__all__"}
-            onValueChange={(v) =>
-              setStatusFilter(v === "__all__" ? "" : (v as typeof statusFilter))
-            }
-          >
-            <SelectTrigger className="h-9 w-40">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__all__">All statuses</SelectItem>
-              <SelectItem value="pending">Pending</SelectItem>
-              <SelectItem value="approved">Approved</SelectItem>
-            </SelectContent>
-          </Select>
-        )}
+        <div className="flex items-center gap-2">
+          {canReview && (
+            <Select
+              value={statusFilter || "__all__"}
+              onValueChange={(v) => {
+                setStatusFilter(v === "__all__" ? "" : (v as typeof statusFilter));
+              }}
+            >
+              <SelectTrigger className="h-9 w-40">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">All statuses</SelectItem>
+                <SelectItem value="pending">Pending</SelectItem>
+                <SelectItem value="approved">Approved</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
+        </div>
       </CardHeader>
       <CardContent>
         {error && <p className="mb-3 text-sm text-destructive">{error}</p>}
@@ -164,84 +207,158 @@ function AttendanceTable({
         ) : records.length === 0 ? (
           <p className="text-sm text-muted-foreground">No attendance records.</p>
         ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                {canSeeAll && <TableHead>Employee</TableHead>}
-                <TableHead>Date</TableHead>
-                <TableHead>Clock in</TableHead>
-                <TableHead>Clock out</TableHead>
-                <TableHead>Hours</TableHead>
-                <TableHead>Status</TableHead>
-                {canReview && <TableHead />}
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {records.map((r) => (
-                <Fragment key={r.id}>
-                  <TableRow>
-                    {canSeeAll && <TableCell>{r.employee.fullName}</TableCell>}
-                    <TableCell>{formatDate(r.date)}</TableCell>
-                    <TableCell>{fmt(r.clockInApproved ?? r.clockInRaw)}</TableCell>
-                    <TableCell>{fmt(r.clockOutApproved ?? r.clockOutRaw)}</TableCell>
-                    <TableCell>
-                      {r.totalHours ?? "—"}
-                      {r.isHalfDay && (
-                        <Badge variant="secondary" className="ml-2">
-                          Half-day
-                        </Badge>
-                      )}
-                      {r.isCompensation && (
-                        <Badge variant="outline" className="ml-2">
-                          Compensation
-                        </Badge>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={r.approvalStatus === "approved" ? "default" : "outline"}>
-                        {r.approvalStatus}
-                      </Badge>
-                    </TableCell>
-                    {canReview && (
-                      <TableCell>
-                        <div className="flex gap-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setEditingId(editingId === r.id ? null : r.id)}
-                          >
-                            {editingId === r.id ? "Close" : "Edit"}
-                          </Button>
-                          {r.approvalStatus === "pending" && (
-                            <Button
-                              size="sm"
-                              disabled={busyId === r.id}
-                              onClick={() => approve(r.id)}
-                            >
-                              {busyId === r.id ? "Approving…" : "Approve"}
-                            </Button>
-                          )}
-                        </div>
-                      </TableCell>
-                    )}
-                  </TableRow>
-                  {canReview && editingId === r.id && (
+          <div className="flex flex-col gap-4">
+            {/* Date-grouped table */}
+            {pageDateKeys.map((dateKey) => (
+              <div key={dateKey}>
+                <p className="mb-1.5 text-xs font-medium text-muted-foreground">
+                  {formatDate(dateKey)}
+                </p>
+                <Table>
+                  <TableHeader>
                     <TableRow>
-                      <TableCell colSpan={canSeeAll ? 7 : 6}>
-                        <EditRecordForm
-                          record={r}
-                          onSaved={() => {
-                            setEditingId(null);
-                            load();
-                          }}
-                        />
-                      </TableCell>
+                      {canSeeAll && <TableHead>Employee</TableHead>}
+                      <TableHead>Clock in</TableHead>
+                      <TableHead>Clock out</TableHead>
+                      <TableHead>Hours</TableHead>
+                      <TableHead>Status</TableHead>
+                      {canReview && <TableHead />}
                     </TableRow>
-                  )}
-                </Fragment>
-              ))}
-            </TableBody>
-          </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {pageGrouped[dateKey].map((r) => {
+                      const inTime = r.clockInApproved ?? r.clockInRaw;
+                      const outTime = r.clockOutApproved ?? r.clockOutRaw;
+                      const hasIn = Boolean(inTime);
+                      const hasOut = Boolean(outTime);
+                      const isComplete = hasIn && hasOut;
+                      const isIncomplete = !isComplete;
+                      return (
+                        <Fragment key={r.id}>
+                          <TableRow className={isIncomplete ? "bg-amber-500/5 dark:bg-amber-950/20" : ""}>
+                            {canSeeAll && <TableCell>{r.employee.fullName}</TableCell>}
+                            <TableCell>
+                              {!hasIn ? (
+                                <span className="inline-flex items-center rounded bg-destructive/10 px-1.5 py-0.5 text-xs font-medium text-destructive">
+                                  No clock-in
+                                </span>
+                              ) : (
+                                fmt(inTime)
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              {!hasOut ? (
+                                <span className="inline-flex items-center rounded bg-amber-500/15 px-1.5 py-0.5 text-xs font-medium text-amber-600 dark:text-amber-400">
+                                  No clock-out
+                                </span>
+                              ) : (
+                                fmt(outTime)
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              {r.totalHours ?? "—"}
+                              {r.isHalfDay && (
+                                <Badge variant="secondary" className="ml-2">Half-day</Badge>
+                              )}
+                              {r.isCompensation && (
+                                <Badge variant="outline" className="ml-2">Compensation</Badge>
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-1.5">
+                                <Badge variant={r.approvalStatus === "approved" ? "default" : "outline"}>
+                                  {r.approvalStatus}
+                                </Badge>
+                                {isIncomplete && (
+                                  <Badge variant="destructive" className="text-[10px] uppercase tracking-wider">
+                                    Incomplete
+                                  </Badge>
+                                )}
+                              </div>
+                            </TableCell>
+                            {canReview && (
+                              <TableCell>
+                                <div className="flex gap-2">
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => setEditingId(editingId === r.id ? null : r.id)}
+                                  >
+                                    {editingId === r.id ? "Close" : "Edit"}
+                                  </Button>
+                                  {Boolean(r.clockInApproved ?? r.clockInRaw) && r.approvalStatus === "pending" && (
+                                    <Button
+                                      size="sm"
+                                      disabled={busyId === r.id}
+                                      onClick={() => approve(r.id)}
+                                      title={!r.clockOutApproved && !r.clockOutRaw ? "Missing clock-out will be auto-set to default shift end (20:00)" : undefined}
+                                    >
+                                      {busyId === r.id ? "Approving…" : "Approve"}
+                                    </Button>
+                                  )}
+                                  {/* Allow deletion of incomplete or unapproved records */}
+                                  {(isIncomplete || r.approvalStatus === "pending") && (
+                                    <Button
+                                      variant="destructive"
+                                      size="sm"
+                                      disabled={removingId === r.id}
+                                      onClick={() => removeRecord(r.id)}
+                                    >
+                                      {removingId === r.id ? "Removing…" : "Remove"}
+                                    </Button>
+                                  )}
+                                </div>
+                              </TableCell>
+                            )}
+                          </TableRow>
+                          {canReview && editingId === r.id && (
+                            <TableRow>
+                              <TableCell colSpan={canSeeAll ? 6 : 5}>
+                                <EditRecordForm
+                                  record={r}
+                                  onSaved={() => {
+                                    setEditingId(null);
+                                    load();
+                                  }}
+                                />
+                              </TableCell>
+                            </TableRow>
+                          )}
+                        </Fragment>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+            ))}
+
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between border-t pt-3">
+                <p className="text-xs text-muted-foreground">
+                  Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, flatRecords.length)} of {flatRecords.length} records
+                </p>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={page === 0}
+                    onClick={() => setPage((p) => p - 1)}
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={page >= totalPages - 1}
+                    onClick={() => setPage((p) => p + 1)}
+                  >
+                    Next
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
         )}
       </CardContent>
     </Card>
@@ -308,7 +425,22 @@ function EditRecordForm({
         />
       </div>
       <div className="flex flex-col gap-2">
-        <label className="text-xs text-muted-foreground">Approved clock-out</label>
+        <div className="flex items-center justify-between">
+          <label className="text-xs text-muted-foreground">Approved clock-out</label>
+          {!clockOut && (
+            <button
+              type="button"
+              className="text-[11px] text-primary hover:underline"
+              onClick={() => {
+                const baseDate = clockIn ? new Date(clockIn) : new Date(record.date);
+                const pad = (n: number) => String(n).padStart(2, "0");
+                setClockOut(`${baseDate.getFullYear()}-${pad(baseDate.getMonth() + 1)}-${pad(baseDate.getDate())}T20:00`);
+              }}
+            >
+              Default (20:00)
+            </button>
+          )}
+        </div>
         <input
           type="datetime-local"
           className="flex h-9 rounded-md border border-input bg-background px-3 py-1 text-sm"

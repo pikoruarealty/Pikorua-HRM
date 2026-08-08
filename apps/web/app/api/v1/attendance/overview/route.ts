@@ -42,8 +42,13 @@ export async function GET(req: Request) {
   const weekStart = weekStartOf(date);
 
   const [employees, records, leaves, holiday, moves] = await Promise.all([
+    // Admin does not clock in, so they are excluded from the overview counts.
+    // HR, leads, and employees all clock in and are tracked.
     prisma.employee.findMany({
-      where: { status: EmployeeStatus.active },
+      where: {
+        status: EmployeeStatus.active,
+        role: { not: "admin" },
+      },
       select: {
         id: true,
         fullName: true,
