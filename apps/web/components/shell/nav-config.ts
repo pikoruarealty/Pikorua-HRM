@@ -7,6 +7,7 @@ import {
   UsersRound,
   Building2,
   Clock,
+  PhoneCall,
   ReceiptText,
   Settings2,
   FileText,
@@ -24,7 +25,15 @@ import {
 // RBAC-aware nav model. `show(ctx)` decides visibility per role — a link the
 // role can't use is never rendered (the routes still enforce access server-side;
 // this keeps forbidden options out of sight entirely, per the product rule).
-export type NavCtx = { isFinance: boolean; isLead: boolean; hasEmployee: boolean; isAdmin: boolean };
+export type NavCtx = {
+  isFinance: boolean;
+  isLead: boolean;
+  hasEmployee: boolean;
+  isAdmin: boolean;
+  /** Sales-side role (sales employee/lead, BDE) — they have their own activity
+   *  dashboard that a tech employee has no use for. */
+  isSales: boolean;
+};
 export type NavItem = { href: string; label: string; icon: LucideIcon; show?: (c: NavCtx) => boolean };
 export type NavGroup = { label: string | null; items: NavItem[] };
 
@@ -56,6 +65,15 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/teams", label: "Teams", icon: UsersRound },
       { href: "/departments", label: "Departments", icon: Building2, show: (c) => c.isFinance },
       { href: "/attendance", label: "Attendance", icon: Clock },
+      // Sales activity (Pillar 5) — calls/site visits/bookings against target,
+      // plus the offline-call claim flow. Shown to the sales side and to anyone
+      // who manages them; a tech employee has nothing to do here.
+      {
+        href: "/sales",
+        label: "Sales Activity",
+        icon: PhoneCall,
+        show: (c) => c.isFinance || c.isLead || c.isSales,
+      },
       // Monthly quality review (Pillar 3) — a Lead/Admin-side entry sheet. An
       // employee has nothing to do here; they read their own ratings off their
       // profile instead, so the tab stays hidden for them.

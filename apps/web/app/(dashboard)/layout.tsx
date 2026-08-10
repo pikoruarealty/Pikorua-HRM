@@ -4,6 +4,7 @@ import { FINANCE_ROLES, Role, isLeadRole } from "@/lib/rbac";
 import { prisma } from "@/lib/db/prisma";
 import { AppShell } from "@/components/shell/app-shell";
 import { FirstLoginGate } from "@/components/settings/first-login-gate";
+import { SALES_ROLES } from "@/lib/sales/provisioning";
 
 export default async function DashboardLayout({
   children,
@@ -37,6 +38,7 @@ export default async function DashboardLayout({
         isLead: isLeadRole(session.role),
         hasEmployee: !!session.employeeId,
         isAdmin: session.role === Role.admin,
+        isSales: (SALES_ROLES as readonly Role[]).includes(session.role),
       }}
     >
       {children}
