@@ -1,8 +1,8 @@
-import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { FINANCE_ROLES, isLeadRole } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { buildEodSummary } from "@/lib/eod/summary";
+import { getLedEmployeeIds } from "@/lib/employees/managed-scope";
 
 // Track A. GET /api/v1/attendance/eod?date=YYYY-MM-DD&employee_id=
 // Derived End-of-Day summary (PRD §5.4) for the Daily Planning screen.
@@ -20,13 +20,11 @@ export async function GET(req: Request) {
 
   const isFinance = FINANCE_ROLES.includes(session.role);
   const isSelf = employeeId === session.employeeId;
+  // "Own team" means every team this Lead leads, not the one they belong to.
   let isOwnTeamLead = false;
   if (!isFinance && !isSelf && isLeadRole(session.role)) {
-    const [lead, target] = await Promise.all([
-      prisma.employee.findUnique({ where: { id: session.employeeId }, select: { teamId: true } }),
-      prisma.employee.findUnique({ where: { id: employeeId }, select: { teamId: true } }),
-    ]);
-    isOwnTeamLead = !!lead?.teamId && lead.teamId === target?.teamId;
+    const ledIds = await getLedEmployeeIds(session.employeeId);
+    isOwnTeamLead = ledIds.includes(employeeId);
   }
   if (!isFinance && !isSelf && !isOwnTeamLead) {
     return failFor(ErrorCode.FORBIDDEN);

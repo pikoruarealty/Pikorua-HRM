@@ -2,6 +2,7 @@ import { Prisma, AttendanceApprovalStatus } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { FINANCE_ROLES, isLeadRole } from "@/lib/rbac";
+import { getLedEmployeeIds } from "@/lib/employees/managed-scope";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 
 // Track A. GET /api/v1/attendance — Admin/HR see all (optionally filtered to
@@ -40,19 +41,18 @@ export async function GET(req: Request) {
     if (employeeIdParam) where.employeeId = employeeIdParam;
   } else if (isLeadRole(session.role)) {
     if (!session.employeeId) return ok([]);
-    const lead = await prisma.employee.findUnique({
-      where: { id: session.employeeId },
-      select: { teamId: true },
-    });
-    if (!lead?.teamId) return ok([]);
-    const teammates = await prisma.employee.findMany({
-      where: { teamId: lead.teamId },
-      select: { id: true },
-    });
-    const teammateIds = teammates.map((t) => t.id);
-    where.employeeId = employeeIdParam && teammateIds.includes(employeeIdParam)
-      ? employeeIdParam
-      : { in: teammateIds };
+    // Scope by the teams this Lead *leads*, not the one team they happen to be
+    // a member of. A Lead can own several teams, and the old `viewer.teamId`
+    // lookup made every team but their own invisible — they could not see the
+    // attendance of people they are directly responsible for.
+    const ledIds = await getLedEmployeeIds(session.employeeId);
+    if (employeeIdParam && !ledIds.includes(employeeIdParam)) {
+      // Silently widening an out-of-scope filter back to "my whole team" used to
+      // return other people's records under the employee_id the caller asked
+      // for — the screen would then label someone else's attendance as theirs.
+      return ok([]);
+    }
+    where.employeeId = employeeIdParam ?? { in: ledIds };
   } else {
     if (!session.employeeId) return ok([]);
     where.employeeId = session.employeeId;

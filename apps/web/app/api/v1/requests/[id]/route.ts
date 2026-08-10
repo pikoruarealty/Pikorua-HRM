@@ -4,6 +4,7 @@ import { getSession } from "@/lib/auth";
 import { isAdmin, isFinanceRole, isLeadRole } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { redactRequestFinancials } from "@/lib/requests/redact";
+import { leadsEmployee } from "@/lib/employees/managed-scope";
 import { audit, clientIp } from "@/lib/audit";
 import { RequestType, RequestStatus } from "@prisma/client";
 
@@ -47,11 +48,8 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   // bill); everyone below finance has amount/attachment stripped.
   if (request.employeeId === session.employeeId) return ok(withFlag);
 
-  if (isLeadRole(role)) {
-    const team = await prisma.team.findFirst({
-      where: { teamLeadId: session.employeeId, members: { some: { id: request.employeeId } } },
-    });
-    if (team) return ok({ ...redactRequestFinancials(withFlag), hasAttachment: false });
+  if (isLeadRole(role) && (await leadsEmployee(session.employeeId, request.employeeId))) {
+    return ok({ ...redactRequestFinancials(withFlag), hasAttachment: false });
   }
 
   // Don't reveal existence of Requests outside the caller's scope.

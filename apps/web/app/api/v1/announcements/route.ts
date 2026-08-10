@@ -71,8 +71,13 @@ export async function POST(req: Request) {
 
   if (isLeadRole(session.role)) {
     if (!session.employeeId) return failFor(ErrorCode.FORBIDDEN, "Session has no linked employee record.");
-    const ownTeam = await prisma.team.findFirst({ where: { teamLeadId: session.employeeId } });
-    if (!ownTeam) return failFor(ErrorCode.FORBIDDEN, "You do not lead a team.");
+    // A Lead may lead several teams; findFirst used to pick one arbitrarily, so
+    // an announcement silently reached only one of them.
+    const ownTeams = await prisma.team.findMany({
+      where: { teamLeadId: session.employeeId },
+      select: { id: true },
+    });
+    if (ownTeams.length === 0) return failFor(ErrorCode.FORBIDDEN, "You do not lead a team.");
 
     // Forced to scope_type = "team" regardless of what the Lead requested.
     const announcement = await prisma.announcement.create({
@@ -80,7 +85,7 @@ export async function POST(req: Request) {
         title,
         body: text,
         scopeType: AnnouncementScope.team,
-        teamIds: [ownTeam.id],
+        teamIds: ownTeams.map((t) => t.id),
         createdById: session.userId,
       },
     });

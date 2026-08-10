@@ -16,3 +16,24 @@ export async function getLedEmployeeIds(leadEmployeeId: string): Promise<string[
   }
   return employeeIds;
 }
+
+/**
+ * Does `leadEmployeeId` lead `employeeId` (or is it themselves)?
+ *
+ * The single-employee form of getLedEmployeeIds, for the many per-employee
+ * detail routes that only need a yes/no. Kept here so every "can this Lead see
+ * this person?" decision in the codebase resolves the same way — routes used to
+ * hand-roll this two different ways, and the `viewer.teamId === target.teamId`
+ * variant silently hid a Lead's second team from them.
+ */
+export async function leadsEmployee(
+  leadEmployeeId: string,
+  employeeId: string,
+): Promise<boolean> {
+  if (leadEmployeeId === employeeId) return true;
+  const team = await prisma.team.findFirst({
+    where: { teamLeadId: leadEmployeeId, members: { some: { id: employeeId } } },
+    select: { id: true },
+  });
+  return team !== null;
+}

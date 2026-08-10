@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { isFinanceRole, isLeadRole } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
+import { leadsEmployee } from "@/lib/employees/managed-scope";
 
 // Track B. GET /api/v1/employees/:id/points — Milestone 2.3.
 // Physically lives under Track A's `app/api/v1/employees/` folder — owned
@@ -20,7 +21,9 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 
   const role = session.role;
   const isSelf = session.employeeId === employee.id;
-  const isOwningLead = isLeadRole(role) && session.employeeId === employee.team?.teamLeadId;
+  const isOwningLead =
+    isLeadRole(role) && !!session.employeeId &&
+    (await leadsEmployee(session.employeeId, employee.id));
   if (!isFinanceRole(role) && !isOwningLead && !isSelf) {
     return failFor(ErrorCode.FORBIDDEN);
   }

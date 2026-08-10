@@ -6,6 +6,7 @@ import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { getAttendanceSummary } from "@/lib/attendance/summary";
 import { getMonthlyAttendanceBreakdown } from "@/lib/attendance/monthly-breakdown";
 import { getEffectivePayrollConfig } from "@/lib/payroll/config";
+import { getLedEmployeeIds } from "@/lib/employees/managed-scope";
 
 // Track A. GET /api/v1/attendance/:employee_id/summary?month=&year=
 // (folder is named [id], not [employee_id], only because Next.js requires
@@ -32,13 +33,11 @@ export async function GET(
 
   const isFinance = FINANCE_ROLES.includes(session.role);
   const isSelf = session.employeeId === employeeId;
+  // "Own team" means every team this Lead leads, not the one they belong to.
   let isOwnTeamLead = false;
   if (!isFinance && !isSelf && isLeadRole(session.role) && session.employeeId) {
-    const [lead, target] = await Promise.all([
-      prisma.employee.findUnique({ where: { id: session.employeeId }, select: { teamId: true } }),
-      prisma.employee.findUnique({ where: { id: employeeId }, select: { teamId: true } }),
-    ]);
-    isOwnTeamLead = !!lead?.teamId && lead.teamId === target?.teamId;
+    const ledIds = await getLedEmployeeIds(session.employeeId);
+    isOwnTeamLead = ledIds.includes(employeeId);
   }
   if (!isFinance && !isSelf && !isOwnTeamLead) {
     return failFor(ErrorCode.FORBIDDEN);

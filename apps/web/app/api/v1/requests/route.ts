@@ -4,6 +4,7 @@ import { getSession } from "@/lib/auth";
 import { isFinanceRole, isLeadRole } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { redactRequestFinancials } from "@/lib/requests/redact";
+import { getLedEmployeeIds } from "@/lib/employees/managed-scope";
 import { notifyFinanceUsers } from "@/lib/notifications/push";
 import { saveUploadedFile } from "@/lib/storage/local";
 import { RequestType, RequestStatus, Role } from "@prisma/client";
@@ -197,13 +198,9 @@ export async function GET(req: Request) {
   if (!session.employeeId) return ok([]);
 
   if (isLeadRole(role)) {
-    const teams = await prisma.team.findMany({
-      where: { teamLeadId: session.employeeId },
-      select: { members: { select: { id: true } } },
-    });
-    // Own team's members plus the Lead's own submitted requests (Leads can
-    // now file their own leave, approved up the chain by HR/Admin).
-    const scopedEmployeeIds = [...new Set([...teams.flatMap((t) => t.members.map((m) => m.id)), session.employeeId])];
+    // Every led team's members plus the Lead's own submitted requests (Leads
+    // can now file their own leave, approved up the chain by HR/Admin).
+    const scopedEmployeeIds = await getLedEmployeeIds(session.employeeId);
 
     const requests = await prisma.request.findMany({
       where: {

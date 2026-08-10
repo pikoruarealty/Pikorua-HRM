@@ -9,6 +9,7 @@ import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { audit, clientIp } from "@/lib/audit";
 import { saveUploadedFile } from "@/lib/storage/local";
 import { validatePhotoFile, withPhotoPath } from "@/lib/employees/photo";
+import { getLedEmployeeIds } from "@/lib/employees/managed-scope";
 
 // Track A. GET /api/v1/employees — role-scoped list. POST — Admin/HR only,
 // creates the Employee row and its linked User login in the same call
@@ -136,17 +137,16 @@ export async function GET(req: Request) {
     return ok([]);
   }
 
-  const viewer = await prisma.employee.findUnique({
-    where: { id: session.employeeId },
-    select: { teamId: true },
-  });
-
   const isLead = isLeadRole(session.role);
 
-  if (isLead && viewer?.teamId) {
+  // Every team this Lead leads, not the single team they belong to — a Lead who
+  // owns two teams was previously shown only their own team's members.
+  const ledIds = isLead ? await getLedEmployeeIds(session.employeeId) : [];
+
+  if (isLead && ledIds.length > 0) {
     const employees = await prisma.employee.findMany({
       where: {
-        teamId: viewer.teamId,
+        id: { in: ledIds },
         ...(departmentIdFilter ? { departmentId: departmentIdFilter } : {}),
         ...(statusFilter ? { status: statusFilter } : {}),
         ...(roleFilter ? { role: roleFilter } : {}),

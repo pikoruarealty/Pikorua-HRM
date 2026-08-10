@@ -4,6 +4,7 @@ import { getSession } from "@/lib/auth";
 import { isFinanceRole, isLeadRole } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { WorkItemMode } from "@prisma/client";
+import { leadsEmployee } from "@/lib/employees/managed-scope";
 
 // Track B. GET /api/v1/employees/:id/work-items/history — Milestone 2.2.
 // Growth-over-time view for metric-mode WorkItems (Sales/BD): one row per
@@ -30,7 +31,9 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
 
   const role = session.role;
   const isSelf = session.employeeId === employee.id;
-  const isOwningLead = isLeadRole(role) && session.employeeId === employee.team?.teamLeadId;
+  const isOwningLead =
+    isLeadRole(role) && !!session.employeeId &&
+    (await leadsEmployee(session.employeeId, employee.id));
   if (!isFinanceRole(role) && !isOwningLead && !isSelf) {
     return failFor(ErrorCode.FORBIDDEN);
   }

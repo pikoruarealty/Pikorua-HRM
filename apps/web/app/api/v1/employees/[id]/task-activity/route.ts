@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { isFinanceRole, isLeadRole } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
+import { leadsEmployee } from "@/lib/employees/managed-scope";
 
 // GET /api/v1/employees/:id/task-activity?period=daily|weekly|monthly|total&date=YYYY-MM-DD
 // General task-activity history for an employee — which tasks they worked on
@@ -60,7 +61,9 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
 
   const role = session.role;
   const isSelf = session.employeeId === employee.id;
-  const isOwningLead = isLeadRole(role) && session.employeeId === employee.team?.teamLeadId;
+  const isOwningLead =
+    isLeadRole(role) && !!session.employeeId &&
+    (await leadsEmployee(session.employeeId, employee.id));
   if (!isFinanceRole(role) && !isOwningLead && !isSelf) {
     return failFor(ErrorCode.FORBIDDEN);
   }

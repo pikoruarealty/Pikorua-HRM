@@ -1,6 +1,6 @@
 import { getSession } from "@/lib/auth";
-import { prisma } from "@/lib/db/prisma";
 import { FINANCE_ROLES, Role, isLeadRole } from "@/lib/rbac";
+import { leadsEmployee } from "@/lib/employees/managed-scope";
 import { EmployeeDetail } from "@/components/employees/employee-detail";
 
 export default async function EmployeeDetailPage({
@@ -19,11 +19,7 @@ export default async function EmployeeDetailPage({
   // this employee's team.
   let isOwningLead = false;
   if (!canManage && !isSelf && isLeadRole(session!.role) && session!.employeeId) {
-    const employee = await prisma.employee.findUnique({
-      where: { id: params.id },
-      select: { team: { select: { teamLeadId: true } } },
-    });
-    isOwningLead = employee?.team?.teamLeadId === session!.employeeId;
+    isOwningLead = await leadsEmployee(session!.employeeId, params.id);
   }
   const canViewAttendance = canManage || isSelf || isOwningLead;
 

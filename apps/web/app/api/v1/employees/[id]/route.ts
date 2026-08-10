@@ -6,6 +6,7 @@ import { FINANCE_ROLES, Role, isLeadRole } from "@/lib/rbac";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { audit, clientIp } from "@/lib/audit";
 import { withPhotoPath } from "@/lib/employees/photo";
+import { getLedEmployeeIds } from "@/lib/employees/managed-scope";
 
 // Track A. GET/PATCH/DELETE /api/v1/employees/:id — role-scoped per PRD/API_SPEC.
 
@@ -65,17 +66,17 @@ export async function GET(
     return ok(withPhotoPath(self));
   }
 
+  // A Lead sees everyone across every team they LEAD — not merely the one team
+  // they are themselves a member of. Comparing the viewer's own `teamId` made a
+  // second led team invisible to its own Lead.
   if (isLead && session.employeeId) {
-    const viewer = await prisma.employee.findUnique({
-      where: { id: session.employeeId },
-      select: { teamId: true },
-    });
-    const target = await prisma.employee.findUnique({
-      where: { id: params.id },
-      select: PUBLIC_SELECT,
-    });
-    if (target && viewer?.teamId && target.teamId === viewer.teamId) {
-      return ok(withPhotoPath(target));
+    const ledIds = await getLedEmployeeIds(session.employeeId);
+    if (ledIds.includes(params.id)) {
+      const target = await prisma.employee.findUnique({
+        where: { id: params.id },
+        select: PUBLIC_SELECT,
+      });
+      if (target) return ok(withPhotoPath(target));
     }
   }
 
