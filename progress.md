@@ -3,7 +3,16 @@
 > Living status doc. Update after every meaningful change (standing project rule).
 > Source of truth for scope = [docs/](docs/) (PRD, SCHEMA, IMPLEMENTATION_PLAN, API_SPEC).
 
-**Last updated:** 2026-08-10 — **Phase 23 (overhaul Pillar 5): the Sales Activity dashboard.**
+**Last updated:** 2026-08-10 — **Phase 24: the "repeat daily" toggle reaches the UI (all departments).**
+
+### Phase 24 — "Make it a daily task until undone" — the toggle, end to end (2026-08-10, on `main`)
+Phase 22 added `work_items.repeat_daily` and taught the rollover cron to honour it, but nothing outside the sales auto-provisioner could ever set it. Owner ask, verbatim: *"for the other departments also like bde when any task is added give option to make it a daily task until undone."* This closes that loop.
+
+- **Create:** `POST /sub-units/:id/work-items` accepts `repeatDaily?`. **Atomic-only** — a daily-frequency metric item already rolls forward by construction, so accepting the flag there would offer a switch that changes nothing. A recurring task with no due date is given today's, matching what the cron stamps on every later instance; otherwise instance one carries a date its own clones don't and reads as the odd one out.
+- **Undo:** `PATCH /work-items/:id` accepts `repeatDaily` as a **management-only** field (same guard as title/points/assignee — an assignee gets 403), and 422s on a metric item. Clearing it on the *newest* instance is the whole cancel mechanism: the cron reads the flag, so there is nothing else to switch off, and older instances keep their own history.
+- **UI (`work-unit-detail-screen.tsx`):** a "Repeat daily" checkbox in the atomic branch of the create form (with the one-line explanation of how to stop it), the same checkbox inline in the Lead's edit row, and a `· repeats daily` marker on the task line so it's visible without opening anything. The create-form checkbox resets after each submit — a stuck box would quietly clone chores nobody asked for.
+- **Verified:** typecheck clean; 15 live HTTP checks with real login sessions (creates with the flag; defaults false when omitted; metric create doesn't set it; Lead can toggle off *and* back on; PATCH on a metric item 422; the clocked-in assignee gets 403; Admin can toggle; `GET /work-units/:id` exposes the field). Note the assignee probe needs the employee clocked in first — the route checks "must be clocked in" *before* it checks field permissions, so without that it asserts the wrong rejection. Real Chromium screenshots of both the create form and the edit row reviewed. All scratch rows (work units, sub-units, items, the test attendance record and its daily selections) deleted afterwards, verified zero remaining.
+
 
 ### Phase 23 — Task-generation & performance overhaul, Pillar 5: sales dashboard (2026-08-10, on `main`)
 The read side of Phase 22, built as the sales counterpart to `GET /attendance/task-progress` + `TeamTaskProgressPanel`, with the same RBAC shape.

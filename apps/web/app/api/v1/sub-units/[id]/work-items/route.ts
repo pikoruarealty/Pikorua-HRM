@@ -21,6 +21,11 @@ const createSchema = z.object({
     .optional(),
   assignedTo: z.string().uuid(),
   mode: z.nativeEnum(WorkItemMode),
+  // "Repeat this every day until I turn it off" (2026-08-10, owner request).
+  // Only meaningful on atomic tasks: a daily-frequency metric item already
+  // rolls forward by construction, so accepting the flag there would offer a
+  // switch that changes nothing.
+  repeatDaily: z.boolean().optional(),
   taskPoints: z.number().int().positive().optional(),
   targetValue: z.number().positive().optional(),
   frequency: z.nativeEnum(WorkItemFrequency).optional(),
@@ -95,9 +100,13 @@ export async function POST(req: Request, { params }: { params: { id: string } })
         assignedTo,
         title,
         description,
-        dueDate,
+        // A recurring chore is due the day it appears, matching what the
+        // rollover cron gives every later instance — otherwise instance one
+        // would carry a date the clones don't and read as the odd one out.
+        dueDate: parsed.data.repeatDaily ? (dueDate ?? new Date(new Date().toISOString().slice(0, 10))) : dueDate,
         mode: WorkItemMode.atomic,
         taskPoints,
+        repeatDaily: parsed.data.repeatDaily ?? false,
       },
     });
     return ok(workItem, 201);

@@ -24,6 +24,7 @@ type WorkItem = {
   mode: "atomic" | "metric";
   status: string;
   taskPoints?: number | null;
+  repeatDaily?: boolean;
   targetValue?: string | null;
   currentValue?: string | null;
   frequency?: "daily" | "monthly" | null;
@@ -431,6 +432,7 @@ function EditWorkItemControl({ wi, onSaved }: { wi: WorkItem; onSaved: () => voi
   // `<input type="date">` wants YYYY-MM-DD; the API sends an ISO instant.
   const [dueDate, setDueDate] = useState(wi.dueDate ? wi.dueDate.slice(0, 10) : "");
   const [taskPoints, setTaskPoints] = useState(String(wi.taskPoints ?? ""));
+  const [repeatDaily, setRepeatDaily] = useState(!!wi.repeatDaily);
   const [targetValue, setTargetValue] = useState(wi.targetValue ?? "");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -443,8 +445,10 @@ function EditWorkItemControl({ wi, onSaved }: { wi: WorkItem; onSaved: () => voi
       description: description.trim() || null,
       dueDate: dueDate || null,
     };
-    if (wi.mode === "atomic") body.taskPoints = Number(taskPoints);
-    else body.targetValue = Number(targetValue);
+    if (wi.mode === "atomic") {
+      body.taskPoints = Number(taskPoints);
+      body.repeatDaily = repeatDaily;
+    } else body.targetValue = Number(targetValue);
     const res = await apiFetch(`/work-items/${wi.id}`, { method: "PATCH", body: JSON.stringify(body) });
     setBusy(false);
     if (res.error) return setError(`${res.error.code}: ${res.error.message}`);
@@ -464,13 +468,27 @@ function EditWorkItemControl({ wi, onSaved }: { wi: WorkItem; onSaved: () => voi
     <div className="flex flex-wrap items-center gap-2 rounded border p-2">
       <Input className="h-8 w-40" value={title} onChange={(e) => setTitle(e.target.value)} />
       {wi.mode === "atomic" ? (
-        <Input
-          className="h-8 w-24"
-          type="number"
-          value={taskPoints}
-          onChange={(e) => setTaskPoints(e.target.value)}
-          placeholder="points"
-        />
+        <>
+          <Input
+            className="h-8 w-24"
+            type="number"
+            value={taskPoints}
+            onChange={(e) => setTaskPoints(e.target.value)}
+            placeholder="points"
+          />
+          {/* Unticking this on the newest instance is how a standing chore ends
+              — the rollover cron reads the flag, so there is nothing else to
+              cancel. Older instances keep their own history. */}
+          <label className="flex items-center gap-1.5 text-sm">
+            <input
+              type="checkbox"
+              checked={repeatDaily}
+              onChange={(e) => setRepeatDaily(e.target.checked)}
+              className="size-3.5"
+            />
+            Repeat daily
+          </label>
+        </>
       ) : (
         <Input
           className="h-8 w-24"
@@ -676,6 +694,7 @@ function NewWorkItemForm({
   const [assignedTo, setAssignedTo] = useState("");
   const [mode, setMode] = useState<"atomic" | "metric">("atomic");
   const [taskPoints, setTaskPoints] = useState("");
+  const [repeatDaily, setRepeatDaily] = useState(false);
   const [targetValue, setTargetValue] = useState("");
   const [frequency, setFrequency] = useState<"daily" | "monthly">("monthly");
   const [periodMonth, setPeriodMonth] = useState(String(new Date().getMonth() + 1));
@@ -692,8 +711,10 @@ function NewWorkItemForm({
       description: description.trim() || null,
       dueDate: dueDate || null,
     };
-    if (mode === "atomic") body.taskPoints = Number(taskPoints);
-    else {
+    if (mode === "atomic") {
+      body.taskPoints = Number(taskPoints);
+      body.repeatDaily = repeatDaily;
+    } else {
       body.targetValue = Number(targetValue);
       body.frequency = frequency;
       if (frequency === "monthly") {
@@ -709,6 +730,9 @@ function NewWorkItemForm({
     setTitle("");
     setDescription("");
     setDueDate("");
+    // Recurrence is deliberate, never inherited by the next task typed into the
+    // same form — a stuck checkbox would quietly clone chores nobody asked for.
+    setRepeatDaily(false);
     onCreated();
   }
 
@@ -759,10 +783,26 @@ function NewWorkItemForm({
         </Select>
       </div>
       {mode === "atomic" ? (
-        <div className="flex flex-col gap-1.5">
-          <Label>Task points</Label>
-          <Input type="number" value={taskPoints} onChange={(e) => setTaskPoints(e.target.value)} required />
-        </div>
+        <>
+          <div className="flex flex-col gap-1.5">
+            <Label>Task points</Label>
+            <Input type="number" value={taskPoints} onChange={(e) => setTaskPoints(e.target.value)} required />
+          </div>
+          <label className="flex items-start gap-2 self-end pb-2 text-sm">
+            <input
+              type="checkbox"
+              checked={repeatDaily}
+              onChange={(e) => setRepeatDaily(e.target.checked)}
+              className="mt-0.5 size-3.5 shrink-0"
+            />
+            <span>
+              Repeat daily
+              <span className="block text-xs text-muted-foreground">
+                A fresh copy appears each morning until you switch this off on the newest one.
+              </span>
+            </span>
+          </label>
+        </>
       ) : (
         <>
           <div className="flex flex-col gap-1.5">
@@ -1076,6 +1116,9 @@ export function WorkUnitDetailScreen({
                       )}
                       {wi.mode === "atomic" && (
                         <span className="text-muted-foreground"> · {wi.taskPoints} pts</span>
+                      )}
+                      {wi.mode === "atomic" && wi.repeatDaily && (
+                        <span className="text-muted-foreground"> · repeats daily</span>
                       )}
                       {wi.assignee && (
                         <span className="text-muted-foreground"> · assigned to {wi.assignee.fullName}</span>

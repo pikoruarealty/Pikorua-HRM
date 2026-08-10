@@ -25,6 +25,10 @@ const patchSchema = z.object({
   targetValue: z.number().positive().optional(),
   currentValue: z.number().min(0).optional(),
   status: z.nativeEnum(WorkItemStatus).optional(),
+  // Turning a standing daily chore off is the same gesture as turning it on
+  // (2026-08-10) — clear the flag on the newest instance and the rollover cron
+  // stops generating tomorrow's. Management-only, like title/points.
+  repeatDaily: z.boolean().optional(),
 });
 
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
@@ -66,7 +70,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       issue ? `${issue.path.join(".") || "body"}: ${issue.message}` : "Invalid request body.",
     );
   }
-  const { title, assignedTo, taskPoints, targetValue, currentValue, status } = parsed.data;
+  const { title, assignedTo, taskPoints, targetValue, currentValue, status, repeatDaily } = parsed.data;
   // `undefined` = field untouched (Prisma skips it); explicit `null`/"" = clear it.
   const description =
     parsed.data.description === undefined ? undefined : parsed.data.description?.trim() || null;
@@ -87,6 +91,12 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   if (taskPoints !== undefined && isMetric) {
     return failFor(ErrorCode.VALIDATION, "taskPoints only applies to atomic-mode WorkItems.");
   }
+  if (parsed.data.repeatDaily !== undefined && isMetric) {
+    return failFor(
+      ErrorCode.VALIDATION,
+      "repeatDaily only applies to atomic-mode WorkItems — a daily metric target already rolls forward.",
+    );
+  }
 
   if (!canEditAll) {
     // Assigned Employee: status only (atomic) or currentValue only (metric).
@@ -96,7 +106,8 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       taskPoints !== undefined ||
       targetValue !== undefined ||
       description !== undefined ||
-      dueDate !== undefined
+      dueDate !== undefined ||
+      parsed.data.repeatDaily !== undefined
     ) {
       return failFor(ErrorCode.FORBIDDEN, "You can only update this task's progress.");
     }
@@ -217,6 +228,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
             dueDate,
             assignedTo,
             taskPoints,
+            repeatDaily,
             status,
             completedAt: new Date(),
             // A Lead completing an item straight out of review is the reviewer.
@@ -250,6 +262,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       dueDate,
       assignedTo,
       taskPoints,
+      repeatDaily,
       status,
       completedAt: status && !nowCompleted ? null : undefined,
     },
