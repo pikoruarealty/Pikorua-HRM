@@ -32,6 +32,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
         select: {
           id: true,
           title: true,
+          deletedAt: true,
           subUnit: { select: { id: true, name: true, workUnit: { select: { id: true, name: true } } } },
         },
       },
@@ -39,7 +40,16 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     orderBy: { creditedAt: "desc" },
   });
 
-  const balance = ledger.reduce((sum, entry) => sum + entry.points, 0);
+  // A deleted WorkItem keeps its ledger row so the credit stays auditable, but
+  // it must stop counting — otherwise deleting a task entered by mistake leaves
+  // its points behind permanently, with no way to take them back. The row is
+  // still returned, flagged, so the history explains where the points went.
+  const entries = ledger.map(({ workItem, ...rest }) => ({
+    ...rest,
+    workItem,
+    voided: workItem?.deletedAt != null,
+  }));
+  const balance = entries.reduce((sum, entry) => (entry.voided ? sum : sum + entry.points), 0);
 
-  return ok({ employeeId: employee.id, balance, ledger });
+  return ok({ employeeId: employee.id, balance, ledger: entries });
 }

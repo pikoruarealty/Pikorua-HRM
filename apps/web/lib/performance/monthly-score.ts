@@ -75,9 +75,17 @@ export async function gatherMonthlyInputs(
   const inputs: MonthlyInputs = new Map();
 
   const [ledger, metricItems, reviews, attendance, dueDated, selections] = await Promise.all([
+    // Deleting a WorkItem deliberately leaves its ledger row in place (see the
+    // DELETE handler in work-items/[id]) so the credit stays auditable. That
+    // makes it this reader's job to exclude it: without the join a task a Lead
+    // deleted as a mistake keeps propping up its author's Output score forever,
+    // and no amount of correcting the work undoes it.
     prisma.employeePointLedger.groupBy({
       by: ["employeeId"],
-      where: { creditedAt: { gte: periodStart, lt: periodEnd } },
+      where: {
+        creditedAt: { gte: periodStart, lt: periodEnd },
+        workItem: { deletedAt: null },
+      },
       _sum: { points: true },
     }),
     prisma.workItem.findMany({

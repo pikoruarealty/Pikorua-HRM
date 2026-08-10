@@ -5,6 +5,7 @@ import { isFinanceRole } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { Prisma, WorkItemStatus } from "@prisma/client";
 import { notifyReviewAccepted, notifyReviewRejected } from "@/lib/work/notify";
+import { maxAwardablePoints } from "@/lib/work/review";
 import { audit, clientIp } from "@/lib/audit";
 
 // POST /api/v1/work-items/:id/review — the Lead side of tiered point crediting
@@ -78,6 +79,17 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   const nominal = workItem.taskPoints ?? 0;
   const awarded = points ?? nominal;
 
+  // Rewarding outsized effort is allowed; minting points is not. Without this
+  // ceiling one accepted review could set the department's Output benchmark
+  // single-handedly and hand its author Employee of the Month.
+  const ceiling = maxAwardablePoints(nominal);
+  if (points !== undefined && points > ceiling) {
+    return failFor(
+      ErrorCode.VALIDATION,
+      `A ${nominal}-point task can be credited at most ${ceiling} points. Re-size the task if it was worth more.`,
+    );
+  }
+
   // A reason is mandatory whenever the outcome is worse for the assignee than
   // simply "accepted as submitted" — sending it back, or paying out less.
   if (action === "reject" && !note) {
@@ -85,6 +97,11 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   }
   if (action === "accept" && awarded < nominal && !note) {
     return failFor(ErrorCode.VALIDATION, "note is required when crediting fewer points than the task is worth.");
+  }
+  // Paying *above* nominal is a judgement call that should leave a trace too,
+  // so the next person to read the ledger knows why the numbers disagree.
+  if (action === "accept" && awarded > nominal && !note) {
+    return failFor(ErrorCode.VALIDATION, "note is required when crediting more points than the task is worth.");
   }
 
   const now = new Date();

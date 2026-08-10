@@ -35,6 +35,26 @@ export function requiresReview(taskPoints: number | null | undefined): boolean {
 }
 
 /**
+ * A reviewer may award more than a task's nominal size — exceptional work is
+ * meant to be rewardable — but not without limit. Before 2026-08-10 both the
+ * review route and the Lead's PATCH-complete path accepted any positive
+ * integer, so a single entry of 99999 could dominate the Output component of
+ * every composite score in a department and decide Employee of the Month.
+ *
+ * The ceiling is generous (double the nominal size) with an absolute floor, so
+ * a 1-point chore can still be bumped to 10 for a genuinely outsized effort
+ * while an 8-point task tops out at 16. Anything beyond that is a sign the task
+ * was mis-sized, which is a conversation, not a review action.
+ */
+export const MAX_AWARD_MULTIPLIER = 2;
+export const MIN_AWARD_CEILING = 10;
+
+export function maxAwardablePoints(nominalPoints: number | null | undefined): number {
+  const nominal = nominalPoints ?? 0;
+  return Math.max(nominal * MAX_AWARD_MULTIPLIER, MIN_AWARD_CEILING);
+}
+
+/**
  * The same question for a whole WorkItem rather than a bare number.
  *
  * A **self-logged** task always needs review, whatever it is worth: the tiered

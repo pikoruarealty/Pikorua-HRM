@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
-import { isFinanceRole, isLeadRole } from "@/lib/rbac";
+import { isAdmin, isFinanceRole, isLeadRole } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { redactRequestFinancials } from "@/lib/requests/redact";
 import { audit, clientIp } from "@/lib/audit";
@@ -141,9 +141,14 @@ export async function DELETE(req: Request, { params }: { params: { id: string } 
   if (!existing) return failFor(ErrorCode.NOT_FOUND);
 
   const isOwner = existing.employeeId === session.employeeId;
-  const isAdmin = isFinanceRole(session.role);
+  // Deleting an *approved* request is destroying a financial record — an
+  // approved reimbursement has already fed a payslip, and there is no soft
+  // delete to fall back on. That belongs to the same Admin-only narrow set as
+  // request.override and payslip unfinalize. This previously read
+  // `isFinanceRole`, which silently included HR.
+  const canDeleteAny = isAdmin(session.role);
 
-  if (isAdmin) {
+  if (canDeleteAny) {
     // Admin may delete a request in any status — permanent junk-data cleanup.
     await prisma.request.delete({ where: { id: existing.id } });
     await audit({
@@ -158,7 +163,15 @@ export async function DELETE(req: Request, { params }: { params: { id: string } 
     return ok({ deleted: true });
   }
 
-  if (!isOwner) return failFor(ErrorCode.NOT_FOUND);
+  // HR legitimately sees (and approves) every request, so hiding it behind a
+  // 404 would tell them a row they just actioned does not exist. Say plainly
+  // that deletion is the narrower Admin-only power. Everyone else still gets a
+  // 404, which leaks nothing about requests they cannot see.
+  if (!isOwner) {
+    return isFinanceRole(session.role)
+      ? failFor(ErrorCode.FORBIDDEN, "Deleting a request is an Admin-only action.")
+      : failFor(ErrorCode.NOT_FOUND);
+  }
   if (existing.status !== RequestStatus.pending) {
     return failFor(ErrorCode.VALIDATION, "Only pending requests can be deleted.");
   }

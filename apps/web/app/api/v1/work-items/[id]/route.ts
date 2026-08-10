@@ -5,7 +5,7 @@ import { isFinanceRole, rolesAtOrBelow } from "@/lib/rbac";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { Prisma, WorkItemMode, WorkItemStatus } from "@prisma/client";
 import { isClockedInNow } from "@/lib/attendance/status";
-import { requiresReviewForItem } from "@/lib/work/review";
+import { maxAwardablePoints, requiresReviewForItem } from "@/lib/work/review";
 import { notifyReviewSubmitted } from "@/lib/work/notify";
 
 // Track B. PATCH/DELETE /api/v1/work-items/:id — Milestone 1.2 (atomic) + 2.2 (metric).
@@ -90,6 +90,19 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   }
   if (taskPoints !== undefined && isMetric) {
     return failFor(ErrorCode.VALIDATION, "taskPoints only applies to atomic-mode WorkItems.");
+  }
+  // Completing an item here credits `taskPoints` straight to the ledger, so
+  // restating them in the same request is a second, quieter way to award points
+  // and needs the same ceiling the review route enforces. Re-sizing a task
+  // *without* completing it is ordinary management and stays unbounded.
+  if (taskPoints !== undefined && status === WorkItemStatus.completed) {
+    const ceiling = maxAwardablePoints(workItem.taskPoints);
+    if (taskPoints > ceiling) {
+      return failFor(
+        ErrorCode.VALIDATION,
+        `A ${workItem.taskPoints ?? 0}-point task can be credited at most ${ceiling} points. Re-size the task first if it was worth more.`,
+      );
+    }
   }
   if (parsed.data.repeatDaily !== undefined && isMetric) {
     return failFor(
