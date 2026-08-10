@@ -86,6 +86,44 @@ async function main() {
     });
   }
 
+  // --- Ad-hoc task type catalog (self-logged work) ---------------------------
+  // The fixed menu an employee picks from when logging their own task. Points
+  // are policy, set here (and later by an Admin) so nobody — not the employee,
+  // not the reviewing Lead — has to judge difficulty in the moment. Upserted by
+  // key so re-seeding never duplicates a type or silently resets Admin edits to
+  // labels; only points/sort order are kept in step with this file.
+  const adhocTypeSeeds = [
+    { key: "bug_fix", label: "Bug fix", points: 2, sortOrder: 10 },
+    { key: "small_feature", label: "Small feature / enhancement", points: 3, sortOrder: 20 },
+    { key: "large_feature", label: "Large feature", points: 8, sortOrder: 30 },
+    { key: "support", label: "Support / debugging for someone else", points: 2, sortOrder: 40 },
+    { key: "chore", label: "Chore (deploy, cleanup, config)", points: 1, sortOrder: 50 },
+    { key: "documentation", label: "Documentation", points: 1, sortOrder: 60 },
+    { key: "research", label: "Research / spike", points: 3, sortOrder: 70 },
+  ];
+  for (const t of adhocTypeSeeds) {
+    await prisma.adhocTaskType.upsert({
+      where: { key: t.key },
+      update: { label: t.label, points: t.points, sortOrder: t.sortOrder },
+      create: t,
+    });
+  }
+
+  // --- Performance config (grace period; keyed by effective_from) ------------
+  const existingPerfConfig = await prisma.performanceConfig.findFirst();
+  if (!existingPerfConfig) {
+    await prisma.performanceConfig.create({
+      data: {
+        // Deliberately OFF: HRM runs tracking-only until an Admin turns scoring
+        // on. The first weeks' data is knowingly incomplete (in-flight projects
+        // predate HRM), and scoring people on it would be wrong.
+        scoringEnabled: false,
+        selfLoggedCapPercent: 30,
+        effectiveFrom: new Date("2026-01-01"),
+      },
+    });
+  }
+
   // --- Departments + label config -------------------------------------------
   const departmentSeeds = [
     {

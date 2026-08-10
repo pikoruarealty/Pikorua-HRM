@@ -33,3 +33,20 @@ export function requiresReview(taskPoints: number | null | undefined): boolean {
   if (taskPoints == null) return false;
   return taskPoints > reviewThreshold();
 }
+
+/**
+ * The same question for a whole WorkItem rather than a bare number.
+ *
+ * A **self-logged** task always needs review, whatever it is worth: the tiered
+ * threshold exists to spare a Lead from rubber-stamping small *assigned* work,
+ * where someone already decided the task was real. Nobody made that decision
+ * for a task an employee invented, so the Lead's yes/no is the only check there
+ * is — and skipping it for a 1-point item would leave a free points tap open.
+ */
+export function requiresReviewForItem(item: {
+  taskPoints: number | null;
+  selfLogged?: boolean | null;
+}): boolean {
+  if (item.selfLogged) return true;
+  return requiresReview(item.taskPoints);
+}

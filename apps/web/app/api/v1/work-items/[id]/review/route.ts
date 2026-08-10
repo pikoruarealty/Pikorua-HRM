@@ -63,6 +63,18 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     );
   }
   const { action, points, note } = parsed.data;
+  // Self-logged work (2026-08-10) is deliberately not negotiable at review: the
+  // employee picked a type from the Admin-set catalog and the type's points are
+  // the whole answer. The Lead's question here is "did this happen, yes or no"
+  // — a question a non-technical Lead can answer. Letting them re-price it
+  // would smuggle difficulty-judgement back in through the review screen, which
+  // is exactly what the catalog exists to avoid. Decline it instead.
+  if (workItem.selfLogged && points !== undefined) {
+    return failFor(
+      ErrorCode.VALIDATION,
+      "A self-logged task is worth its type's points — accept it or send it back, but don't re-price it.",
+    );
+  }
   const nominal = workItem.taskPoints ?? 0;
   const awarded = points ?? nominal;
 

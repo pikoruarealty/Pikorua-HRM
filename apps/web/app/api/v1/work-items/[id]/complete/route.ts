@@ -3,7 +3,7 @@ import { getSession } from "@/lib/auth";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { Prisma, WorkItemMode, WorkItemStatus } from "@prisma/client";
 import { isClockedInNow } from "@/lib/attendance/status";
-import { requiresReview } from "@/lib/work/review";
+import { requiresReviewForItem } from "@/lib/work/review";
 import { notifyReviewSubmitted } from "@/lib/work/notify";
 
 // Track B. POST /api/v1/work-items/:id/complete — Milestone 2.3.
@@ -45,9 +45,10 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
     return fail(ErrorCode.VALIDATION, "You must be clocked in to complete this task.", 422);
   }
 
-  // Above the threshold: hand off to the Lead instead of crediting. No ledger
+  // Above the threshold — or self-logged at any size: hand off to the Lead
+  // instead of crediting. No ledger
   // row is written, so nothing here can double-credit — acceptance does that.
-  if (requiresReview(workItem.taskPoints)) {
+  if (requiresReviewForItem(workItem)) {
     const submitted = await prisma.workItem.update({
       where: { id: workItem.id },
       // Clear any earlier review verdict so a resubmitted task doesn't show the

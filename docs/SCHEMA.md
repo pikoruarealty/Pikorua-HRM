@@ -391,8 +391,13 @@ Versioned by `effective_from`, same pattern as `payroll_config` / `leave_config`
 | auto_assign_daily_calls | boolean | When true the rollover auto-creates each rep's calls task, so no rep picks a task at clock-in. |
 | effective_from | date | |
 
-### `performance_config` and `adhoc_task_types`
-Created in the same migration but **not yet wired** (2026-08-10): `performance_config` carries the grace-period switch (`scoring_enabled`, default **false** — tracking runs, no composite score is published until an Admin flips it) and `self_logged_cap_percent` (default 30); `adhoc_task_types` is the fixed Admin-defined point catalog for self-logged tech tasks (the employee picks a type, never a number; the Lead only confirms "did this happen").
+### `adhoc_task_types` — the self-logged point catalog
+**Wired 2026-08-10 (Phase 25).** The fixed, Admin-defined price list for work an employee logs themselves: `key` (stable, unique — `bug_fix`, `chore`, …), `label`, `points`, `active`. The employee picks a *type*, never a number, and the Lead's only judgement at review is "did this happen, yes or no" — a question a non-technical Lead can answer. Read via `GET /adhoc-task-types` (any authenticated user, active-only; `?includeInactive=1` for Admin/HR). Seeded with 7 tech types (`bug_fix` 2, `small_feature` 3, `large_feature` 8, `support` 2, `chore` 1, `documentation` 1, `research` 3).
+
+`work_items.self_logged` / `adhoc_type_id` (see §Work Items) are set by `POST /work-items/self-log` only. A self-logged item **always** routes through review regardless of the point threshold — the tiered threshold exists to spare a Lead from rubber-stamping small *assigned* work, but here the review is the only check that the work happened at all.
+
+### `performance_config`
+`scoring_enabled` (default **false**) is the grace-period switch — tracking runs, no composite score is published until an Admin flips it; **still not wired** into `lib/recognition/monthly-score.ts` as of 2026-08-10. `self_logged_cap_percent` (default 30) is **partially wired**: `cappedSelfLoggedPoints()` and `monthlyPointSplit()` in `lib/work/adhoc.ts` implement and unit-test the cap, but the scoring path does not call them yet (Pillar 6 rewire). The cap is a share of the employee's *total* credited points for the month, applied at **scoring** time and never at approval — refusing work that genuinely happened would be a lie about the work, and the Lead would have no way to act on it.
 
 ---
 

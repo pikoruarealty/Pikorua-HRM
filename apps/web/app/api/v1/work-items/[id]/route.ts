@@ -5,7 +5,7 @@ import { isFinanceRole, rolesAtOrBelow } from "@/lib/rbac";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { Prisma, WorkItemMode, WorkItemStatus } from "@prisma/client";
 import { isClockedInNow } from "@/lib/attendance/status";
-import { requiresReview } from "@/lib/work/review";
+import { requiresReviewForItem } from "@/lib/work/review";
 import { notifyReviewSubmitted } from "@/lib/work/notify";
 
 // Track B. PATCH/DELETE /api/v1/work-items/:id — Milestone 1.2 (atomic) + 2.2 (metric).
@@ -184,7 +184,10 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   // straight away: their edit *is* the review.
   const effectivePoints = taskPoints ?? workItem.taskPoints;
   const submittingForReview =
-    nowCompleted && !wasCompleted && !canEditAll && requiresReview(effectivePoints);
+    nowCompleted &&
+    !wasCompleted &&
+    !canEditAll &&
+    requiresReviewForItem({ taskPoints: effectivePoints, selfLogged: workItem.selfLogged });
 
   if (submittingForReview) {
     const submitted = await prisma.workItem.update({

@@ -9,6 +9,7 @@ import { apiFetch } from "@/components/_lib/api";
 import { useAttendanceStatus } from "@/components/_lib/use-attendance-status";
 import { DueDateBadge } from "@/components/work/due-date";
 import { WorkItemStatusBadge } from "@/components/work/status-badge";
+import { SelfLogForm } from "@/components/work/self-log-form";
 
 type WorkItem = {
   id: string;
@@ -177,7 +178,8 @@ export function MyTasksScreen() {
         <h1 className="text-2xl font-bold tracking-tight">My Tasks</h1>
         <p className="text-sm text-muted-foreground">
           Your assigned work items. Completing an atomic task credits its points immediately — larger
-          tasks go to your lead for a quick check first, then the points land.
+          tasks, and anything you logged yourself, go to your lead for a quick check first, then the
+          points land.
         </p>
       </div>
       {error && <p className="text-sm text-destructive">{error}</p>}
@@ -190,6 +192,10 @@ export function MyTasksScreen() {
           to update your tasks.
         </p>
       )}
+
+      {/* Placed above the list on purpose: the employee this is for is the one
+          looking at an empty Active card and wondering what to do. */}
+      <SelfLogForm disabled={!canModify || attendanceLoading} onLogged={refresh} />
 
       <Card>
         <CardHeader>
