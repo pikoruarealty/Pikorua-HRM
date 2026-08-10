@@ -3,6 +3,7 @@ import { runBirthdayCheck } from "@/lib/cron/birthday";
 import { runMeetingReminders } from "@/lib/cron/meeting-reminders";
 import { runMetricDailyRollover } from "@/lib/cron/metric-daily-rollover";
 import { runAttendanceEodCleanup } from "@/lib/cron/attendance-eod-cleanup";
+import { runCrmSync } from "@/lib/cron/crm-sync";
 
 // In-process scheduler (PRD §6 — "a lightweight scheduled-jobs mechanism").
 // Registered once at server boot from instrumentation.ts. Assumes a single
@@ -58,6 +59,19 @@ export function startScheduler(): void {
   cron.schedule("10 0 * * *", () => {
     safeRun("metric-daily-rollover", () => runMetricDailyRollover());
   });
+
+  // CRM sales-activity sync — hourly at :15, deliberately after the 00:10
+  // rollover so the day's calls WorkItem exists before the first sync of the
+  // day tries to write into it. Runs at boot too: a redeploy mid-morning
+  // should not leave the dashboard showing yesterday until the next hour.
+  //
+  // NOTE: the CRM is IP-allowlisted to the production VM, so on a dev machine
+  // this job logs a 401 every hour and does nothing. That is expected, not a
+  // misconfigured key — see lib/sales/crm-client.ts.
+  cron.schedule("15 * * * *", () => {
+    safeRun("crm-sync", () => runCrmSync());
+  });
+  safeRun("crm-sync-boot", () => runCrmSync());
 
   // Recognition weekly/monthly snapshots are no longer auto-scheduled
   // (2026-08-07) — "Employee of the Week/Month" is now an Admin-only manual

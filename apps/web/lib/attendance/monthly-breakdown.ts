@@ -241,6 +241,41 @@ function expandLeaveIntoMonth(
   }
 }
 
+/**
+ * Expected working days across the WHOLE month, not just the elapsed part —
+ * every calendar day that is neither the employee's weekly off (honouring their
+ * WeeklyOffMove for that week) nor a public holiday.
+ *
+ * Added 2026-08-10 for sales target pacing (lib/sales/pacing.ts), which needs a
+ * full-month denominator to pro-rate a monthly target against. classifyMonth
+ * deliberately stops at today, so it cannot supply this. Pure and exported so
+ * the pacing maths is unit-testable.
+ *
+ * Approved leave is NOT subtracted here: future leave is knowable but future
+ * absence is not, and mixing the two would make the denominator drift as the
+ * month progresses. Leave is netted off the elapsed side instead
+ * (expectedActivityDaysElapsed).
+ */
+export function expectedWorkingDaysInMonth(
+  month: number,
+  year: number,
+  ctx: {
+    holidayDates: Set<string>;
+    defaultOffDay: number;
+    movedOffDateByWeek: Map<string, string>;
+  },
+): number {
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  let count = 0;
+  for (let day = 1; day <= lastDay; day++) {
+    const date = new Date(Date.UTC(year, month - 1, day));
+    if (isOffDay(date, ctx.defaultOffDay, ctx.movedOffDateByWeek)) continue;
+    if (ctx.holidayDates.has(dateKey(date))) continue;
+    count += 1;
+  }
+  return count;
+}
+
 /** Effective default off-day + this employee's active WeeklyOffMoves overlapping
  *  [rangeStart, rangeEnd) — the context isOffDay() and classification need. */
 async function getOffDayContext(

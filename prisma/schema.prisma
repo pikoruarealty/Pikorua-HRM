@@ -54,6 +54,41 @@ enum WorkItemFrequency {
   monthly
 }
 
+// Which real-world sales number a metric WorkItem tracks (Pillar 4, 2026-08-10).
+// This is the binding key between a WorkItem and the CRM feed: crm-sync writes
+// each synced count into the WorkItem carrying the matching salesMetric, rather
+// than guessing from the title string.
+//
+// It is deliberately a three-way split, not the activity/outcome two-way
+// `metricTier` the plan sketched: the owner weights site visits and bookings
+// differently from each other (17 vs 23 — many prospects take a visit, very few
+// actually book), so a single "outcome" bucket could not express the scoring.
+// The activity/outcome tier is derivable from this (calls = activity, the rest
+// = outcome) — see metricTierOf() in lib/sales/metrics.ts.
+enum SalesMetric {
+  calls
+  site_visits
+  bookings
+}
+
+// How a CRM row was attributed to an employee. `unmatched` rows are retained
+// (never silently dropped) so an admin can see who the feed mentions that HRM
+// does not recognise — a typo'd name must never be guessed onto the wrong rep.
+enum SalesMatchMethod {
+  email
+  name
+  unmatched
+}
+
+// Offline-call claim lifecycle (2026-08-10). Reps who work a raw Excel list
+// make calls the CRM never sees; they claim those, and the Lead approves.
+// A claim is worth nothing until approved.
+enum OfflineClaimStatus {
+  pending
+  approved
+  rejected
+}
+
 enum WorkUnitStatus {
   active
   completed
@@ -262,6 +297,12 @@ model Employee {
   employmentType      EmploymentType @default(fulltime) @map("employment_type")
   requiredDaysPerWeek Int?           @map("required_days_per_week") // 1-6 for parttime/intern; null for standard fulltime
   defaultWeeklyOffDay Int?           @map("default_weekly_off_day") // 0=Sun..6=Sat; overrides Team.defaultWeeklyOffDay if set
+  // Per-employee sales targets (2026-08-10). Null = fall back to the org-wide
+  // SalesTargetConfig. Lead-set, so a senior rep can carry 150 calls/day while
+  // a new joiner carries 60 without changing everyone's default.
+  dailyCallTarget        Int? @map("daily_call_target")
+  monthlySiteVisitTarget Int? @map("monthly_site_visit_target")
+  monthlyBookingTarget   Int? @map("monthly_booking_target")
   createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
@@ -283,6 +324,9 @@ model Employee {
   eventsAbout        Event[]              @relation("EventSubject")
   eventInvitees      EventInvitee[]
   weeklyOffMoves     WeeklyOffMove[]
+  salesActivitySyncs SalesActivitySync[]
+  offlineClaims           OfflineActivityClaim[] @relation("OfflineClaimSubject")
+  offlineClaimsReviewed   OfflineActivityClaim[] @relation("OfflineClaimReviewer")
 
   @@map("employees")
 }
@@ -355,6 +399,17 @@ model WorkItem {
   periodMonth Int?     @map("period_month")    // required if metric
   periodYear  Int?     @map("period_year")     // required if metric
   periodDay   Int?     @map("period_day")      // required if metric && frequency=daily, else null
+  // Which sales number this metric item tracks, when it is CRM-fed (Pillar 4).
+  // Null for every non-sales metric item (a BDE target, say) — those stay
+  // manually driven exactly as before.
+  salesMetric SalesMetric? @map("sales_metric")
+  // "Repeat this daily until stopped" (2026-08-10). Applies to BOTH atomic and
+  // metric items: the daily rollover cron clones the latest non-deleted row
+  // forward each day. Clearing the flag or soft-deleting the newest row stops
+  // the chain — no separate template concept. Metric items with
+  // frequency=daily are rolled over regardless, for backwards compatibility
+  // with the pre-existing behaviour.
+  repeatDaily Boolean  @default(false) @map("repeat_daily")
   status      WorkItemStatus @default(pending)
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -370,6 +425,15 @@ model WorkItem {
   reviewer    Employee? @relation("WorkItemReviewer", fields: [reviewedBy], references: [id])
   reviewedAt  DateTime? @map("reviewed_at") @db.Timestamptz(6)
   reviewNote  String?   @map("review_note")
+  // Self-logged ad-hoc work (2026-08-10). An employee can log a bug fix or a
+  // small feature that nobody assigned them. Points are NOT chosen by the
+  // employee and NOT judged by anyone: they come fixed from the picked
+  // AdhocTaskType. The Lead's only job at review is "did this happen, yes/no"
+  // — a question a non-technical Lead can actually answer, which is why
+  // difficulty-estimation (by AI or by human) was rejected as the mechanism.
+  selfLogged  Boolean   @default(false) @map("self_logged")
+  adhocTypeId String?   @map("adhoc_type_id") @db.Uuid
+  adhocType   AdhocTaskType? @relation(fields: [adhocTypeId], references: [id])
   // Soft delete — the points ledger keeps referencing this row for audit even
   // after deletion; deleted rows are just filtered out of normal operation.
   deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(6)
@@ -414,6 +478,125 @@ model EmployeePointLedger {
   @@unique([workItemId])
   @@index([employeeId])
   @@map("employee_point_ledger")
+}
+
+// Fixed catalogue of ad-hoc task types an employee may self-log (2026-08-10).
+// The whole point is that `points` lives HERE, set once by an Admin, not on the
+// individual task: the employee picks a type, never a number, so there is no
+// difficulty estimate for anyone to inflate or to have to adjudicate.
+model AdhocTaskType {
+  id        String   @id @default(uuid()) @db.Uuid
+  key       String   @unique              // "bug_fix", "small_feature", "chore"
+  label     String                        // "Bug fix"
+  points    Int
+  active    Boolean  @default(true)
+  sortOrder Int      @default(0) @map("sort_order")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  workItems WorkItem[]
+
+  @@map("adhoc_task_types")
+}
+
+// ===========================================================================
+// 2b. SALES ACTIVITY  (CRM sync + offline claims — Pillars 4/5, 2026-08-10)
+// ===========================================================================
+
+// Raw landing table for the in-house CRM's per-rep-per-day activity feed
+// (GET https://crm.pikoruarealty.com/api/hrm/activity). Kept as its own table
+// rather than written straight into WorkItem.currentValue so that (a) an
+// unmatched rep's numbers are still recorded and visible instead of vanishing,
+// and (b) a re-sync is idempotent and auditable against what the CRM actually
+// said.
+//
+// A row with all-zero counts is meaningful: the CRM emits explicit zero rows
+// for a rep who did nothing that day. Absent row = no data; zero row =
+// confirmed zero. Do not conflate them.
+model SalesActivitySync {
+  id                String    @id @default(uuid()) @db.Uuid
+  // Null when the feed named someone HRM cannot resolve. The row is kept and
+  // flagged (matchMethod = unmatched) rather than guessed onto a rep.
+  employeeId        String?   @map("employee_id") @db.Uuid
+  employee          Employee? @relation(fields: [employeeId], references: [id])
+  crmEmail          String    @map("crm_email")
+  crmName           String    @map("crm_name")
+  date              DateTime  @db.Date
+  callsMade         Int       @default(0) @map("calls_made")
+  siteVisits        Int       @default(0) @map("site_visits")
+  bookingsConfirmed Int       @default(0) @map("bookings_confirmed")
+  matchMethod       SalesMatchMethod @map("match_method")
+  syncedAt          DateTime  @default(now()) @map("synced_at") @db.Timestamptz(6)
+
+  // The CRM's own grain: one row per rep per day. Upsert key for re-syncs.
+  @@unique([crmEmail, date])
+  @@index([employeeId, date])
+  @@index([matchMethod])
+  @@map("sales_activity_sync")
+}
+
+// Calls a rep made from a raw Excel list that the CRM never saw (2026-08-10).
+// Rep proposes, Lead approves — worth zero until approved, so self-reporting
+// alone can never inflate a score. Approved claims are summed alongside the CRM
+// count into the day's calls WorkItem, but stay individually visible in the
+// breakdown rather than disappearing into one blended number.
+model OfflineActivityClaim {
+  id         String   @id @default(uuid()) @db.Uuid
+  employeeId String   @map("employee_id") @db.Uuid
+  employee   Employee @relation("OfflineClaimSubject", fields: [employeeId], references: [id])
+  date       DateTime @db.Date
+  calls      Int
+  // The rep's justification. Required — an unexplained claim is not reviewable.
+  note       String
+  status     OfflineClaimStatus @default(pending)
+  reviewedBy String?  @map("reviewed_by") @db.Uuid
+  reviewer   Employee? @relation("OfflineClaimReviewer", fields: [reviewedBy], references: [id])
+  reviewedAt DateTime? @map("reviewed_at") @db.Timestamptz(6)
+  reviewNote String?  @map("review_note")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  // Deliberately NOT unique per (employee, date): a rejected claim must be
+  // re-submittable, and a rep may log two Excel batches in one day. Approved
+  // claims are summed.
+  @@index([employeeId, date])
+  @@index([status])
+  @@map("offline_activity_claims")
+}
+
+// Org-wide default sales targets. Versioned like PayrollConfig/LeaveConfig —
+// each edit inserts a new row, so a past period's attainment reproduces the
+// target that was actually in force then. Per-employee overrides live on
+// Employee.{dailyCallTarget,monthlySiteVisitTarget,monthlyBookingTarget}.
+model SalesTargetConfig {
+  id                     String   @id @default(uuid()) @db.Uuid
+  dailyCallTarget        Int      @default(100) @map("daily_call_target")
+  monthlySiteVisitTarget Int      @default(20) @map("monthly_site_visit_target")
+  monthlyBookingTarget   Int      @default(2) @map("monthly_booking_target")
+  // When true the daily rollover auto-creates each active sales employee's
+  // "calls" task, so no Lead has to seed the chain and no rep has to pick a
+  // task at clock-in — it is the same task every day.
+  autoAssignDailyCalls   Boolean  @default(true) @map("auto_assign_daily_calls")
+  effectiveFrom          DateTime @map("effective_from") @db.Date
+
+  @@map("sales_target_config")
+}
+
+// Knobs for the composite performance score (Pillar 6). Versioned like the
+// other config tables.
+model PerformanceConfig {
+  id                       String   @id @default(uuid()) @db.Uuid
+  // Grace period (2026-08-10): HRM runs tracking-only until an Admin flips
+  // this on. Before that, tasks and attendance are recorded but no composite
+  // score is published, because the first weeks' data is knowingly incomplete
+  // (in-flight projects predate HRM) and scoring people on it would be wrong.
+  scoringEnabled           Boolean  @default(false) @map("scoring_enabled")
+  // Ceiling on how much of an employee's monthly points may come from
+  // self-logged ad-hoc work, as a percentage. Stops ad-hoc logging from
+  // becoming the cheapest route to a high output score.
+  selfLoggedCapPercent     Int      @default(30) @map("self_logged_cap_percent")
+  effectiveFrom            DateTime @map("effective_from") @db.Date
+
+  @@map("performance_config")
 }
 
 // ===========================================================================

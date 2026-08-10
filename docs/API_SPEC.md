@@ -157,6 +157,17 @@
 | DELETE | `/holidays/:id` | Admin/HR | Audited (`holiday.delete`). |
 | GET | `/calendar` | Any (server-scoped) | `?month=&year=` (default current) → `{ month, year, items }` — everything with a date in one feed for the `/calendar` page: **holidays** + **birthdays/anniversaries** (everyone, celebratory), **meetings** (Admin/HR all; others only created/invited, same scoping as `/events/meetings`), **leave** (approved + pending `leave_*` requests: Admin/HR all, Lead own team, Employee self; multi-day leave expanded to one item per day). |
 
+## 8c. Sales Activity (added 2026-08-10, overhaul Pillars 4/5)
+
+| Method | Path | Roles | Notes |
+|---|---|---|---|
+| GET | `/sales/offline-claims` | Any (server-scoped) | Offline-call claims: Admin/HR all, Lead their led teams + self, everyone else self only. `?status=pending\|approved\|rejected`. |
+| POST | `/sales/offline-claims` | Any employee (self only) | `{ date, calls, note }`. Files a claim **for yourself** — the employee is taken from the session, never the body. Rejects future dates, dates more than 14 days back, and any claim that would push the day's pending+approved total past 500. `note` is required. Audited (`sales.offline_claim_create`). |
+| POST | `/sales/offline-claims/:id/review` | Owning Lead, or Admin/HR — **never the claimant** | `{ action: "approve" \| "reject", note? }`. `note` required to reject. Self-approval is refused even for an Admin reviewing their own claim; second review 409s. On success recomputes the day's call total (CRM + approved claims — recomputed, never incremented) into the rep's `WorkItem`. Audited (`sales.offline_claim_approve` / `sales.offline_claim_reject`). |
+| GET | `/sales/team-progress` | Any (server-scoped, same shape as `/attendance/task-progress`) | `?date=YYYY-MM-DD` (default today) → per-rep today's calls (split `crm` / `offline` / `total`) vs. daily target, plus this month's site visits and bookings vs. a **pro-rated** monthly target, with team totals and an `unmatchedCrmRows` count. Pacing cross-references weekly offs (including `WeeklyOffMove`), public holidays and approved leave via `lib/attendance/monthly-breakdown.ts`, so nobody reads as behind on their day off or while on approved leave. Admin/HR see everyone; a Lead sees their led teams + self; a rep sees only their own row. |
+
+> **Sales activity is not a parallel data path.** The CRM feed lands in `sales_activity_sync` and is projected into ordinary `WorkItem.currentValue` by `lib/sales/write-through.ts` (the only writer). Every other endpoint — progress, scoring, the team dashboard — reads WorkItems and cannot tell a CRM number from a hand-entered one.
+
 ## 9. Assets (stub) — **Track B (low priority)**
 
 | Method | Path | Roles | Notes |
@@ -179,6 +190,8 @@ These run via a lightweight cron mechanism (see Implementation Plan §6 — no L
 - **On clock-in/out**: compute `total_hours`/`is_half_day` for the day's `attendance_records` row once both times exist (does not require approval first, but payroll only counts `approved` rows).
 - **Nightly**: check `date_of_birth`/`date_of_joining` against today's date → populate `events/today` cache + push birthday/anniversary notifications.
 - **Recurring, per-meeting**: at `scheduled_at − reminder_lead_minutes`, push a reminder notification to all invitees (individual + expanded team invitees) of each upcoming meeting.
+- **Hourly (added 2026-08-10, Pillar 4)**: `lib/cron/crm-sync.ts` at `15 * * * *` (plus a boot-time run) pulls `GET https://crm.pikoruarealty.com/api/hrm/activity?from=&to=` with a Bearer `CRM_API_KEY`, upserts a 2-day lookback window into `sales_activity_sync`, writes through into each matched rep's `WorkItem`s, then re-provisions any missing sales targets. Unmatched rows are kept, flagged, and WARN-logged — never guessed onto a rep. ⚠️ The CRM is IP-allowlisted to the production VM, so a 401 from a dev machine is the allowlist, not a bad key.
+- **Daily 00:10 UTC**: `lib/cron/metric-daily-rollover.ts` clones daily metric items forward and (since 2026-08-10) `repeatDaily` atomic items too, then provisions each active sales rep's daily/monthly targets.
 - **Weekly**: compute `recognition_snapshots.score` from point ledger (Tech) / metric task performance (Sales/BD, scoped per department per the monthly target reset), and flag `is_employee_of_month` for each department's monthly top performer.
 - **Monthly (changed 2026-08-08, Pillar 6)**: `score` is now a 0–100 weighted composite (output, quality, attendance, timeliness, commitments kept; see `lib/performance/composite.ts`), with the breakdown stored in `components`. Output is still points (Tech, normalised against the department's top scorer that period) or metric attainment (Sales/BD); the other four components are new. A `salesOutcome` slot exists at weight 0, reserved for CRM deal-outcome data once Pillars 4/5 land.
 - **Monthly** (triggered manually by HR via `/payslips/generate`, not fully automatic in v1 per PRD): aggregate late/leave/half-day counts (from approved attendance only) for deduction calculation, and look up `is_employee_of_month` for reference display.

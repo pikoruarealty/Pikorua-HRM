@@ -115,6 +115,10 @@ Config table implementing the generic label mapping described in PRD §4.1.
 | reviewed_at | timestamptz? | When that verdict was given. Cleared on resubmission. |
 | review_note | text? | The Lead's reason. Required to send a task back, or to credit fewer points than `task_points`. Cleared on resubmission. |
 | deleted_at | timestamptz? | Soft delete (2026-07-18) — the points ledger keeps its row for audit even after the WorkItem is deleted; deleted rows are filtered out of every normal read. |
+| sales_metric | enum? | Pillar 4 (2026-08-10) — `calls` / `site_visits` / `bookings`. Set only on CRM-fed sales metric items; marks this row as machine-written (see `lib/sales/write-through.ts`, the only writer). The plan's two-way `metric_tier` was replaced by this three-way enum because site visits and bookings carry different weights; the activity/outcome tier is still derivable. |
+| repeat_daily | boolean | Pillar 4 (2026-08-10), default false — regenerate this task each morning until turned off. Applies to **both** atomic and metric items (owner request: "when any task is added give option to make it a daily task until undone"). |
+| self_logged | boolean | Reserved (2026-08-10), default false — a task the employee logged for themselves rather than being assigned. Always routes through Lead confirmation regardless of the point threshold. |
+| adhoc_type_id | uuid? FK → adhoc_task_types.id | Reserved (2026-08-10) — which catalog entry a self-logged task claims. The employee picks a *type*, never a number. |
 
 > **Tiered point crediting (2026-08-08):** atomic tasks worth **more than** `WORK_ITEM_REVIEW_THRESHOLD` (default 3) don't complete when the assignee marks them done — they move to `in_review` and wait for the WorkUnit's project lead (or Admin/HR) to accept via `POST /work-items/:id/review`. **`employee_point_ledger` is written only on acceptance**, so a task in review has earned nothing yet; the ledger's `unique(work_item_id)` constraint still guarantees at most one credit across all three crediting paths (`/complete`, `PATCH`, `/review`). Tasks at or below the threshold are unchanged — instant credit. See `lib/work/review.ts`.
 >
@@ -334,6 +338,61 @@ Covers both system-generated (birthday/anniversary) and manually-created (meetin
 | name | text | |
 | assigned_to | uuid FK → employees.id ? | |
 | status | text? | placeholder |
+
+---
+
+## 6b. Sales Activity (added 2026-08-10, overhaul Pillar 4)
+
+### `sales_activity_sync`
+One row per rep per day, mirroring the CRM's own grain. Raw landing zone — nothing reads it for scoring; `lib/sales/write-through.ts` projects it into `work_items` and everything downstream reads those.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | uuid PK | |
+| employee_id | uuid? FK → employees.id | **Null when the feed named someone HRM cannot resolve.** The row is kept and flagged, never guessed onto a rep. |
+| crm_email | text | As the CRM reported it. |
+| crm_name | text | As the CRM reported it. |
+| date | date | |
+| calls_made | integer | |
+| site_visits | integer | |
+| bookings_confirmed | integer | |
+| match_method | enum | `email` / `name` / `unmatched` — how (or whether) this row was attributed. |
+| synced_at | timestamptz | |
+
+Unique on `(crm_email, date)` — the upsert key, so a re-sync corrects rather than duplicates. Every sync re-resolves the match, so fixing a rep's CRM email retroactively attaches their history.
+
+### `offline_activity_claims`
+Calls made from an Excel list that the CRM never sees. **The rep proposes, the Lead approves** — a claim is worth exactly zero until `status = approved`.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | uuid PK | |
+| employee_id | uuid FK → employees.id | The claimant. |
+| date | date | Cannot be in the future, or more than 14 days back. |
+| calls | integer | ≤ 500/day in aggregate across all of a day's claims. |
+| note | text | Required — an unexplained claim is not reviewable, and this is what the Lead adjudicates on. |
+| status | enum | `pending` / `approved` / `rejected`. |
+| reviewed_by | uuid? FK → employees.id | **Never the claimant** — self-approval is refused even for Admin. |
+| reviewed_at | timestamptz? | |
+| review_note | text? | Required to decline. |
+| created_at | timestamptz | |
+
+Deliberately **not** unique per `(employee, date)`: a rejected claim must be re-submittable, and a rep may log two batches in one day. Approved claims are summed.
+
+### `sales_target_config`
+Versioned by `effective_from`, same pattern as `payroll_config` / `leave_config`. A per-employee override on `employees` (`daily_call_target`, `monthly_site_visit_target`, `monthly_booking_target`) wins over it.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | uuid PK | |
+| daily_call_target | integer | Default 100 (owner request). |
+| monthly_site_visit_target | integer | Default 20. |
+| monthly_booking_target | integer | Default 2. |
+| auto_assign_daily_calls | boolean | When true the rollover auto-creates each rep's calls task, so no rep picks a task at clock-in. |
+| effective_from | date | |
+
+### `performance_config` and `adhoc_task_types`
+Created in the same migration but **not yet wired** (2026-08-10): `performance_config` carries the grace-period switch (`scoring_enabled`, default **false** — tracking runs, no composite score is published until an Admin flips it) and `self_logged_cap_percent` (default 30); `adhoc_task_types` is the fixed Admin-defined point catalog for self-logged tech tasks (the employee picks a type, never a number; the Lead only confirms "did this happen").
 
 ---
 

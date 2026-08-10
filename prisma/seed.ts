@@ -69,6 +69,23 @@ async function main() {
     });
   }
 
+  // --- Sales target config (Pillar 4; keyed by effective_from) ---------------
+  const existingSalesConfig = await prisma.salesTargetConfig.findFirst();
+  if (!existingSalesConfig) {
+    await prisma.salesTargetConfig.create({
+      data: {
+        // The owner's stated defaults. A per-employee override on `employees`
+        // wins over these; an Admin re-versions them by inserting a row with a
+        // later effective_from, same as payroll/leave config.
+        dailyCallTarget: 100,
+        monthlySiteVisitTarget: 20,
+        monthlyBookingTarget: 2,
+        autoAssignDailyCalls: true,
+        effectiveFrom: new Date("2026-01-01"),
+      },
+    });
+  }
+
   // --- Departments + label config -------------------------------------------
   const departmentSeeds = [
     {
