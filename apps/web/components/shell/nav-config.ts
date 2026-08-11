@@ -106,7 +106,15 @@ export const NAV_GROUPS: NavGroup[] = [
   },
   {
     label: "System",
-    items: [{ href: "/audit", label: "Audit Log", icon: ScrollText, show: (c) => c.isAdmin }],
+    items: [
+      {
+        href: "/settings/scoring",
+        label: "Scoring & Targets",
+        icon: Settings2,
+        show: (c) => c.isFinance,
+      },
+      { href: "/audit", label: "Audit Log", icon: ScrollText, show: (c) => c.isAdmin },
+    ],
   },
 ];
 

@@ -29,6 +29,12 @@ const PUBLIC_SELECT = {
   status: true,
   createdAt: true,
   updatedAt: true,
+  // Per-employee sales target overrides (2026-08-10) — not golden-rule data,
+  // just numbers a Lead sets for their own team, so they're safe on the
+  // public select. Edited via PATCH /employees/:id/sales-targets, not here.
+  dailyCallTarget: true,
+  monthlySiteVisitTarget: true,
+  monthlyBookingTarget: true,
 } satisfies Prisma.EmployeeSelect;
 
 // Salary is golden-rule data: only ever exposed to Admin/HR.

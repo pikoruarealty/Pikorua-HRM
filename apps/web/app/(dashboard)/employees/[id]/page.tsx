@@ -18,10 +18,13 @@ export default async function EmployeeDetailPage({
   // and (matching employees/:id/task-activity's own RBAC) the Lead who owns
   // this employee's team.
   let isOwningLead = false;
-  if (!canManage && !isSelf && isLeadRole(session!.role) && session!.employeeId) {
+  if (!canManage && isLeadRole(session!.role) && session!.employeeId) {
     isOwningLead = await leadsEmployee(session!.employeeId, params.id);
   }
   const canViewAttendance = canManage || isSelf || isOwningLead;
+  // Sales target overrides are not golden-rule data — the Lead who runs the
+  // team sets them, same reasoning as PATCH /employees/:id/sales-targets.
+  const canManageSalesTargets = canManage || isOwningLead;
 
   return (
     <EmployeeDetail
@@ -29,6 +32,7 @@ export default async function EmployeeDetailPage({
       canManage={canManage}
       isAdmin={isAdmin}
       canViewAttendance={canViewAttendance}
+      canManageSalesTargets={canManageSalesTargets}
       isSelf={isSelf}
     />
   );

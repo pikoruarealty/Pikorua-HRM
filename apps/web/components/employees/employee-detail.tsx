@@ -51,9 +51,12 @@ type Employee = {
   photoUrl: string | null;
   createdAt: string;
   baseSalary?: string;
+  dailyCallTarget?: number | null;
+  monthlySiteVisitTarget?: number | null;
+  monthlyBookingTarget?: number | null;
 };
 
-type Department = { id: string; name: string };
+type Department = { id: string; name: string; typeKey?: string };
 type Team = { id: string; name: string; departmentId: string; defaultWeeklyOffDay?: number };
 
 const ROLES = [
@@ -102,12 +105,14 @@ export function EmployeeDetail({
   canManage,
   isAdmin,
   canViewAttendance,
+  canManageSalesTargets,
   isSelf,
 }: {
   employeeId: string;
   canManage: boolean;
   isAdmin: boolean;
   canViewAttendance: boolean;
+  canManageSalesTargets: boolean;
   isSelf: boolean;
 }) {
   const [employee, setEmployee] = useState<Employee | null>(null);
@@ -132,6 +137,12 @@ export function EmployeeDetail({
   const [dateOfJoining, setDateOfJoining] = useState("");
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+
+  const [dailyCallTarget, setDailyCallTarget] = useState("");
+  const [monthlySiteVisitTarget, setMonthlySiteVisitTarget] = useState("");
+  const [monthlyBookingTarget, setMonthlyBookingTarget] = useState("");
+  const [savingTargets, setSavingTargets] = useState(false);
+  const [targetsError, setTargetsError] = useState<string | null>(null);
   const [hardDeleteError, setHardDeleteError] = useState<string | null>(null);
   const [hardDeleting, setHardDeleting] = useState(false);
 
@@ -173,6 +184,17 @@ export function EmployeeDetail({
       setPhone(emp.phone ?? "");
       setDateOfBirth(emp.dateOfBirth ? emp.dateOfBirth.slice(0, 10) : "");
       setDateOfJoining(emp.dateOfJoining.slice(0, 10));
+      setDailyCallTarget(emp.dailyCallTarget !== null && emp.dailyCallTarget !== undefined ? String(emp.dailyCallTarget) : "");
+      setMonthlySiteVisitTarget(
+        emp.monthlySiteVisitTarget !== null && emp.monthlySiteVisitTarget !== undefined
+          ? String(emp.monthlySiteVisitTarget)
+          : "",
+      );
+      setMonthlyBookingTarget(
+        emp.monthlyBookingTarget !== null && emp.monthlyBookingTarget !== undefined
+          ? String(emp.monthlyBookingTarget)
+          : "",
+      );
     } catch (e) {
       setLoadError({
         code: e instanceof ApiError ? e.code : "INTERNAL",
@@ -228,6 +250,30 @@ export function EmployeeDetail({
       setError(e instanceof Error ? e.message : "Failed to save changes.");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function onSaveSalesTargets(e: React.FormEvent) {
+    e.preventDefault();
+    setSavingTargets(true);
+    setTargetsError(null);
+    try {
+      await getJson(
+        await fetch(`/api/v1/employees/${employeeId}/sales-targets`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            daily_call_target: dailyCallTarget ? Number(dailyCallTarget) : null,
+            monthly_site_visit_target: monthlySiteVisitTarget ? Number(monthlySiteVisitTarget) : null,
+            monthly_booking_target: monthlyBookingTarget ? Number(monthlyBookingTarget) : null,
+          }),
+        }),
+      );
+      load();
+    } catch (e) {
+      setTargetsError(e instanceof Error ? e.message : "Failed to save sales targets.");
+    } finally {
+      setSavingTargets(false);
     }
   }
 
@@ -415,6 +461,79 @@ export function EmployeeDetail({
           )}
         </CardContent>
       </Card>
+
+      {employee && departments.find((d) => d.id === employee.departmentId)?.typeKey !== undefined &&
+        departments.find((d) => d.id === employee.departmentId)?.typeKey !== "tech" && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Sales targets (override)</CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3">
+              <p className="text-sm text-muted-foreground">
+                Wins over the org-wide default where set. Leave blank to fall back to the
+                org-wide sales target config.
+              </p>
+              <dl className="grid grid-cols-3 gap-x-8 gap-y-2 text-sm">
+                <div>
+                  <dt className="text-muted-foreground">Daily calls</dt>
+                  <dd className="font-medium">{employee.dailyCallTarget ?? "org default"}</dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">Monthly site visits</dt>
+                  <dd className="font-medium">{employee.monthlySiteVisitTarget ?? "org default"}</dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">Monthly bookings</dt>
+                  <dd className="font-medium">{employee.monthlyBookingTarget ?? "org default"}</dd>
+                </div>
+              </dl>
+              {canManageSalesTargets && (
+                <form onSubmit={onSaveSalesTargets} className="flex flex-wrap items-end gap-4 border-t pt-3">
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="override_calls">Daily calls</Label>
+                    <Input
+                      id="override_calls"
+                      type="number"
+                      min="1"
+                      placeholder="org default"
+                      value={dailyCallTarget}
+                      onChange={(e) => setDailyCallTarget(e.target.value)}
+                      className="w-32"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="override_visits">Monthly site visits</Label>
+                    <Input
+                      id="override_visits"
+                      type="number"
+                      min="0"
+                      placeholder="org default"
+                      value={monthlySiteVisitTarget}
+                      onChange={(e) => setMonthlySiteVisitTarget(e.target.value)}
+                      className="w-32"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="override_bookings">Monthly bookings</Label>
+                    <Input
+                      id="override_bookings"
+                      type="number"
+                      min="0"
+                      placeholder="org default"
+                      value={monthlyBookingTarget}
+                      onChange={(e) => setMonthlyBookingTarget(e.target.value)}
+                      className="w-32"
+                    />
+                  </div>
+                  {targetsError && <p className="w-full text-sm text-destructive">{targetsError}</p>}
+                  <Button type="submit" disabled={savingTargets}>
+                    {savingTargets ? "Saving…" : "Save targets"}
+                  </Button>
+                </form>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
       {canManage && (
         <Card>

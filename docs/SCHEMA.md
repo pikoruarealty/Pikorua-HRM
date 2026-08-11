@@ -402,7 +402,7 @@ Calls made from an Excel list that the CRM never sees. **The rep proposes, the L
 Deliberately **not** unique per `(employee, date)`: a rejected claim must be re-submittable, and a rep may log two batches in one day. Approved claims are summed.
 
 ### `sales_target_config`
-Versioned by `effective_from`, same pattern as `payroll_config` / `leave_config`. A per-employee override on `employees` (`daily_call_target`, `monthly_site_visit_target`, `monthly_booking_target`) wins over it.
+Versioned by `effective_from`, same pattern as `payroll_config` / `leave_config`. A per-employee override on `employees` (`daily_call_target`, `monthly_site_visit_target`, `monthly_booking_target`) wins over it. Editable via `GET/PUT /sales/target-config` (Admin) — the per-employee override via `PATCH /employees/:id/sales-targets` (Admin/HR or the owning Lead), both wired 2026-08-10 (Commit 7); no longer SQL-only.
 
 | Column | Type | Notes |
 |---|---|---|
@@ -414,12 +414,12 @@ Versioned by `effective_from`, same pattern as `payroll_config` / `leave_config`
 | effective_from | date | |
 
 ### `adhoc_task_types` — the self-logged point catalog
-**Wired 2026-08-10 (Phase 25).** The fixed, Admin-defined price list for work an employee logs themselves: `key` (stable, unique — `bug_fix`, `chore`, …), `label`, `points`, `active`. The employee picks a *type*, never a number, and the Lead's only judgement at review is "did this happen, yes or no" — a question a non-technical Lead can answer. Read via `GET /adhoc-task-types` (any authenticated user, active-only; `?includeInactive=1` for Admin/HR). Seeded with 7 tech types (`bug_fix` 2, `small_feature` 3, `large_feature` 8, `support` 2, `chore` 1, `documentation` 1, `research` 3).
+**Wired 2026-08-10 (Phase 25).** The fixed, Admin-defined price list for work an employee logs themselves: `key` (stable, unique — `bug_fix`, `chore`, …), `label`, `points`, `active`. The employee picks a *type*, never a number, and the Lead's only judgement at review is "did this happen, yes or no" — a question a non-technical Lead can answer. Read via `GET /adhoc-task-types` (any authenticated user, active-only; `?includeInactive=1` for Admin/HR). Managed via `POST /adhoc-task-types` and `PATCH /adhoc-task-types/:id` (Admin/HR, Commit 7) — `key` is set once at creation and never renamed, since existing WorkItems reference it; retiring a type is `active: false`, not a delete. Seeded with 7 tech types (`bug_fix` 2, `small_feature` 3, `large_feature` 8, `support` 2, `chore` 1, `documentation` 1, `research` 3).
 
 `work_items.self_logged` / `adhoc_type_id` (see §Work Items) are set by `POST /work-items/self-log` only. A self-logged item **always** routes through review regardless of the point threshold — the tiered threshold exists to spare a Lead from rubber-stamping small *assigned* work, but here the review is the only check that the work happened at all.
 
 ### `performance_config`
-Both knobs are **live as of 2026-08-11**; read through `getPerformanceConfig()` in `lib/performance/config.ts`, which resolves the row in force for a given date exactly like `SalesTargetConfig`/`PayrollConfig` (latest `effective_from` on or before it). Versioning is load-bearing here: turning scoring on in September must not retroactively publish August's ranks, and raising the cap must not silently rewrite last month's.
+Both knobs are **live as of 2026-08-11**; read through `getPerformanceConfig()` in `lib/performance/config.ts`, which resolves the row in force for a given date exactly like `SalesTargetConfig`/`PayrollConfig` (latest `effective_from` on or before it). Versioning is load-bearing here: turning scoring on in September must not retroactively publish August's ranks, and raising the cap must not silently rewrite last month's. Editable via `GET/PUT /performance/config` (Admin, Commit 7); no longer SQL-only.
 
 `scoring_enabled` (default **false**) is the grace-period switch. While it is off, `computeAndReplace()` skips the **monthly** period entirely — it writes no rows, sends no "results are in" notification, and leaves any rows already stored for that period untouched. Weekly is deliberately not gated: it is raw point totals rather than the composite, and it is what a Lead uses day to day.
 
