@@ -53,14 +53,22 @@ const ALLOWED_BILL_MIME: Record<string, string> = {
 };
 const MAX_BILL_BYTES = 10 * 1024 * 1024;
 
-const createSchema = z.object({
-  type: z.nativeEnum(RequestType),
-  dateFrom: z.coerce.date().optional(),
-  dateTo: z.coerce.date().optional(),
-  amount: z.number().positive().optional(),
-  attachmentUrl: z.string().url().optional(),
-  description: z.string().optional(),
-});
+// No `attachmentUrl` here, deliberately (2026-08-11). It used to be
+// client-settable, and `attachmentUrl` is an opaque *storage key* that
+// GET /requests/:id/attachment reads straight off the disk — so a submitter
+// could point their own request at any other file under `uploads/`
+// (e.g. `employee-documents/<uuid>.pdf`) and stream it back, since that route
+// only checks who owns the *request*. The key may only ever be minted server
+// side by saveUploadedFile from an actual upload.
+const createSchema = z
+  .object({
+    type: z.nativeEnum(RequestType),
+    dateFrom: z.coerce.date().optional(),
+    dateTo: z.coerce.date().optional(),
+    amount: z.number().positive().optional(),
+    description: z.string().optional(),
+  })
+  .strict();
 
 const REQUEST_TYPE_LABELS: Record<RequestType, string> = {
   [RequestType.leave_paid]: "paid leave",
@@ -110,7 +118,7 @@ export async function POST(req: Request) {
   if (!parsed.success) {
     return failFor(ErrorCode.VALIDATION, "Invalid request body.");
   }
-  const { type, dateFrom, dateTo, amount, attachmentUrl, description } = parsed.data;
+  const { type, dateFrom, dateTo, amount, description } = parsed.data;
 
   if (LEAVE_TYPES.includes(type)) {
     if (!dateFrom || !dateTo) {
@@ -129,7 +137,7 @@ export async function POST(req: Request) {
 
   // Persist the uploaded bill (reimbursement only) before creating the row so
   // the stored key can go straight into attachmentUrl.
-  let storedAttachment: string | undefined = attachmentUrl;
+  let storedAttachment: string | undefined;
   if (billFile && type === RequestType.reimbursement) {
     const ext = ALLOWED_BILL_MIME[billFile.type];
     if (!ext) {

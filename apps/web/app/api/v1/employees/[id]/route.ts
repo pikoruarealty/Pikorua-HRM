@@ -103,7 +103,13 @@ const patchSchema = z.object({
   phone: z.string().min(1).nullable().optional(),
   date_of_birth: z.string().nullable().optional(),
   date_of_joining: z.string().optional(),
-});
+})
+  // Strict (2026-08-11): unknown keys are rejected rather than silently
+  // dropped. This route is the mass-assignment surface for salary and role, so
+  // a typo'd field name must fail loudly instead of looking like it saved —
+  // and `audit.metadata.changed` is Object.keys(d), which was only honest as
+  // long as every key in the body was a field we actually applied.
+  .strict();
 
 export async function PATCH(
   req: Request,

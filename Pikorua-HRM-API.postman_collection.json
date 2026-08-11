@@ -584,7 +584,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\"type\":\"reimbursement\",\"amount\":1500,\"attachmentUrl\":\"https://files.example.com/receipt.pdf\",\"description\":\"Client meeting taxi\"}"
+              "raw": "{\"type\":\"reimbursement\",\"amount\":1500,\"description\":\"Client meeting taxi\"}"
             },
             "url": {
               "raw": "{{base_url}}/requests",

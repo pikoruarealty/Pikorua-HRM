@@ -25,12 +25,27 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   const subUnit = await loadManageable(params.id);
   if (!subUnit) return failFor(ErrorCode.NOT_FOUND);
 
+  // Read scope mirrors GET /work-units/:id: Admin/HR see anything, everyone
+  // else only their own department. This used to be unscoped — any
+  // authenticated account could read any sub-unit, and with it the parent
+  // WorkUnit's name, description and project lead for a department they have
+  // nothing to do with. 404 rather than 403 so the response doesn't confirm
+  // that an out-of-scope sub-unit exists.
+  if (!isFinanceRole(session.role)) {
+    if (!session.employeeId) return failFor(ErrorCode.NOT_FOUND);
+    const self = await prisma.employee.findUnique({
+      where: { id: session.employeeId },
+      select: { departmentId: true },
+    });
+    if (!self || self.departmentId !== subUnit.workUnit.departmentId) {
+      return failFor(ErrorCode.NOT_FOUND);
+    }
+  }
+
   return ok(subUnit);
 }
 
-const patchSchema = z.object({
-  name: z.string().min(1),
-});
+const patchSchema = z.object({ name: z.string().min(1) }).strict();
 
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
   const session = await getSession();

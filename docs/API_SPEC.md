@@ -118,7 +118,7 @@
 
 | Method | Path | Roles | Notes |
 |---|---|---|---|
-| POST | `/requests` | Employee | `{ type, date_from?, date_to?, amount?, description?, attachment_url? }` |
+| POST | `/requests` | Employee (not Admin — nobody could approve it) | JSON `{ type, dateFrom?, dateTo?, amount?, description? }`, **or** `multipart/form-data` with the same fields plus a `bill` file (reimbursement only; PDF/PNG/JPEG/GIF/WebP, ≤10MB). Body is **strict** — unknown keys are rejected. `attachment_url` is **not** accepted from the client (2026-08-11): it is an opaque storage key minted server-side from the uploaded file, and accepting it let a submitter point their own request at any other file under `uploads/`. |
 | GET | `/requests` | Admin/HR (all), Lead (own team), Employee (self) | filters: `type`, `status`, `employee_id` |
 | GET | `/requests/:id` | scoped as above | |
 | PATCH | `/requests/:id/approve` | **Admin/HR only** (all request types, including leave and reimbursement — Team Leads cannot approve) | sets status + approver_id + approved_at |
