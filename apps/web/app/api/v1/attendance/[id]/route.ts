@@ -3,6 +3,7 @@ import { getSession } from "@/lib/auth";
 import { FINANCE_ROLES } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { audit, clientIp } from "@/lib/audit";
+import { AttendanceApprovalStatus } from "@prisma/client";
 
 // Track A. DELETE /api/v1/attendance/:id — Admin/HR only.
 // Permanent removal of a single attendance record. Intended strictly for
@@ -21,6 +22,22 @@ export async function DELETE(
   try {
     const record = await prisma.attendanceRecord.findUnique({ where: { id: params.id } });
     if (!record) return failFor(ErrorCode.NOT_FOUND, "Attendance record not found.");
+
+    // This route is strictly for cleaning up phantom/incomplete records — a
+    // record that was ever clocked or has already been approved is real
+    // attendance history payroll may depend on, so it's out of scope here.
+    if (record.approvalStatus === AttendanceApprovalStatus.approved) {
+      return failFor(
+        ErrorCode.CONFLICT,
+        "Cannot delete an approved attendance record. Unapprove it first if it genuinely needs to go.",
+      );
+    }
+    if (record.clockInRaw || record.clockOutRaw) {
+      return failFor(
+        ErrorCode.CONFLICT,
+        "Cannot delete an attendance record that has clock-in or clock-out data. This route is only for phantom/incomplete records.",
+      );
+    }
 
     await prisma.attendanceRecord.delete({ where: { id: params.id } });
 

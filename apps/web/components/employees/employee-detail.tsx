@@ -150,7 +150,7 @@ export function EmployeeDetail({
   type ActiveEmployee = { id: string; fullName: string; role: string };
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleteDialogLoading, setDeleteDialogLoading] = useState(false);
-  const [pendingWorkCounts, setPendingWorkCounts] = useState<{ assignedWorkItems: number; ledWorkUnits: number } | null>(null);
+  const [pendingWorkCounts, setPendingWorkCounts] = useState<{ assignedWorkItems: number; ledWorkUnits: number; finalizedPayslips: number } | null>(null);
   const [activeEmployees, setActiveEmployees] = useState<ActiveEmployee[]>([]);
   const [reassignToId, setReassignToId] = useState("");
 
@@ -313,7 +313,7 @@ export function EmployeeDetail({
       ]);
       const counts = await countsRes.json();
       const emps = await empRes.json();
-      setPendingWorkCounts(counts.data ?? { assignedWorkItems: 0, ledWorkUnits: 0 });
+      setPendingWorkCounts(counts.data ?? { assignedWorkItems: 0, ledWorkUnits: 0, finalizedPayslips: 0 });
       setActiveEmployees(
         (emps.data ?? []).filter(
           (e: ActiveEmployee & { status?: string }) =>
@@ -787,13 +787,15 @@ export function EmployeeDetail({
               <DialogDescription>
                 {deleteDialogLoading
                   ? "Loading…"
+                  : pendingWorkCounts && pendingWorkCounts.finalizedPayslips > 0
+                  ? <>This employee has <strong>{pendingWorkCounts.finalizedPayslips} finalized payslip(s)</strong>, a permanent payroll record. They must be unfinalized first (Payslips → the payslip → Unfinalize, with a reason) before this employee can be permanently deleted.</>
                   : pendingWorkCounts && (pendingWorkCounts.assignedWorkItems > 0 || pendingWorkCounts.ledWorkUnits > 0)
                   ? <>This employee has <strong>{pendingWorkCounts.assignedWorkItems} task(s)</strong> and leads <strong>{pendingWorkCounts.ledWorkUnits} project(s)</strong>. Choose an active employee to take over their work before deleting. This action cannot be undone.</>
                   : "This will permanently remove the employee and all their records. This action cannot be undone."}
               </DialogDescription>
             </DialogHeader>
 
-            {!deleteDialogLoading && pendingWorkCounts && (pendingWorkCounts.assignedWorkItems > 0 || pendingWorkCounts.ledWorkUnits > 0) && (
+            {!deleteDialogLoading && pendingWorkCounts && pendingWorkCounts.finalizedPayslips === 0 && (pendingWorkCounts.assignedWorkItems > 0 || pendingWorkCounts.ledWorkUnits > 0) && (
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="reassign-to">Reassign work to</Label>
                 <Select value={reassignToId} onValueChange={setReassignToId}>
@@ -821,13 +823,15 @@ export function EmployeeDetail({
               >
                 Cancel
               </Button>
-              <Button
-                variant="destructive"
-                onClick={confirmHardDelete}
-                disabled={hardDeleting || deleteDialogLoading}
-              >
-                {hardDeleting ? "Deleting…" : "Delete permanently"}
-              </Button>
+              {!(pendingWorkCounts && pendingWorkCounts.finalizedPayslips > 0) && (
+                <Button
+                  variant="destructive"
+                  onClick={confirmHardDelete}
+                  disabled={hardDeleting || deleteDialogLoading}
+                >
+                  {hardDeleting ? "Deleting…" : "Delete permanently"}
+                </Button>
+              )}
             </DialogFooter>
           </DialogContent>
         </Dialog>

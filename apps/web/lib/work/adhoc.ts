@@ -53,11 +53,18 @@ export async function ensureAdhocContainer(departmentId: string): Promise<string
       deletedAt: null,
       workUnit: { departmentId, name: ADHOC_CONTAINER_WORK_UNIT, deletedAt: null },
     },
-    select: { id: true },
+    select: {
+      id: true,
+      workUnit: { select: { id: true, projectLeadId: true } },
+    },
   });
-  if (existing) return existing.id;
 
-  const lead =
+  // Re-resolve the current lead every call, not just at creation — the
+  // WorkUnit's project lead is who review notifications go to, so if the
+  // employee it was set to has since left the department (or gone inactive)
+  // the container would otherwise keep pointing at them forever, and every
+  // self-logged task filed after that would sit unreviewable by anyone.
+  const currentLead =
     (await prisma.employee.findFirst({
       where: { departmentId, status: "active", role: { in: [...LEAD_ROLES] } },
       select: { id: true },
@@ -66,7 +73,29 @@ export async function ensureAdhocContainer(departmentId: string): Promise<string
       where: { departmentId, status: "active" },
       select: { id: true },
     }));
-  if (!lead) {
+
+  if (existing) {
+    if (currentLead && existing.workUnit.projectLeadId !== currentLead.id) {
+      const stillValid = await prisma.employee.findFirst({
+        where: { id: existing.workUnit.projectLeadId, departmentId, status: "active" },
+        select: { id: true },
+      });
+      if (!stillValid) {
+        await prisma.workUnit.update({
+          where: { id: existing.workUnit.id },
+          data: { projectLeadId: currentLead.id },
+        });
+        logger.info("re-pointed stale ad-hoc container lead", {
+          departmentId,
+          workUnitId: existing.workUnit.id,
+          newLeadId: currentLead.id,
+        });
+      }
+    }
+    return existing.id;
+  }
+
+  if (!currentLead) {
     logger.warn("cannot provision ad-hoc container — department has no active employees", { departmentId });
     return null;
   }
@@ -82,7 +111,7 @@ export async function ensureAdhocContainer(departmentId: string): Promise<string
         name: ADHOC_CONTAINER_WORK_UNIT,
         description:
           "Auto-managed container for tasks employees log themselves. Every item here is reviewed by the department lead before its points count.",
-        projectLeadId: lead.id,
+        projectLeadId: currentLead.id,
       },
       select: { id: true },
     }));

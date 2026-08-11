@@ -1,11 +1,13 @@
 import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
-import { isEmployeeRole, isLeadRole } from "@/lib/rbac";
+import { isEmployeeRole, isLeadRole, Role } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 
 // Track B. GET /api/v1/daily-selections/today — Milestone 2.3.
-// Employee, Lead (own team) only per API_SPEC §5 — Admin/HR are deliberately
-// excluded here, matching the strict-role convention set in 1.2/1.3.
+// Employee, Lead (own team) — and HR (2026-08-11 fix), scoped to self like
+// an Employee, since HR clocks in and works day-to-day the same way (unlike
+// Admin, who doesn't clock in and has no "Daily Planning" nav entry at all;
+// HR does and was hitting a 403 the nav never warned about).
 
 function todayUtcDate(): Date {
   const d = new Date();
@@ -50,7 +52,7 @@ export async function GET(req: Request) {
     return ok(selections);
   }
 
-  if (isEmployeeRole(session.role)) {
+  if (isEmployeeRole(session.role) || session.role === Role.hr) {
     if (!session.employeeId) return ok([]);
     const selections = await prisma.dailyTaskSelection.findMany({
       where: { employeeId: session.employeeId, date },

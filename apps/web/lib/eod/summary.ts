@@ -94,6 +94,37 @@ export async function buildEodSummary(
     };
   });
 
+  // A task credited today but not in today's plan (self-logged work, or a
+  // task selected on an earlier day and finished today) still needs to show
+  // up here — otherwise pointsEarnedToday is nonzero while items is empty,
+  // which reads as a phantom number rather than "an unplanned task".
+  const plannedItemIds = new Set(items.map((i) => i.workItemId));
+  const unplannedItemIds = [...creditedTodayByItem.keys()].filter(
+    (id) => !plannedItemIds.has(id),
+  );
+  if (unplannedItemIds.length > 0) {
+    const unplannedWorkItems = await prisma.workItem.findMany({
+      where: { id: { in: unplannedItemIds } },
+      include: { subUnit: { include: { workUnit: true } } },
+    });
+    for (const w of unplannedWorkItems) {
+      items.push({
+        workItemId: w.id,
+        title: w.title,
+        mode: w.mode,
+        status: w.status,
+        taskPoints: w.taskPoints ?? null,
+        targetValue: w.targetValue == null ? null : Number(w.targetValue),
+        currentValue: w.currentValue == null ? null : Number(w.currentValue),
+        completedToday: true,
+        projectName: w.subUnit.workUnit.name,
+        subUnitName: w.subUnit.name,
+        assignedAt: w.createdAt,
+        completedAt: w.completedAt,
+      });
+    }
+  }
+
   const completedCount = items.filter(
     (i) => i.status === WorkItemStatus.completed,
   ).length;
@@ -102,7 +133,8 @@ export async function buildEodSummary(
   ).length;
 
   // Points earned today across *all* ledger entries for the day, even if the
-  // completed item wasn't in today's plan (e.g. finished an unplanned task).
+  // completed item wasn't in today's plan (e.g. finished an unplanned task) —
+  // now always backed by a matching entry in `items` above.
   const pointsEarnedToday = Array.from(creditedTodayByItem.values()).reduce(
     (a, b) => a + b,
     0,
@@ -110,7 +142,7 @@ export async function buildEodSummary(
 
   return {
     date: dayStart.toISOString().slice(0, 10),
-    plannedCount: items.length,
+    plannedCount: selections.length,
     completedCount,
     inReviewCount,
     pointsEarnedToday,

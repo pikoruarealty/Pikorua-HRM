@@ -418,6 +418,8 @@ Versioned by `effective_from`, same pattern as `payroll_config` / `leave_config`
 
 `work_items.self_logged` / `adhoc_type_id` (see §Work Items) are set by `POST /work-items/self-log` only. A self-logged item **always** routes through review regardless of the point threshold — the tiered threshold exists to spare a Lead from rubber-stamping small *assigned* work, but here the review is the only check that the work happened at all.
 
+The per-department container WorkUnit (`ensureAdhocContainer`, `lib/work/adhoc.ts`) re-checks its `project_lead_id` on every call, not just at creation (fixed 2026-08-11) — it used to only set the lead when first provisioning the container, so a lead who later left the department or went inactive would silently keep every future self-logged task unreviewable (review is scoped to the WorkUnit's own project lead).
+
 ### `performance_config`
 Both knobs are **live as of 2026-08-11**; read through `getPerformanceConfig()` in `lib/performance/config.ts`, which resolves the row in force for a given date exactly like `SalesTargetConfig`/`PayrollConfig` (latest `effective_from` on or before it). Versioning is load-bearing here: turning scoring on in September must not retroactively publish August's ranks, and raising the cap must not silently rewrite last month's. Editable via `GET/PUT /performance/config` (Admin, Commit 7); no longer SQL-only.
 

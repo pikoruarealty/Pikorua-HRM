@@ -52,6 +52,38 @@ export async function buildTeamTodaySummary(
     }),
   ]);
 
+  // A task credited today but not in today's plan (self-logged work, etc.)
+  // still needs a matching `items` entry — see the identical fix + rationale
+  // in buildEodSummary (lib/eod/summary.ts).
+  const plannedItemIds = new Set(selections.map((s) => s.workItemId));
+  const unplannedItemIds = [
+    ...new Set(
+      ledgerToday
+        .map((r) => r.workItemId)
+        .filter((id) => !plannedItemIds.has(id)),
+    ),
+  ];
+  const unplannedWorkItems =
+    unplannedItemIds.length > 0
+      ? await prisma.workItem.findMany({
+          where: { id: { in: unplannedItemIds } },
+          include: { subUnit: { include: { workUnit: true } } },
+        })
+      : [];
+  const unplannedByEmployee = new Map<string, typeof unplannedWorkItems>();
+  if (unplannedWorkItems.length > 0) {
+    const employeeIdByItem = new Map(
+      ledgerToday.map((r) => [r.workItemId, r.employeeId]),
+    );
+    for (const w of unplannedWorkItems) {
+      const empId = employeeIdByItem.get(w.id);
+      if (!empId) continue;
+      const list = unplannedByEmployee.get(empId) ?? [];
+      list.push(w);
+      unplannedByEmployee.set(empId, list);
+    }
+  }
+
   const recordByEmployee = new Map(records.map((r) => [r.employeeId, r]));
 
   const selectionsByEmployee = new Map<string, typeof selections>();
@@ -92,6 +124,22 @@ export async function buildTeamTodaySummary(
         completedAt: w.completedAt,
       };
     });
+    for (const w of unplannedByEmployee.get(e.id) ?? []) {
+      items.push({
+        workItemId: w.id,
+        title: w.title,
+        mode: w.mode,
+        status: w.status,
+        taskPoints: w.taskPoints ?? null,
+        targetValue: w.targetValue == null ? null : Number(w.targetValue),
+        currentValue: w.currentValue == null ? null : Number(w.currentValue),
+        completedToday: true,
+        projectName: w.subUnit.workUnit.name,
+        subUnitName: w.subUnit.name,
+        assignedAt: w.createdAt,
+        completedAt: w.completedAt,
+      });
+    }
 
     const completedCount = items.filter((i) => i.status === WorkItemStatus.completed).length;
     const inReviewCount = items.filter((i) => i.status === WorkItemStatus.in_review).length;
@@ -103,7 +151,7 @@ export async function buildTeamTodaySummary(
       photoUrl: e.photoUrl ? `/api/v1/employees/${e.id}/photo` : null,
       clockIn: record?.clockInRaw ?? null,
       clockOut: record?.clockOutRaw ?? null,
-      plannedCount: items.length,
+      plannedCount: empSelections.length,
       completedCount,
       inReviewCount,
       pointsEarnedToday,

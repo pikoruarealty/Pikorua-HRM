@@ -39,8 +39,14 @@ export async function GET(
   const isFinance = FINANCE_ROLES.includes(session.role);
   const isSelf = session.employeeId === payslip.employeeId;
   if (!isFinance) {
-    if (!isSelf || payslip.status !== PayslipStatus.finalized) {
+    if (!isSelf) {
       return failFor(ErrorCode.FORBIDDEN);
+    }
+    // Own payslip, but still a draft — a different situation from "not
+    // yours", so it gets its own message rather than a bare 403 that reads
+    // the same as someone else's payslip.
+    if (payslip.status !== PayslipStatus.finalized) {
+      return failFor(ErrorCode.FORBIDDEN, "This payslip has not been finalized yet.");
     }
   }
 

@@ -3,7 +3,7 @@ import { getSession } from "@/lib/auth";
 import { Role } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { audit, clientIp } from "@/lib/audit";
-import { EmployeeStatus } from "@prisma/client";
+import { EmployeeStatus, PayslipStatus } from "@prisma/client";
 
 // Track B. DELETE /api/v1/employees/:id/hard-delete
 // — Admin-only permanent removal. If the employee has assigned work items or
@@ -55,6 +55,22 @@ export async function DELETE(req: Request, { params }: { params: { id: string } 
         ErrorCode.CONFLICT,
         `This employee has ${assignedWorkItemsCount} assigned task(s) and leads ${ledWorkUnitsCount} project(s). Please choose someone to reassign their work to before deleting.`,
         { requiresReassignment: true, assignedWorkItems: assignedWorkItemsCount, ledWorkUnits: ledWorkUnitsCount },
+      );
+    }
+
+    // Finalized payslips are a permanent financial record — the normal
+    // DELETE /payslips/:id route already refuses to remove one (409 unless
+    // it's still a draft). Hard-deleting the employee must not be a
+    // back door around that: it would silently destroy issued payroll
+    // history with no trace beyond this audit log entry's metadata.
+    const finalizedPayslipsCount = await prisma.payslip.count({
+      where: { employeeId: params.id, status: PayslipStatus.finalized },
+    });
+    if (finalizedPayslipsCount > 0) {
+      return failFor(
+        ErrorCode.CONFLICT,
+        `This employee has ${finalizedPayslipsCount} finalized payslip(s), which are a permanent payroll record and cannot be destroyed by deleting the employee. Unfinalize them first if they genuinely need to go, or leave this employee soft-deleted instead of hard-deleting.`,
+        { finalizedPayslips: finalizedPayslipsCount },
       );
     }
 
@@ -250,12 +266,13 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     });
     if (!employee) return failFor(ErrorCode.NOT_FOUND, "Employee not found.");
 
-    const [assignedWorkItems, ledWorkUnits] = await Promise.all([
+    const [assignedWorkItems, ledWorkUnits, finalizedPayslips] = await Promise.all([
       prisma.workItem.count({ where: { assignedTo: params.id, deletedAt: null } }),
       prisma.workUnit.count({ where: { projectLeadId: params.id, deletedAt: null } }),
+      prisma.payslip.count({ where: { employeeId: params.id, status: PayslipStatus.finalized } }),
     ]);
 
-    return ok({ assignedWorkItems, ledWorkUnits });
+    return ok({ assignedWorkItems, ledWorkUnits, finalizedPayslips });
   } catch (err) {
     console.error("[hard-delete GET] unexpected error:", err);
     return failFor(ErrorCode.INTERNAL, "Failed to fetch pending work counts.");
