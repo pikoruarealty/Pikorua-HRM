@@ -1,11 +1,15 @@
 import { prisma } from "@/lib/db/prisma";
 import { RecognitionPeriodType, EmployeeStatus, Prisma } from "@prisma/client";
+import { createLogger } from "@/lib/log";
 import { notifyAllActiveUsers } from "@/lib/notifications/push";
 import {
   departmentBest,
   gatherMonthlyInputs,
   scoreEmployee,
 } from "@/lib/performance/monthly-score";
+import { getPerformanceConfig } from "@/lib/performance/config";
+
+const logger = createLogger("recognition-cron");
 
 // Track B — Milestone 3.1 core logic, extracted from the cron route so both
 // the CRON_SECRET-gated HTTP route AND the in-process scheduler
@@ -52,6 +56,27 @@ export async function computeAndReplace(
   periodStart: Date,
 ): Promise<number> {
   const end = periodEnd(periodType, periodStart);
+
+  // Grace period (2026-08-11): until an Admin flips performance_config
+  // .scoring_enabled on, no composite score is published. Tasks, attendance
+  // and sales numbers are all still recorded — this gates publication only.
+  // The check is versioned by periodStart, so switching scoring on in
+  // September does not retroactively publish August's ranks.
+  //
+  // Existing rows for the period are left alone rather than deleted: a period
+  // scored before the switch was turned off stays readable, and re-enabling
+  // scoring recomputes it. Weekly is not gated — it is raw point totals, not
+  // the composite, and it is what a Lead uses day to day.
+  if (periodType === RecognitionPeriodType.monthly) {
+    const perfConfig = await getPerformanceConfig(periodStart);
+    if (!perfConfig.scoringEnabled) {
+      logger.info("monthly recognition skipped — scoring is disabled for this period", {
+        periodStart: periodStart.toISOString().slice(0, 10),
+      });
+      return 0;
+    }
+  }
+
   const targetMonth = periodStart.getUTCMonth() + 1;
   const targetYear = periodStart.getUTCFullYear();
 
@@ -124,7 +149,11 @@ export async function computeAndReplace(
       for (const item of metricItems) {
         const target = Number(item.targetValue ?? 0);
         const current = Number(item.currentValue ?? 0);
-        const pct = target > 0 ? (current / target) * 100 : 0;
+        // A target of 0 means nobody set one, which is not 0% attainment —
+        // scoring it as such dragged the whole average down for a rep whose
+        // targets simply hadn't been provisioned yet. Skipped instead.
+        if (!(target > 0)) continue;
+        const pct = (current / target) * 100;
         const list = byEmployee.get(item.assignedTo) ?? [];
         list.push(pct);
         byEmployee.set(item.assignedTo, list);

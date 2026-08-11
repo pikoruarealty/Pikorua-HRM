@@ -17,12 +17,17 @@ export type ScoreComponent = {
   nominalWeight: number;
   value: number;
   detail: string | null;
+  /** Profile-specific wording (Tech vs Sales). Absent on snapshots stored
+   *  before 2026-08-11 — those fall back to the default description table. */
+  description?: string;
 };
 
 export type ScoreComponents = {
   score: number;
   components: ScoreComponent[];
   unavailable: ComponentKey[];
+  /** Components this department's profile gives weight 0 — see composite.ts. */
+  inert?: ComponentKey[];
 };
 
 function barColor(value: number): string {
@@ -41,8 +46,12 @@ export function ScoreBreakdown({ data }: { data: ScoreComponents }) {
   }
 
   // A component is only worth explaining as "reweighted" if it was actually
-  // dropped for lack of data — the 0-weight CRM slot isn't news to anyone.
-  const dropped = data.unavailable.filter((k) => k !== "salesOutcome");
+  // dropped for lack of data. A slot this department's profile weights at 0
+  // (the CRM slot in Tech, timeliness in Sales) was never going to count and
+  // isn't news to anyone. Snapshots stored before 2026-08-11 carry no `inert`
+  // list, so fall back to the only 0-weight slot that existed then.
+  const inert = data.inert ?? ["salesOutcome"];
+  const dropped = data.unavailable.filter((k) => !inert.includes(k));
 
   return (
     <div className="flex flex-col gap-3">
@@ -67,7 +76,7 @@ export function ScoreBreakdown({ data }: { data: ScoreComponents }) {
             />
           </div>
           <p className="text-[11px] leading-snug text-muted-foreground">
-            {COMPONENT_DESCRIPTIONS[c.key]}
+            {c.description ?? COMPONENT_DESCRIPTIONS[c.key]}
           </p>
         </div>
       ))}

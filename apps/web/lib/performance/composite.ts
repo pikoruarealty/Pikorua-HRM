@@ -30,24 +30,58 @@ export type ComponentKey =
   | "adherence"
   | "salesOutcome";
 
+export type WeightProfile = Record<ComponentKey, number>;
+
 /**
- * Nominal weights. These are *relative*: computeComposite renormalises over
- * whichever components actually have data, so they do not have to sum to 100
- * (they do, which keeps them readable as percentages in the common case).
+ * Tech weights (locked by the owner, 2026-08-10). Relative, not absolute:
+ * computeComposite renormalises over whichever components actually have data,
+ * so they do not have to sum to 100 (they do, which keeps them readable as
+ * percentages in the common case).
  *
- * `salesOutcome` is a deliberate placeholder at weight 0 — the slot for real
- * closed-deal outcomes from the CRM (Pillars 4/5), which is still being built.
- * At weight 0 it can never affect a score, so the slot is inert until the CRM
- * lands and the weight is raised. Do not remove it; the shape is the contract.
+ * Output carries half the score because shipping verified work is the job.
+ * `salesOutcome` is inert here at weight 0 — a Tech department has no CRM
+ * outcomes, and a 0-weight component can never affect a score.
  */
-export const COMPONENT_WEIGHTS: Record<ComponentKey, number> = {
-  output: 40,
-  quality: 20,
-  attendance: 20,
-  timeliness: 10,
-  adherence: 10,
+export const TECH_WEIGHTS: WeightProfile = {
+  output: 50,
+  quality: 17,
+  attendance: 17,
+  timeliness: 8,
+  adherence: 8,
   salesOutcome: 0,
 };
+
+/**
+ * Sales weights (locked by the owner, 2026-08-10). Output is still half the
+ * score, but it is split across the three sales metrics in the ratio 3:5:7 —
+ * calls 10, site visits 17, bookings 23 — because calls are a leading
+ * indicator anyone can inflate while a booking is the outcome the business
+ * actually needs.
+ *
+ * That split maps onto two component slots, not three: `output` carries the
+ * calls attainment (10) and `salesOutcome` carries site visits + bookings
+ * blended 17:23 (40 together) by `blendOutcome` in lib/sales/pacing.ts. The
+ * ComponentKey set is deliberately unchanged — every downstream reader
+ * (breakdown UI, stored snapshot JSON, recognition API) keys off it.
+ *
+ * `timeliness` is 0 for sales: due-dated tasks are a Tech concept, and the
+ * sales equivalent — hitting a target inside the month — is already what the
+ * paced attainment measures. Scoring it twice would double-count.
+ */
+export const SALES_WEIGHTS: WeightProfile = {
+  output: 10,
+  salesOutcome: 40,
+  quality: 20,
+  attendance: 20,
+  timeliness: 0,
+  adherence: 10,
+};
+
+/**
+ * Back-compat alias for the default (Tech) table. Kept because the shape is
+ * the contract for anything that introspects weights.
+ */
+export const COMPONENT_WEIGHTS: WeightProfile = TECH_WEIGHTS;
 
 export const COMPONENT_LABELS: Record<ComponentKey, string> = {
   output: "Output",
@@ -68,6 +102,47 @@ export const COMPONENT_DESCRIPTIONS: Record<ComponentKey, string> = {
   salesOutcome: "Closed-deal outcomes from the CRM.",
 };
 
+/**
+ * Everything that differs between a Tech and a Sales score: the weights, and
+ * the words. The same `output` slot means "task points vs the department's top
+ * scorer" in Tech and "calls against your daily target" in Sales, so shipping
+ * one wording for both would mislabel half the org's breakdown.
+ */
+export type ScoringProfile = {
+  key: "tech" | "sales";
+  weights: WeightProfile;
+  labels: Record<ComponentKey, string>;
+  descriptions: Record<ComponentKey, string>;
+};
+
+export const TECH_PROFILE: ScoringProfile = {
+  key: "tech",
+  weights: TECH_WEIGHTS,
+  labels: COMPONENT_LABELS,
+  descriptions: COMPONENT_DESCRIPTIONS,
+};
+
+export const SALES_PROFILE: ScoringProfile = {
+  key: "sales",
+  weights: SALES_WEIGHTS,
+  labels: {
+    ...COMPONENT_LABELS,
+    output: "Calls",
+    salesOutcome: "Site visits & bookings",
+  },
+  descriptions: {
+    ...COMPONENT_DESCRIPTIONS,
+    output: "Calls logged against your daily target, across the days you were expected to be selling.",
+    salesOutcome:
+      "Site visits and bookings against your monthly targets, pro-rated to the part of the month that has elapsed. Bookings count for more than visits.",
+    timeliness: "Not scored for sales — hitting target inside the month is already measured above.",
+  },
+};
+
+export function profileFor(isMetricDepartment: boolean): ScoringProfile {
+  return isMetricDepartment ? SALES_PROFILE : TECH_PROFILE;
+}
+
 export type ComponentInput = {
   /** 0-100, or null when there is nothing to measure (component is dropped). */
   value: number | null;
@@ -84,6 +159,12 @@ export type CompositeComponent = {
   nominalWeight: number;
   value: number;
   detail: string | null;
+  /**
+   * What this component measured, in the wording of the scoring profile that
+   * produced it. Optional because snapshots stored before 2026-08-11 have no
+   * such field — readers fall back to COMPONENT_DESCRIPTIONS.
+   */
+  description?: string;
 };
 
 export type CompositeResult = {
@@ -92,6 +173,13 @@ export type CompositeResult = {
   components: CompositeComponent[];
   /** Components skipped because no data was available (or weight 0). */
   unavailable: ComponentKey[];
+  /**
+   * The subset of `unavailable` skipped purely because this profile gives them
+   * weight 0 — they were never going to count and are not worth explaining as
+   * "we couldn't measure it". Optional so snapshots stored before 2026-08-11
+   * still parse; readers should fall back to treating `salesOutcome` as inert.
+   */
+  inert?: ComponentKey[];
 };
 
 const COMPONENT_ORDER: ComponentKey[] = [
@@ -117,43 +205,57 @@ export function clampScore(n: number): number {
  * Weighted blend of the supplied components, renormalised over the ones that
  * have data. Returns 0 with an empty component list when nothing is measurable
  * — a brand-new employee with no activity at all scores 0, which is correct.
+ *
+ * `profile` selects the weight table and the wording (2026-08-11). It defaults
+ * to Tech so every pre-existing caller keeps its behaviour; the renormalisation
+ * rule is identical for both profiles — a component with weight 0, or with no
+ * data, is dropped and the rest scale up to cover it.
  */
 export function computeComposite(
   inputs: Partial<Record<ComponentKey, ComponentInput>>,
+  profile: ScoringProfile = TECH_PROFILE,
 ): CompositeResult {
+  const weights = profile.weights;
   const available: { key: ComponentKey; value: number; detail: string | null }[] = [];
   const unavailable: ComponentKey[] = [];
+  const inert: ComponentKey[] = [];
 
   for (const key of COMPONENT_ORDER) {
-    const nominal = COMPONENT_WEIGHTS[key];
+    const nominal = weights[key];
     const input = inputs[key];
-    if (nominal <= 0 || !input || input.value === null || !Number.isFinite(input.value)) {
+    if (nominal <= 0) {
+      unavailable.push(key);
+      inert.push(key);
+      continue;
+    }
+    if (!input || input.value === null || !Number.isFinite(input.value)) {
       unavailable.push(key);
       continue;
     }
     available.push({ key, value: clampScore(input.value), detail: input.detail ?? null });
   }
 
-  const totalWeight = available.reduce((sum, c) => sum + COMPONENT_WEIGHTS[c.key], 0);
+  const totalWeight = available.reduce((sum, c) => sum + weights[c.key], 0);
   if (totalWeight <= 0) {
-    return { score: 0, components: [], unavailable };
+    return { score: 0, components: [], unavailable, inert };
   }
 
   let score = 0;
   const components: CompositeComponent[] = available.map((c) => {
-    const weight = (COMPONENT_WEIGHTS[c.key] / totalWeight) * 100;
-    score += (c.value * COMPONENT_WEIGHTS[c.key]) / totalWeight;
+    const weight = (weights[c.key] / totalWeight) * 100;
+    score += (c.value * weights[c.key]) / totalWeight;
     return {
       key: c.key,
-      label: COMPONENT_LABELS[c.key],
+      label: profile.labels[c.key],
       weight: round(weight, 1),
-      nominalWeight: COMPONENT_WEIGHTS[c.key],
+      nominalWeight: weights[c.key],
       value: round(c.value, 1),
       detail: c.detail,
+      description: profile.descriptions[c.key],
     };
   });
 
-  return { score: round(clampScore(score), 2), components, unavailable };
+  return { score: round(clampScore(score), 2), components, unavailable, inert };
 }
 
 // ---------------------------------------------------------------------------

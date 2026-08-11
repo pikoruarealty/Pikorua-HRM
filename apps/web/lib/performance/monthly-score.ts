@@ -1,9 +1,19 @@
 import { prisma } from "@/lib/db/prisma";
-import { getMonthlyAttendanceBreakdownForAllEmployees } from "@/lib/attendance/monthly-breakdown";
+import {
+  expectedWorkingDaysInMonth,
+  getMonthlyAttendanceBreakdownForAllEmployees,
+} from "@/lib/attendance/monthly-breakdown";
 import type { MonthlyBreakdown } from "@/lib/attendance/monthly-breakdown";
+import {
+  addDays,
+  buildMovedOffDateByWeek,
+  resolveDefaultOffDay,
+  weekStartOf,
+} from "@/lib/attendance/week";
 import {
   attendanceToScore,
   computeComposite,
+  profileFor,
   ratingToScore,
   ratioToScore,
   relativeToBest,
@@ -11,6 +21,14 @@ import {
   type ComponentKey,
   type CompositeResult,
 } from "@/lib/performance/composite";
+import { getPerformanceConfig } from "@/lib/performance/config";
+import { cappedSelfLoggedPoints } from "@/lib/work/adhoc";
+import { expectedActivityDaysElapsed } from "@/lib/sales/pacing";
+import {
+  attainmentFor,
+  summariseMetricItems,
+  type SalesAttainment,
+} from "@/lib/sales/monthly-attainment";
 
 // Pillar 6 (2026-08-08) — the DB half of the composite monthly score. The
 // weighting maths lives in ./composite.ts (pure, unit-tested); this file only
@@ -22,10 +40,18 @@ import {
 // runs weekly + monthly for every department, so this matters.
 
 export type EmployeeRawInputs = {
-  /** Verified task points credited in the period (Atomic/Tech). */
+  /**
+   * Verified task points credited in the period (Atomic/Tech), AFTER the
+   * self-logged cap has been applied — see `performance_config.
+   * self_logged_cap_percent`. This is the number the Output component is built
+   * from, so the cap has to bite here rather than at approval time: refusing to
+   * credit work that genuinely happened would be a lie about the work.
+   */
   points: number;
-  /** Average metric attainment %, or null when the employee has no metric items. */
-  metricAttainment: number | null;
+  /** Points that were credited but excluded from `points` by the cap. */
+  selfLoggedExcluded: number;
+  /** Sales metric attainment, split per metric. Null for non-sales employees. */
+  sales: SalesAttainment | null;
   /** Average Lead review rating 1-5, or null when unreviewed. */
   reviewAvg: number | null;
   attendance: MonthlyBreakdown | null;
@@ -40,7 +66,8 @@ export type MonthlyInputs = Map<string, EmployeeRawInputs>;
 function blank(): EmployeeRawInputs {
   return {
     points: 0,
-    metricAttainment: null,
+    selfLoggedExcluded: 0,
+    sales: null,
     reviewAvg: null,
     attendance: null,
     timeliness: { onTime: 0, total: 0 },
@@ -74,7 +101,17 @@ export async function gatherMonthlyInputs(
   const year = periodStart.getUTCFullYear();
   const inputs: MonthlyInputs = new Map();
 
-  const [ledger, metricItems, reviews, attendance, dueDated, selections] = await Promise.all([
+  const [
+    ledger,
+    selfLoggedLedger,
+    metricItems,
+    reviews,
+    attendance,
+    dueDated,
+    selections,
+    perfConfig,
+    calendar,
+  ] = await Promise.all([
     // Deleting a WorkItem deliberately leaves its ledger row in place (see the
     // DELETE handler in work-items/[id]) so the credit stays auditable. That
     // makes it this reader's job to exclude it: without the join a task a Lead
@@ -88,6 +125,17 @@ export async function gatherMonthlyInputs(
       },
       _sum: { points: true },
     }),
+    // The self-logged slice of the same window, so the cap can be applied
+    // org-wide in one pass rather than per-employee (monthlyPointSplit does the
+    // same split for a single employee, for the profile screen).
+    prisma.employeePointLedger.groupBy({
+      by: ["employeeId"],
+      where: {
+        creditedAt: { gte: periodStart, lt: periodEnd },
+        workItem: { deletedAt: null, selfLogged: true },
+      },
+      _sum: { points: true },
+    }),
     prisma.workItem.findMany({
       where: {
         mode: "metric",
@@ -95,7 +143,12 @@ export async function gatherMonthlyInputs(
         periodYear: year,
         deletedAt: null,
       },
-      select: { assignedTo: true, targetValue: true, currentValue: true },
+      select: {
+        assignedTo: true,
+        salesMetric: true,
+        targetValue: true,
+        currentValue: true,
+      },
     }),
     prisma.performanceReview.groupBy({
       by: ["employeeId"],
@@ -125,24 +178,50 @@ export async function gatherMonthlyInputs(
         workItem: { select: { completedAt: true, deletedAt: true } },
       },
     }),
+    getPerformanceConfig(periodStart),
+    // The month's off-day + holiday calendar, needed to pro-rate monthly sales
+    // targets against the days a rep was actually expected to be selling.
+    // Fetched org-wide alongside everything else rather than per-department.
+    (async () => {
+      const [employees, holidays, moves] = await Promise.all([
+        prisma.employee.findMany({
+          where: { status: "active" },
+          select: {
+            id: true,
+            defaultWeeklyOffDay: true,
+            team: { select: { defaultWeeklyOffDay: true } },
+          },
+        }),
+        prisma.holiday.findMany({
+          where: { date: { gte: periodStart, lt: periodEnd } },
+          select: { date: true },
+        }),
+        prisma.weeklyOffMove.findMany({
+          where: {
+            active: true,
+            weekStart: { gte: addDays(weekStartOf(periodStart), -7), lt: addDays(periodEnd, 7) },
+          },
+          select: { employeeId: true, weekStart: true, date: true },
+        }),
+      ]);
+      return { employees, holidays, moves };
+    })(),
   ]);
 
+  const selfLoggedByEmployee = new Map(
+    selfLoggedLedger.map((r) => [r.employeeId, r._sum.points ?? 0]),
+  );
   for (const row of ledger) {
-    entry(inputs, row.employeeId).points = row._sum.points ?? 0;
-  }
-
-  const metricPcts = new Map<string, number[]>();
-  for (const item of metricItems) {
-    const target = Number(item.targetValue ?? 0);
-    const current = Number(item.currentValue ?? 0);
-    const pct = target > 0 ? (current / target) * 100 : 0;
-    const list = metricPcts.get(item.assignedTo) ?? [];
-    list.push(pct);
-    metricPcts.set(item.assignedTo, list);
-  }
-  for (const [employeeId, pcts] of metricPcts) {
-    entry(inputs, employeeId).metricAttainment =
-      pcts.reduce((a, b) => a + b, 0) / pcts.length;
+    const totalPoints = row._sum.points ?? 0;
+    const { allowed, excluded } = cappedSelfLoggedPoints({
+      selfLoggedPoints: selfLoggedByEmployee.get(row.employeeId) ?? 0,
+      totalPoints,
+      capPercent: perfConfig.selfLoggedCapPercent,
+    });
+    const e = entry(inputs, row.employeeId);
+    // total - selfLogged is the assigned half, which is never capped.
+    e.points = totalPoints - (selfLoggedByEmployee.get(row.employeeId) ?? 0) + allowed;
+    e.selfLoggedExcluded = excluded;
   }
 
   for (const row of reviews) {
@@ -151,6 +230,36 @@ export async function gatherMonthlyInputs(
 
   for (const row of attendance) {
     entry(inputs, row.employeeId).attendance = row;
+  }
+
+  // Sales attainment, per metric rather than averaged across every metric row.
+  // Site-visit and booking targets are whole-month figures, so they are
+  // pro-rated against the days this rep was expected to be selling — otherwise
+  // every rep in the org reads as a failure until the last week of the month.
+  const holidayDates = new Set(calendar.holidays.map((h) => h.date.toISOString().slice(0, 10)));
+  const movesByEmployee = new Map<string, { weekStart: Date; date: Date }[]>();
+  for (const m of calendar.moves) {
+    const list = movesByEmployee.get(m.employeeId);
+    if (list) list.push(m);
+    else movesByEmployee.set(m.employeeId, [m]);
+  }
+  const metricTotals = summariseMetricItems(metricItems);
+  for (const emp of calendar.employees) {
+    const totals = metricTotals.get(emp.id);
+    if (!totals) continue;
+    const movedOffDateByWeek = buildMovedOffDateByWeek(movesByEmployee.get(emp.id) ?? []);
+    const defaultOffDay = resolveDefaultOffDay(
+      emp.defaultWeeklyOffDay,
+      emp.team?.defaultWeeklyOffDay,
+    );
+    const expectedDaysInMonth = expectedWorkingDaysInMonth(month, year, {
+      holidayDates,
+      defaultOffDay,
+      movedOffDateByWeek,
+    });
+    const breakdown = entry(inputs, emp.id).attendance;
+    const expectedDaysElapsed = breakdown ? expectedActivityDaysElapsed(breakdown) : 0;
+    entry(inputs, emp.id).sales = attainmentFor(totals, expectedDaysElapsed, expectedDaysInMonth);
   }
 
   for (const item of dueDated) {
@@ -193,10 +302,17 @@ export function departmentBest(
 /**
  * Turn one employee's raw inputs into a composite score.
  *
- * `isMetricDepartment` selects how "output" is measured: Tech earns discrete
- * task points (compared against the department's top scorer, since a raw point
- * total means nothing in isolation), while Sales/BD work to numeric targets
- * where attainment against target is already an absolute 0-100 measure.
+ * `isMetricDepartment` selects both the weight profile and how "output" is
+ * measured. Tech earns discrete task points, compared against the department's
+ * top scorer since a raw point total means nothing in isolation, and output
+ * carries 50 of the 100 nominal weight.
+ *
+ * Sales splits that same 50 across the three metrics in the owner's locked
+ * 3:5:7 ratio, using two slots: `output` carries calls (10) and `salesOutcome`
+ * carries site visits + bookings blended (40). Each is an absolute 0-100
+ * attainment against a paced target, so no department-relative ceiling is
+ * needed — and unlike the old flat average across every metric row, a rep can
+ * no longer top the department on dialling alone.
  */
 export function scoreEmployee(
   employeeId: string,
@@ -209,16 +325,22 @@ export function scoreEmployee(
 
   if (isMetricDepartment) {
     components.output = {
-      value: raw.metricAttainment,
-      detail:
-        raw.metricAttainment === null
-          ? undefined
-          : `${Math.round(raw.metricAttainment)}% of target`,
+      value: raw.sales?.callsPct ?? null,
+      detail: raw.sales?.callsDetail ?? undefined,
+    };
+    components.salesOutcome = {
+      value: raw.sales?.outcomePct ?? null,
+      detail: raw.sales?.outcomeDetail ?? undefined,
     };
   } else {
     components.output = {
       value: relativeToBest(raw.points, best.bestPoints),
-      detail: best.bestPoints > 0 ? `${raw.points} of ${best.bestPoints} pts` : undefined,
+      detail:
+        best.bestPoints > 0
+          ? `${raw.points} of ${best.bestPoints} pts${
+              raw.selfLoggedExcluded > 0 ? ` (${raw.selfLoggedExcluded} over self-logged cap)` : ""
+            }`
+          : undefined,
     };
   }
 
@@ -250,8 +372,5 @@ export function scoreEmployee(
         : undefined,
   };
 
-  // components.salesOutcome stays unset — the CRM slot (Pillars 4/5) is not
-  // built yet, and its nominal weight is 0 so supplying it would change nothing.
-
-  return computeComposite(components);
+  return computeComposite(components, profileFor(isMetricDepartment));
 }

@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
+import { uuidFilter } from "@/lib/api/params";
 import { RecognitionPeriodType } from "@prisma/client";
 import type { CompositeResult } from "@/lib/performance/composite";
 
@@ -26,7 +27,13 @@ export async function GET(req: Request) {
 
   const url = new URL(req.url);
   const periodTypeParam = url.searchParams.get("period_type") ?? RecognitionPeriodType.monthly;
-  const departmentId = url.searchParams.get("department_id") ?? undefined;
+  // `?department_id=xyz` used to reach Prisma as a non-uuid and throw a bare
+  // 500 (P2023). Same rule as everywhere else: reject, never silently drop.
+  const departmentIdFilter = uuidFilter(url.searchParams.get("department_id"));
+  if (departmentIdFilter === null) {
+    return failFor(ErrorCode.VALIDATION, "department_id must be a uuid.");
+  }
+  const departmentId = departmentIdFilter;
 
   if (!Object.values(RecognitionPeriodType).includes(periodTypeParam as RecognitionPeriodType)) {
     return failFor(ErrorCode.VALIDATION, "period_type must be 'weekly' or 'monthly'.");
