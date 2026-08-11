@@ -1,6 +1,7 @@
 import { AttendanceApprovalStatus, EmploymentType, RequestStatus, RequestType } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { addDays, buildMovedOffDateByWeek, isOffDay, resolveDefaultOffDay, weekStartOf } from "@/lib/attendance/week";
+import { dayCredit } from "@/lib/attendance/time";
 
 // Track A (2026-07-17). Reporting-only day-by-day attendance classification —
 // present/absent/leave/holiday/compensation counts for a calendar month.
@@ -29,7 +30,13 @@ export type MonthlyBreakdown = {
   workingDaysElapsed: number;
 };
 
-type DayAttendance = { hasClockIn: boolean; isHalfDay: boolean; isCompensation: boolean };
+type DayAttendance = {
+  hasClockIn: boolean;
+  isHalfDay: boolean;
+  isCompensation: boolean;
+  /** null while the day is still open (clocked in, not yet out). */
+  totalHours: number | null;
+};
 
 type MonthLookups = {
   attendanceByDate: Map<string, DayAttendance>;
@@ -41,12 +48,27 @@ type MonthLookups = {
   movedOffDateByWeek: Map<string, string>;
   employmentType?: EmploymentType;
   requiredDaysPerWeek?: number | null;
+  /** Nothing before this date is the employee's responsibility. */
+  dateOfJoining?: Date | null;
 };
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 function dateKey(d: Date): string {
   return d.toISOString().slice(0, 10);
+}
+
+/** First day of the month to walk: day 1, or the joining day for someone who
+ *  joined mid-month. Days before an employee existed are not absences — they
+ *  used to be counted as such, deducting a full month's pay from a new hire's
+ *  first payslip and sinking their attendance score to near zero. */
+function firstElapsedDay(month: number, year: number, dateOfJoining?: Date | null): number {
+  if (!dateOfJoining) return 1;
+  const joinMonthStart = Date.UTC(dateOfJoining.getUTCFullYear(), dateOfJoining.getUTCMonth(), 1);
+  const monthStart = Date.UTC(year, month - 1, 1);
+  if (joinMonthStart < monthStart) return 1; // joined before this month
+  if (joinMonthStart > monthStart) return Infinity; // joined after it: no days count
+  return dateOfJoining.getUTCDate();
 }
 
 /** Last day of the month to actually walk: the whole month if it's fully in
@@ -75,7 +97,8 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
   };
 
   const through = lastElapsedDay(month, year);
-  if (through === 0) return result;
+  const from = firstElapsedDay(month, year, lookups.dateOfJoining);
+  if (through === 0 || from > through) return result;
 
   const isFlexible =
     lookups.employmentType !== "fulltime" &&
@@ -85,7 +108,7 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
 
   if (!isFlexible) {
     // Standard full-time (or fixed schedule) day-by-day classification
-    for (let day = 1; day <= through; day++) {
+    for (let day = from; day <= through; day++) {
       const date = new Date(Date.UTC(year, month - 1, day));
       const key = dateKey(date);
       const attendance = lookups.attendanceByDate.get(key);
@@ -109,8 +132,12 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
       if (lookups.holidayDates.has(key)) {
         result.holidayDays += 1;
       } else if (attendance?.hasClockIn) {
-        if (attendance.isHalfDay) result.halfDays += 1;
-        else result.presentDays += 1;
+        // A recorded day of zero hours is not attendance — it lands in the
+        // same bucket as not turning up.
+        const credit = dayCredit(attendance.totalHours, attendance.isHalfDay);
+        if (credit === 1) result.presentDays += 1;
+        else if (credit === 0.5) result.halfDays += 1;
+        else result.absentDays += 1;
       } else {
         const leaveType = lookups.leaveTypeByDate.get(key);
         if (leaveType === RequestType.leave_paid) result.paidLeaveDays += 1;
@@ -130,7 +157,9 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
   const todayUTC = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
 
   const weeksMap = new Map<string, { weekStart: Date; allDaysInMonth: Date[]; elapsedDays: Date[] }>();
-  for (let day = 1; day <= daysInMonth; day++) {
+  for (let day = from; day <= daysInMonth; day++) {
+    // Starting at `from` also pro-rates the joining week's quota: a part-timer
+    // who joins on a Thursday owes that week a share, not the full weekly target.
     const date = new Date(Date.UTC(year, month - 1, day));
     const wStart = weekStartOf(date);
     const wKey = dateKey(wStart);
@@ -170,8 +199,11 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
       if (lookups.holidayDates.has(key)) {
         weekHoliday += 1;
       } else if (attendance?.hasClockIn) {
-        if (attendance.isHalfDay) weekHalf += 1;
-        else weekPresent += 1;
+        const credit = dayCredit(attendance.totalHours, attendance.isHalfDay);
+        if (credit === 1) weekPresent += 1;
+        else if (credit === 0.5) weekHalf += 1;
+        // credit 0: nothing worked, so it counts toward neither — the week's
+        // quota shortfall picks it up as an absence below.
       } else {
         const leaveType = lookups.leaveTypeByDate.get(key);
         if (leaveType === RequestType.leave_paid) weekPaidLeave += 1;
@@ -287,6 +319,7 @@ async function getOffDayContext(
   movedOffDateByWeek: Map<string, string>;
   employmentType?: EmploymentType;
   requiredDaysPerWeek?: number | null;
+  dateOfJoining?: Date | null;
 }> {
   const [employee, moves] = await Promise.all([
     prisma.employee.findUnique({
@@ -295,6 +328,7 @@ async function getOffDayContext(
         employmentType: true,
         requiredDaysPerWeek: true,
         defaultWeeklyOffDay: true,
+        dateOfJoining: true,
         team: { select: { defaultWeeklyOffDay: true } },
       },
     }),
@@ -313,6 +347,7 @@ async function getOffDayContext(
     movedOffDateByWeek: buildMovedOffDateByWeek(moves),
     employmentType: employee?.employmentType,
     requiredDaysPerWeek: employee?.requiredDaysPerWeek,
+    dateOfJoining: employee?.dateOfJoining,
   };
 }
 
@@ -331,7 +366,7 @@ export async function getMonthlyAttendanceBreakdown(
         approvalStatus: AttendanceApprovalStatus.approved,
         date: { gte: periodStart, lt: periodEnd },
       },
-      select: { date: true, clockInApproved: true, isHalfDay: true, isCompensation: true },
+      select: { date: true, clockInApproved: true, isHalfDay: true, isCompensation: true, totalHours: true },
     }),
     prisma.request.findMany({
       where: {
@@ -356,6 +391,7 @@ export async function getMonthlyAttendanceBreakdown(
       hasClockIn: !!r.clockInApproved,
       isHalfDay: r.isHalfDay,
       isCompensation: r.isCompensation,
+      totalHours: r.totalHours === null ? null : Number(r.totalHours),
     });
   }
 
@@ -452,6 +488,7 @@ export async function getMonthlyAttendanceBreakdownForAllEmployees(
         employmentType: true,
         requiredDaysPerWeek: true,
         defaultWeeklyOffDay: true,
+        dateOfJoining: true,
         team: { select: { id: true, name: true, defaultWeeklyOffDay: true } },
         department: { select: { id: true, name: true } },
       },
@@ -462,7 +499,14 @@ export async function getMonthlyAttendanceBreakdownForAllEmployees(
         approvalStatus: AttendanceApprovalStatus.approved,
         date: { gte: periodStart, lt: periodEnd },
       },
-      select: { employeeId: true, date: true, clockInApproved: true, isHalfDay: true, isCompensation: true },
+      select: {
+        employeeId: true,
+        date: true,
+        clockInApproved: true,
+        isHalfDay: true,
+        isCompensation: true,
+        totalHours: true,
+      },
     }),
     prisma.request.findMany({
       where: {
@@ -506,6 +550,7 @@ export async function getMonthlyAttendanceBreakdownForAllEmployees(
       hasClockIn: !!r.clockInApproved,
       isHalfDay: r.isHalfDay,
       isCompensation: r.isCompensation,
+      totalHours: r.totalHours === null ? null : Number(r.totalHours),
     });
   }
 
@@ -531,6 +576,7 @@ export async function getMonthlyAttendanceBreakdownForAllEmployees(
       movedOffDateByWeek: buildMovedOffDateByWeek(movesByEmployee.get(e.id) ?? []),
       employmentType: e.employmentType,
       requiredDaysPerWeek: e.requiredDaysPerWeek,
+      dateOfJoining: e.dateOfJoining,
     });
     return {
       employeeId: e.id,

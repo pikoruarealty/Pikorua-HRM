@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { computeHours, getDefaultClockOut, isLateArrival, isValidHHMM } from "./time";
+import { computeHours, dayCredit, getDefaultClockOut, isLateArrival, isValidHHMM, todayDateOnly } from "./time";
 
 describe("isValidHHMM", () => {
   test("accepts 24h HH:MM", () => {
@@ -48,7 +48,7 @@ describe("computeHours", () => {
     expect(computeHours(t(9), t(18))).toEqual({ totalHours: 9, isHalfDay: false });
   });
 
-  test("within the (1.5h, 5h) band is a half-day", () => {
+  test("anything under 5 hours is a half-day", () => {
     expect(computeHours(t(9), t(13, 30))).toEqual({ totalHours: 4.5, isHalfDay: true });
     expect(computeHours(t(9), t(11))).toEqual({ totalHours: 2, isHalfDay: true });
   });
@@ -57,9 +57,12 @@ describe("computeHours", () => {
     expect(computeHours(t(9), t(14))).toEqual({ totalHours: 5, isHalfDay: false });
   });
 
-  test("at or below the 1.5h floor is NOT a half-day", () => {
-    expect(computeHours(t(9), t(10, 30))).toEqual({ totalHours: 1.5, isHalfDay: false });
-    expect(computeHours(t(9), t(10))).toEqual({ totalHours: 1, isHalfDay: false });
+  test("a very short day is a half-day, never a full one", () => {
+    // The old 1.5h floor made these isHalfDay=false, which classifyMonth then
+    // read as a FULL present day — five minutes of attendance, a whole day's pay.
+    expect(computeHours(t(9), t(10, 30))).toEqual({ totalHours: 1.5, isHalfDay: true });
+    expect(computeHours(t(9), t(10))).toEqual({ totalHours: 1, isHalfDay: true });
+    expect(computeHours(t(9), t(9, 5))).toEqual({ totalHours: 0.08, isHalfDay: true });
   });
 
   test("clock-out before clock-in clamps to 0 (not a half-day)", () => {
@@ -69,6 +72,38 @@ describe("computeHours", () => {
   test("rounds to 2 decimals", () => {
     const { totalHours } = computeHours(t(9), new Date(Date.UTC(2026, 6, 15, 17, 20)));
     expect(totalHours).toBe(8.33);
+  });
+});
+
+describe("dayCredit", () => {
+  test("an open day (no clock-out yet) counts as present", () => {
+    expect(dayCredit(null, false)).toBe(1);
+    expect(dayCredit(undefined, false)).toBe(1);
+  });
+
+  test("a full day is worth 1, a half-day 0.5", () => {
+    expect(dayCredit(9, false)).toBe(1);
+    expect(dayCredit(3, true)).toBe(0.5);
+  });
+
+  test("zero or inverted hours are worth nothing, not a full day", () => {
+    expect(dayCredit(0, false)).toBe(0);
+    expect(dayCredit(-2, false)).toBe(0);
+    // even if some caller had wrongly flagged it a half-day
+    expect(dayCredit(0, true)).toBe(0);
+  });
+});
+
+describe("todayDateOnly", () => {
+  test("uses the server's LOCAL calendar day, at UTC midnight", () => {
+    const d = todayDateOnly();
+    const now = new Date();
+    expect(d.getUTCFullYear()).toBe(now.getFullYear());
+    expect(d.getUTCMonth()).toBe(now.getMonth());
+    // The old toISOString().slice(0,10) form returned the UTC day, which is
+    // yesterday for the whole 00:00-05:30 window in IST.
+    expect(d.getUTCDate()).toBe(now.getDate());
+    expect(d.getUTCHours()).toBe(0);
   });
 });
 

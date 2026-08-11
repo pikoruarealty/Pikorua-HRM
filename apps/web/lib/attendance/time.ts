@@ -31,12 +31,20 @@ export function isLateArrival(
   return arrivalMinutes > parseHHMM(expectedStartTime) + graceMinutes;
 }
 
+/** Below this many hours a day is a half-day; at or above it, a full day. */
+export const FULL_DAY_HOURS = 5;
+
 export function computeHours(clockIn: Date, clockOut: Date): { totalHours: number; isHalfDay: boolean } {
   const ms = clockOut.getTime() - clockIn.getTime();
   const totalHours = Math.max(0, Math.round((ms / 3_600_000) * 100) / 100);
-  // Half-day is the band (1.5h, 5h): a very short day (<=1.5h) is not a
-  // half-day, and >=5h is a full day.
-  return { totalHours, isHalfDay: totalHours > 1.5 && totalHours < 5 };
+  // Anything worked below the full-day threshold is a half-day. There used to
+  // be a 1.5h floor below which a day was "not a half-day" — but nothing ever
+  // implemented the other half of that idea, so a day *under* the floor fell
+  // through as isHalfDay=false and was paid as a FULL day: clocking in and
+  // straight back out earned more than working four hours. A short day is now
+  // uniformly worth half. Zero (or a bad manual edit that inverts the times)
+  // is worth nothing — see dayCredit().
+  return { totalHours, isHalfDay: totalHours > 0 && totalHours < FULL_DAY_HOURS };
 }
 
 /**
@@ -71,8 +79,40 @@ export function getDefaultClockOut(
   return defaultOut;
 }
 
-/** Server-local "today" as a Date at UTC midnight, matching the @db.Date column. */
+/** Server-local "today" as a Date at UTC midnight, matching the @db.Date column.
+ *
+ *  Built from the server's LOCAL calendar fields, not from toISOString(). In any
+ *  timezone ahead of UTC (IST is +5:30) the ISO form rolls back to yesterday for
+ *  the whole early-morning window — someone clocking in at 03:00 IST was filed
+ *  against the previous day, colliding with the record they already have there.
+ *  Everything else that asks "what day is it" (lastElapsedDay in
+ *  monthly-breakdown.ts) already uses local fields, so this makes the pair
+ *  agree. */
 export function todayDateOnly(): Date {
-  return new Date(new Date().toISOString().slice(0, 10));
+  const now = new Date();
+  return new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+}
+
+/** How much of a working day one attendance record is worth. */
+export type DayCredit = 0 | 0.5 | 1;
+
+/**
+ * The single place that decides what a day of attendance is worth, so payroll,
+ * the monthly breakdown and the performance score cannot disagree.
+ *
+ * `totalHours` is null while the day is still open (clocked in, not yet out) —
+ * an in-progress day counts as present; it is not the employee's fault the day
+ * has not finished. A recorded day of zero (or negative, from a bad manual
+ * edit) is worth nothing: previously it fell through `isHalfDay === false` and
+ * was paid as a full day, so a five-minute clock-in/clock-out earned a whole
+ * day's wages.
+ */
+export function dayCredit(
+  totalHours: number | null | undefined,
+  isHalfDay: boolean,
+): DayCredit {
+  if (totalHours == null) return 1;
+  if (totalHours <= 0) return 0;
+  return isHalfDay ? 0.5 : 1;
 }
 
