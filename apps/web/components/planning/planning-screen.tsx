@@ -34,7 +34,15 @@ export function PlanningScreen({ isAdmin = false }: { isAdmin?: boolean }) {
   const [checked, setChecked] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const { attendance, clockedIn, clockedOut, refresh: refreshAttendance } = useAttendanceStatus();
+  const [workLocation, setWorkLocation] = useState<"office" | "wfh">("office");
+  const {
+    attendance,
+    sessions,
+    openSession,
+    clockedIn,
+    clockedOut,
+    refresh: refreshAttendance,
+  } = useAttendanceStatus();
 
   async function refresh() {
     const [mineRes, todayRes, eodRes] = await Promise.all([
@@ -72,7 +80,7 @@ export function PlanningScreen({ isAdmin = false }: { isAdmin?: boolean }) {
     const workItemIds = selectedIds();
     const res = await apiFetch("/attendance/clock-in", {
       method: "POST",
-      body: JSON.stringify(workItemIds.length ? { workItemIds } : {}),
+      body: JSON.stringify({ ...(workItemIds.length ? { workItemIds } : {}), workLocation }),
     });
     setBusy(false);
     if (res.error) setError(`${res.error.code}: ${res.error.message}`);
@@ -95,10 +103,16 @@ export function PlanningScreen({ isAdmin = false }: { isAdmin?: boolean }) {
     refresh();
   }
 
-  async function clockOut() {
+  // `endOfDay: false` is "stepping out" — it closes the current session but
+  // doesn't wrap the day up or report it to management, and the employee can
+  // clock straight back in. They just can't log any progress while out.
+  async function clockOut(endOfDay: boolean) {
     setError(null);
     setBusy(true);
-    const res = await apiFetch<{ eod: Eod }>("/attendance/clock-out", { method: "POST" });
+    const res = await apiFetch<{ eod: Eod }>("/attendance/clock-out", {
+      method: "POST",
+      body: JSON.stringify({ endOfDay }),
+    });
     setBusy(false);
     if (res.error) {
       setError(`${res.error.code}: ${res.error.message}`);
@@ -124,38 +138,62 @@ export function PlanningScreen({ isAdmin = false }: { isAdmin?: boolean }) {
           <CardTitle className="flex items-center gap-2">
             Attendance
             <Badge variant={clockedIn ? "default" : "outline"}>
-              {clockedOut ? "clocked out" : clockedIn ? "clocked in" : "not clocked in"}
+              {clockedIn ? "clocked in" : clockedOut ? "clocked out" : "not clocked in"}
             </Badge>
+            {clockedIn && openSession?.workLocation === "wfh" && (
+              <Badge variant="outline">work from home</Badge>
+            )}
           </CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           {!clockedIn && (
             <>
               <p className="text-sm text-muted-foreground">
-                {activeItems.length > 0
-                  ? "Select at least one task for today, then clock in."
-                  : "You have no active tasks to plan — you can clock in directly."}
+                {clockedOut
+                  ? "You're clocked out. Clock in again to keep working — you can't log progress while you're out."
+                  : activeItems.length > 0
+                    ? "Select at least one task for today, then clock in."
+                    : "You have no active tasks to plan — you can clock in directly."}
               </p>
-              <div className="flex flex-col gap-2">
-                {activeItems.length === 0 && (
-                  <p className="text-sm text-muted-foreground">No active work items to plan.</p>
-                )}
-                {activeItems.map((wi) => (
-                  <label key={wi.id} className="flex items-center gap-2 text-sm">
+              {!clockedOut && (
+                <div className="flex flex-col gap-2">
+                  {activeItems.length === 0 && (
+                    <p className="text-sm text-muted-foreground">No active work items to plan.</p>
+                  )}
+                  {activeItems.map((wi) => (
+                    <label key={wi.id} className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={!!checked[wi.id]}
+                        onChange={(e) => setChecked((c) => ({ ...c, [wi.id]: e.target.checked }))}
+                      />
+                      {wi.title} <span className="text-muted-foreground">({statusLabel(wi.status)})</span>
+                      <DueDateBadge dueDate={wi.dueDate} />
+                    </label>
+                  ))}
+                </div>
+              )}
+              {/* Where they're working from. A WFH day is a fully worked, fully
+                  paid day — it just isn't recorded by the office device. */}
+              <div className="flex items-center gap-3 text-sm">
+                <span className="text-muted-foreground">Working from</span>
+                {(["office", "wfh"] as const).map((loc) => (
+                  <label key={loc} className="flex items-center gap-1">
                     <input
-                      type="checkbox"
-                      checked={!!checked[wi.id]}
-                      onChange={(e) => setChecked((c) => ({ ...c, [wi.id]: e.target.checked }))}
+                      type="radio"
+                      name="workLocation"
+                      checked={workLocation === loc}
+                      onChange={() => setWorkLocation(loc)}
                     />
-                    {wi.title} <span className="text-muted-foreground">({statusLabel(wi.status)})</span>
-                    <DueDateBadge dueDate={wi.dueDate} />
+                    {loc === "office" ? "Office" : "Home"}
                   </label>
                 ))}
               </div>
-              <Button className="w-fit" onClick={clockIn} disabled={busy || clockInBlocked}>
-                Clock in{selectedIds().length ? ` with ${selectedIds().length} task(s)` : ""}
+              <Button className="w-fit" onClick={clockIn} disabled={busy || (!clockedOut && clockInBlocked)}>
+                {clockedOut ? "Clock back in" : "Clock in"}
+                {!clockedOut && selectedIds().length ? ` with ${selectedIds().length} task(s)` : ""}
               </Button>
-              {clockInBlocked && (
+              {!clockedOut && clockInBlocked && (
                 <p className="text-xs text-muted-foreground">
                   Select at least one task above to clock in.
                 </p>
@@ -163,11 +201,12 @@ export function PlanningScreen({ isAdmin = false }: { isAdmin?: boolean }) {
             </>
           )}
 
-          {clockedIn && !clockedOut && (
+          {clockedIn && (
             <>
               <p className="text-sm text-muted-foreground">
-                Clocked in at {new Date(attendance!.clockInRaw!).toLocaleTimeString()}. Add more tasks
-                below, or clock out to wrap up the day.
+                Clocked in at {new Date(openSession!.clockIn).toLocaleTimeString()}
+                {sessions.length > 1 ? ` (session ${sessions.length} today)` : ""}. Add more tasks
+                below, step out for a break, or clock out to wrap up the day.
               </p>
               {activeItems.length > 0 && (
                 <div className="flex flex-col gap-2">
@@ -189,16 +228,21 @@ export function PlanningScreen({ isAdmin = false }: { isAdmin?: boolean }) {
                   </Button>
                 </div>
               )}
-              <Button className="w-fit" onClick={clockOut} disabled={busy}>
-                Clock out &amp; generate EOD
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <Button variant="outline" className="w-fit" onClick={() => clockOut(false)} disabled={busy}>
+                  Step out (break)
+                </Button>
+                <Button className="w-fit" onClick={() => clockOut(true)} disabled={busy}>
+                  Clock out &amp; generate EOD
+                </Button>
+              </div>
             </>
           )}
 
-          {clockedOut && (
-            <p className="text-sm text-muted-foreground">
-              Clocked out at {new Date(attendance!.clockOutRaw!).toLocaleTimeString()}. See your EOD
-              summary below.
+          {clockedOut && attendance?.clockOutRaw && (
+            <p className="text-xs text-muted-foreground">
+              Last clocked out at {new Date(attendance.clockOutRaw).toLocaleTimeString()}
+              {sessions.length > 1 ? ` · ${sessions.length} sessions today` : ""}.
             </p>
           )}
         </CardContent>

@@ -60,7 +60,16 @@ export async function GET(req: Request) {
 
   const records = await prisma.attendanceRecord.findMany({
     where,
-    include: { employee: { select: { id: true, fullName: true } } },
+    include: {
+      employee: { select: { id: true, fullName: true } },
+      // Sessions come along so a client can tell "clocked out for the day" from
+      // "on a break" (an open session), and show the day's real worked time
+      // rather than last-out minus first-in.
+      sessions: {
+        select: { id: true, clockIn: true, clockOut: true, workLocation: true },
+        orderBy: { clockIn: "asc" },
+      },
+    },
     orderBy: [{ date: "desc" }],
   });
 

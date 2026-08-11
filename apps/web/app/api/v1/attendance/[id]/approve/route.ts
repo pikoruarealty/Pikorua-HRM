@@ -4,6 +4,7 @@ import { getSession } from "@/lib/auth";
 import { FINANCE_ROLES } from "@/lib/rbac";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { computeHours, getDefaultClockOut } from "@/lib/attendance/time";
+import { summariseSessions } from "@/lib/attendance/sessions";
 import { audit, clientIp } from "@/lib/audit";
 
 // Track A. PATCH /api/v1/attendance/:id/approve — Admin/HR. If not
@@ -26,6 +27,7 @@ export async function PATCH(
   const existing = await prisma.attendanceRecord.findUnique({
     where: { id: params.id },
     include: {
+      sessions: { select: { clockIn: true, clockOut: true } },
       employee: {
         select: {
           id: true,
@@ -52,7 +54,17 @@ export async function PATCH(
     existing.clockOutRaw ??
     getDefaultClockOut(clockInApproved, existing.employee?.team?.expectedStartTime ?? "11:00");
 
-  const { totalHours, isHalfDay } = computeHours(clockInApproved, clockOutApproved);
+  // Hours come from the day's sessions when it has them — a day can be several
+  // stretches of work with breaks between (2026-08-11), and approved-out minus
+  // approved-in would pay those breaks. Approved times still win if Admin/HR
+  // edited them by hand (PATCH .../edit), which leaves total_hours already set
+  // from those times; here we only recompute for the untouched case.
+  const editedByHand = existing.clockInApproved !== null || existing.clockOutApproved !== null;
+  const closedSessions = existing.sessions.filter((s) => s.clockOut !== null);
+  const { totalHours, isHalfDay } =
+    !editedByHand && closedSessions.length > 0
+      ? summariseSessions(closedSessions)
+      : computeHours(clockInApproved, clockOutApproved);
 
   const updated = await prisma.attendanceRecord.update({
     where: { id: params.id },

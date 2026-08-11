@@ -131,7 +131,9 @@ export function MyTasksScreen() {
   const [error, setError] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const { clockedIn, clockedOut, loading: attendanceLoading } = useAttendanceStatus();
-  const canModify = clockedIn && !clockedOut;
+  // Progress is logged only while actually clocked in. Clocking out no longer
+  // ends the day — they can clock straight back in and carry on.
+  const canModify = clockedIn;
 
   async function refresh() {
     const res = await apiFetch<WorkItem[]>("/work-items/mine");
@@ -185,9 +187,9 @@ export function MyTasksScreen() {
       {error && <p className="text-sm text-destructive">{error}</p>}
       {!attendanceLoading && !canModify && (
         <p className="rounded border bg-muted/30 p-3 text-sm text-muted-foreground">
-          {clockedOut ? "You've clocked out for today — " : "You're not clocked in — "}
+          {clockedOut ? "You're clocked out right now — " : "You're not clocked in — "}
           <Link href="/planning" className="underline">
-            clock in from Daily Planning
+            clock {clockedOut ? "back " : ""}in from Daily Planning
           </Link>{" "}
           to update your tasks.
         </p>

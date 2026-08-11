@@ -1,9 +1,10 @@
 import { z } from "zod";
-import { WorkItemStatus } from "@prisma/client";
+import { AttendanceApprovalStatus, WorkItemStatus, WorkLocation } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { todayDateOnly } from "@/lib/attendance/time";
+import { findOpenSession } from "@/lib/attendance/sessions";
 
 // Track A. POST /api/v1/attendance/clock-in — any authenticated user with a
 // linked employee record clocks themselves in (attendance applies org-wide,
@@ -15,8 +16,20 @@ import { todayDateOnly } from "@/lib/attendance/time";
 // semantics as POST /daily-selections). Selecting at least one task is REQUIRED
 // when the employee has any active (non-completed) assigned tasks; an employee
 // with nothing assigned can still clock in (they have nothing to pick).
+//
+// 2026-08-11: clocking out is no longer the end of the day. Each clock-in opens
+// an AttendanceSession and each clock-out closes it, so an employee can step out
+// and come back as often as they need; only the open session gates progress
+// logging ("you may clock in again, but you can't log work while clocked out").
+// `workLocation` marks the session as office or work-from-home — a WFH day is a
+// normally worked, normally paid day, it just never comes off the biometric
+// device.
 const bodySchema = z
-  .object({ workItemIds: z.array(z.string().uuid()).optional() })
+  .object({
+    workItemIds: z.array(z.string().uuid()).optional(),
+    workLocation: z.nativeEnum(WorkLocation).optional(),
+  })
+  .strict()
   .optional();
 
 export async function POST(req: Request) {
@@ -31,6 +44,7 @@ export async function POST(req: Request) {
 
   // Body is optional — a bare clock-in with no task selection is still valid.
   let workItemIds: string[] = [];
+  let workLocation: WorkLocation = WorkLocation.office;
   const raw = await req.text();
   if (raw.trim().length > 0) {
     let parsedBody: unknown;
@@ -41,10 +55,41 @@ export async function POST(req: Request) {
     }
     const parsed = bodySchema.safeParse(parsedBody);
     if (!parsed.success) {
-      return failFor(ErrorCode.VALIDATION, "workItemIds must be an array of UUIDs.");
+      return failFor(
+        ErrorCode.VALIDATION,
+        "workItemIds must be an array of UUIDs and workLocation one of: office, wfh.",
+      );
     }
     workItemIds = [...new Set(parsed.data?.workItemIds ?? [])];
+    workLocation = parsed.data?.workLocation ?? WorkLocation.office;
   }
+
+  const date = todayDateOnly();
+  const now = new Date();
+
+  const existing = await prisma.attendanceRecord.findUnique({
+    where: { employeeId_date: { employeeId, date } },
+  });
+
+  if (existing && (await findOpenSession(existing.id))) {
+    return fail(ErrorCode.CONFLICT, "Already clocked in today.", 409);
+  }
+
+  // Reopening an approved day would silently invalidate the approved times
+  // (and the payroll figures derived from them) with no one reviewing the
+  // change. Admin/HR can reopen it via PATCH /attendance/:id/edit instead.
+  if (existing?.approvalStatus === AttendanceApprovalStatus.approved) {
+    return fail(
+      ErrorCode.CONFLICT,
+      "Today's attendance has already been approved — ask Admin/HR to reopen it.",
+      409,
+    );
+  }
+
+  // Whether this opens the day or resumes it. Resuming skips the "pick a task"
+  // requirement — the day's plan was already made at the first clock-in, and
+  // making someone re-plan after a lunch break is friction, not discipline.
+  const isFirstSessionToday = !existing?.clockInRaw;
 
   // Validate selections before recording anything, so a bad id fails the whole
   // request rather than clocking in with a partial/rejected plan.
@@ -56,7 +101,7 @@ export async function POST(req: Request) {
     ) {
       return failFor(ErrorCode.VALIDATION, "All workItemIds must reference WorkItems assigned to you.");
     }
-  } else {
+  } else if (isFirstSessionToday) {
     // No tasks picked: require at least one IF the employee has active tasks to
     // pick from. Someone with nothing assigned can still clock in.
     // `in_review` counts as not-actionable alongside `completed`: the task is
@@ -78,25 +123,27 @@ export async function POST(req: Request) {
     }
   }
 
-  const date = todayDateOnly();
-  const now = new Date();
-
-  const existing = await prisma.attendanceRecord.findUnique({
-    where: { employeeId_date: { employeeId, date } },
-  });
-
-  if (existing?.clockInRaw) {
-    return fail(ErrorCode.CONFLICT, "Already clocked in today.", 409);
-  }
-
   const record = existing
     ? await prisma.attendanceRecord.update({
         where: { id: existing.id },
-        data: { clockInRaw: now },
+        data: {
+          // clock_in_raw is the day's FIRST punch in — late-arrival is measured
+          // from it, so a post-lunch return must never overwrite it.
+          ...(existing.clockInRaw ? {} : { clockInRaw: now, workLocation }),
+          // The day is open again: it has no end time, and its worked hours are
+          // not final. Both are recomputed from the sessions at clock-out.
+          clockOutRaw: null,
+          totalHours: null,
+          isHalfDay: false,
+        },
       })
     : await prisma.attendanceRecord.create({
-        data: { employeeId, date, clockInRaw: now },
+        data: { employeeId, date, clockInRaw: now, workLocation },
       });
+
+  const openSession = await prisma.attendanceSession.create({
+    data: { recordId: record.id, clockIn: now, workLocation },
+  });
 
   if (workItemIds.length > 0) {
     await prisma.dailyTaskSelection.createMany({
@@ -105,5 +152,5 @@ export async function POST(req: Request) {
     });
   }
 
-  return ok(record, 201);
+  return ok({ ...record, currentSession: openSession }, 201);
 }

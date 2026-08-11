@@ -32,5 +32,15 @@ Bhavarth is the sole developer on this repo. The former **two-track split** (Tra
 - **Profile photos:** `POST /employees` is **multipart/form-data** (fields + optional `photo` file), not JSON — the photo was required at creation from 2026-07-15 until 2026-08-05, now **optional** (can be added later via `PUT /employees/:id/photo`). Stored as opaque local-storage keys; always expose via `/employees/:id/photo` (use `withPhotoPath` from `@/lib/employees/photo`), never the raw key.
 - **Admin manual overrides (2026-07-15):** `request.override`, `payslip unfinalize`/`delete draft`, `announcement delete` are **Admin-only** (deliberately narrower than Admin/HR), require a `reason` where applicable, and must stay audited. Don't widen these to HR. `attendance/manual` (single + bulk) was **widened to Admin/HR on 2026-08-07** — owner request; it's now access-gated the same as `attendance/:id/edit` (`FINANCE_ROLES`), still audited, still requires a `reason`.
 
-## Deferred (do NOT build in v1)
-Biometric device LAN-sync (`device_punch_raw`, device worker), statutory deductions (PF/ESI/TDS), asset management beyond the stub, non-tech incentive automation.
+## Attendance sessions (2026-08-11)
+A day is one `attendance_records` row **plus one or more `attendance_sessions`**. Clocking out closes the current session; it does not end the day, and the employee can clock back in as often as they need. Consequences that are easy to get wrong:
+- `clock_in_raw` is the day's **first** punch in (late-arrival is measured from it) and `clock_out_raw` the **last** — never a single stretch of work.
+- Worked time is the **sum of closed sessions** (`summariseSessions` in `@/lib/attendance/sessions`), never last-out minus first-in, or breaks get paid as work.
+- "Clocked in right now" = an open session today (`isClockedInNow`). That is the gate on completing tasks and self-logging: an employee may clock back in freely, but **cannot log progress while clocked out**.
+- `work_location` (`office` | `wfh`) is set per session at clock-in. A WFH day is a normally worked, normally paid day — distinct from the pre-existing `RequestType.wfh` (asking permission ahead of time).
+
+## Biometric / TeamOffice integration — IN SCOPE
+The office biometric punch system is part of this project (API docs PDF in the repo root, gitignored; corporate id/username/password in `.env`). Every punch opens or closes an `attendance_sessions` row, so a device day and a manual day are the same object — `source` becomes `device_sync` and `employees.device_uid` maps the employee. Still open: source-of-truth between HRMS and the TeamOffice DB, and the name-match autoselect for mapping new hires.
+
+## Deferred (do NOT build)
+Statutory deductions (PF/ESI/TDS), asset management beyond the stub, non-tech incentive automation.

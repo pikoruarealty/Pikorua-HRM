@@ -44,13 +44,13 @@
 
 ## 3. Attendance — **Track A**
 
-> **v1 = manual clock-in/clock-out + HR/Admin approval.** The biometric device LAN-sync worker and its internal endpoint are **deferred, not built in v1** — see PRD §5.1.1 and Implementation Plan for the future-phase design (kept for context continuity only).
+> **Manual clock-in/clock-out + HR/Admin approval.** A day is one `attendance_records` row plus one or more `attendance_sessions` (see SCHEMA §3) — clocking out closes the current session, it does not end the day. The TeamOffice biometric feed is in scope and lands on the same session shape.
 
 | Method | Path | Roles | Notes |
 |---|---|---|---|
-| POST | `/attendance/clock-in` | Employee | Server-timestamped; creates/updates today's `attendance_records` row for the current employee with `clock_in_raw` |
-| POST | `/attendance/clock-out` | Employee | Server-timestamped; sets `clock_out_raw` on today's row |
-| GET | `/attendance` | Admin/HR (all), Lead (own team), Employee (self) | filters: `employee_id`, `date_from`, `date_to`, `approval_status` |
+| POST | `/attendance/clock-in` | Employee | Server-timestamped. Body (optional): `{ workItemIds?: uuid[], workLocation?: "office" \| "wfh" }`, `.strict()`. Opens a new **session** on today's record, creating the record (and setting `clock_in_raw` + `work_location`) if this is the day's first. Re-clock-in after a clock-out is allowed and reopens the day (`clock_out_raw`/`total_hours` back to `null`); it never moves `clock_in_raw`. `409` if a session is already open, or if the day is already **approved** (Admin/HR must reopen it). Picking ≥1 task is required only on the day's **first** clock-in, and only when the employee has active tasks. Returns the record plus `currentSession`. |
+| POST | `/attendance/clock-out` | Employee | Server-timestamped. Body (optional): `{ endOfDay?: boolean }` (default `true`), `.strict()`. Closes the open session and re-sums `total_hours` from **all** the day's sessions (breaks excluded). `endOfDay: false` = stepping out for a break: no EOD wrap-up notification to self or management. `409` if no session is open. Returns `{ record, eod, endOfDay }`. |
+| GET | `/attendance` | Admin/HR (all), Lead (own team), Employee (self) | filters: `employee_id`, `date_from`, `date_to`, `approval_status`. Each record includes its `sessions` (`id`, `clockIn`, `clockOut`, `workLocation`), oldest first — an open session is how a client tells "on a break" from "done for the day". |
 | GET | `/attendance/:employee_id/summary` | Admin/HR, Lead (own team), Employee (self) | monthly summary: total late count, half-days, unpaid leave days — computed from **approved** records only, feeds payroll |
 | PATCH | `/attendance/:id/edit` | Admin/HR | Edits `clock_in_approved`/`clock_out_approved` (e.g., correcting a forgotten clock-out) |
 | PATCH | `/attendance/:id/approve` | Admin/HR | Sets `approval_status = approved`, `approved_by`, `approved_at`. If not separately edited first, approved times default to the raw values. |
@@ -190,7 +190,8 @@
 
 These run via a lightweight cron mechanism (see Implementation Plan §6 — no LAN-dependent worker needed in v1):
 
-- **On clock-in/out**: compute `total_hours`/`is_half_day` for the day's `attendance_records` row once both times exist (does not require approval first, but payroll only counts `approved` rows).
+- **On clock-out**: re-sum `total_hours`/`is_half_day` for the day's `attendance_records` row from its sessions (does not require approval first, but payroll only counts `approved` rows). While a session is open both are `null`/`false` — the day isn't finished.
+- **Daily (EOD cleanup)**: `lib/cron/attendance-eod-cleanup.ts` deletes empty phantom records for past dates and closes any past day left with an **open session**, defaulting each unclosed session's clock-out from that session's own start (team expected start + 9h, else 20:00) and re-summing the day.
 - **Nightly**: check `date_of_birth`/`date_of_joining` against today's date → populate `events/today` cache + push birthday/anniversary notifications.
 - **Recurring, per-meeting**: at `scheduled_at − reminder_lead_minutes`, push a reminder notification to all invitees (individual + expanded team invitees) of each upcoming meeting.
 - **Hourly (added 2026-08-10, Pillar 4)**: `lib/cron/crm-sync.ts` at `15 * * * *` (plus a boot-time run) pulls `GET https://crm.pikoruarealty.com/api/hrm/activity?from=&to=` with a Bearer `CRM_API_KEY`, upserts a 2-day lookback window into `sales_activity_sync`, writes through into each matched rep's `WorkItem`s, then re-provisions any missing sales targets. Unmatched rows are kept, flagged, and WARN-logged — never guessed onto a rep. ⚠️ The CRM is IP-allowlisted to the production VM, so a 401 from a dev machine is the allowlist, not a bad key.

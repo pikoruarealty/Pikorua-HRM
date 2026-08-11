@@ -150,30 +150,51 @@ Append-only ledger crediting task points on completion (Atomic tasks only, Tech)
 
 ## 3. Attendance
 
-> **v1 = manual clock-in/clock-out + HR/Admin approval.** The biometric device LAN-sync integration (`device_punch_raw`, device UID mapping) is deferred — see the "Future phase" subsection below. Do not build the deferred tables/endpoints in v1, but the schema is structured so adding them later doesn't require reshaping `attendance_records`.
+> **Manual clock-in/clock-out + HR/Admin approval.** A day is one `attendance_records` row plus one or more `attendance_sessions` rows — see below. The biometric (TeamOffice) punch feed lands on the same shape: every punch opens or closes a session.
 
 ### `attendance_records`
+One row per employee per day. The clock columns are the day's **bounds**, not a single stretch of work.
 | Column | Type | Notes |
 |---|---|---|
 | id | uuid PK | |
 | employee_id | uuid FK → employees.id | |
 | date | date | |
-| clock_in_raw | timestamptz? | as originally recorded by the employee's Clock In tap (server timestamp) |
-| clock_out_raw | timestamptz? | as originally recorded by the employee's Clock Out tap |
+| clock_in_raw | timestamptz? | the day's **first** punch in (server timestamp). Late-arrival is measured from this, so a post-break return never overwrites it |
+| clock_out_raw | timestamptz? | the day's **last** punch out; `null` while a session is open (including after a re-clock-in) |
 | clock_in_approved | timestamptz? | HR/Admin-edited/approved value; falls back to `clock_in_raw` if unedited |
 | clock_out_approved | timestamptz? | HR/Admin-edited/approved value; falls back to `clock_out_raw` if unedited |
-| total_hours | numeric(4,2)? | derived from the approved times |
-| is_half_day | boolean | derived: total_hours < 5 |
+| total_hours | numeric(4,2)? | **sum of the day's closed sessions**, not last-out minus first-in — otherwise breaks would be paid as work. `null` while a session is open |
+| is_half_day | boolean | derived: `0 < total_hours < 5` |
 | approval_status | enum | `pending`, `approved` — payroll should only count `approved` records for a finalized payslip |
 | approved_by | uuid FK → users.id ? | must be role admin/hr |
 | approved_at | timestamptz? | |
-| source | enum | `manual` (v1 default), `device_sync` (reserved for future phase), `manual_import` (reserved for future phase) |
+| source | enum | `manual` (default), `device_sync`, `manual_import` (both for the biometric feed) |
+| work_location | enum | `office` (default) or `wfh`. Copied from the day's **first** session; per-session location is authoritative. A WFH day is a normally worked, normally paid day — it simply never comes off the office device |
 | created_at | timestamptz | |
 | updated_at | timestamptz | |
 
-### Future phase (on hold — not built in v1): `device_punch_raw`
+### `attendance_sessions` (2026-08-11)
+One continuous stretch of clocked-in time. Added because clocking out used to end the day permanently: an employee who stepped out at lunch could not come back, and could not log any progress for the rest of the day.
+| Column | Type | Notes |
+|---|---|---|
+| id | uuid PK | |
+| attendance_record_id | uuid FK → attendance_records.id | `ON DELETE CASCADE` |
+| clock_in | timestamptz | |
+| clock_out | timestamptz? | `null` = the open session; **at most one per record** |
+| source | enum | as above — `device_sync` for a biometric punch pair |
+| work_location | enum | `office` / `wfh` |
+| created_at | timestamptz | |
 
-Reserved for when the biometric device LAN-sync phase is revisited. Raw punches would be pulled from the device before being reconciled into `attendance_records`, keeping raw data separate so reconciliation logic can be re-run without re-polling the device. Columns (for reference, not to be created now): `device_uid`, `punch_time`, `direction`, `synced_at`, `dedup_key`. At that point, `employees.device_uid` (already present in the schema below) would be populated and `attendance_records.source` would start being set to `device_sync`.
+Invariants (enforced by the clock-in/clock-out routes, not by DB constraints):
+- at most one session per record has `clock_out IS NULL`;
+- sessions do not overlap and run in chronological order;
+- `attendance_records.total_hours` = sum of closed sessions (`lib/attendance/sessions.ts`).
+
+"Clocked in **right now**" — which is what gates task completion and self-logging — means *an open session exists today*, not "clocked in at some point today".
+
+### Planned: `device_punch_raw` (TeamOffice biometric feed)
+
+Raw punches pulled from / pushed by the device, kept separate from `attendance_records` so reconciliation can be re-run without re-polling. Columns: `device_uid`, `punch_time`, `direction`, `synced_at`, `dedup_key`. Reconciliation maps a punch pair onto one `attendance_sessions` row, so a device day and a manual day are the same object; `employees.device_uid` maps the employee and `attendance_records.source` becomes `device_sync`.
 
 ---
 

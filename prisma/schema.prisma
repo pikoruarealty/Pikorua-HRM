@@ -112,13 +112,24 @@ enum AttendanceApprovalStatus {
   approved
 }
 
-// `manual` is the v1 default. device_sync / manual_import reserved for the
-// deferred biometric LAN-sync phase (PRD §5.1.1) — kept so adding the phase
-// later needs no reshape of attendance_records.
+// `manual` is the v1 default. device_sync / manual_import are for the
+// biometric (TeamOffice) punch feed — kept so wiring the device up needs no
+// reshape of attendance_records or attendance_sessions.
 enum AttendanceSource {
   manual
   device_sync
   manual_import
+}
+
+// Where a clock-in happened. Work-from-home is a first-class attendance
+// location (2026-08-11), not a leave request: a WFH day is a fully worked,
+// fully paid day — it just never comes from the office biometric device, so
+// the source stays `manual` while the location says `wfh`. The pre-existing
+// RequestType.wfh is a different thing (asking permission ahead of time) and
+// is left alone.
+enum WorkLocation {
+  office
+  wfh
 }
 
 enum RequestType {
@@ -608,6 +619,12 @@ model AttendanceRecord {
   employeeId       String   @map("employee_id") @db.Uuid
   employee         Employee @relation(fields: [employeeId], references: [id])
   date             DateTime @db.Date
+  // The day's BOUNDS, not a single stretch of work. With re-clock-in
+  // (2026-08-11) a day can be several sessions: clock_in_raw is the first
+  // punch in of the day (what late-arrival is measured from) and
+  // clock_out_raw the last punch out, or null while a session is open.
+  // Worked time is the SUM of attendance_sessions, never out-minus-in —
+  // otherwise a lunch break would be paid as work.
   clockInRaw       DateTime? @map("clock_in_raw") @db.Timestamptz(6)
   clockOutRaw      DateTime? @map("clock_out_raw") @db.Timestamptz(6)
   clockInApproved  DateTime? @map("clock_in_approved") @db.Timestamptz(6)
@@ -626,12 +643,45 @@ model AttendanceRecord {
   approvedBy       User?    @relation("AttendanceApprover", fields: [approvedById], references: [id])
   approvedAt       DateTime? @map("approved_at") @db.Timestamptz(6)
   source           AttendanceSource @default(manual)
+  // The day's location, taken from the FIRST session of the day. Per-session
+  // location is the authoritative value (someone can come in after a WFH
+  // morning); this copy exists so attendance lists and filters don't have to
+  // join sessions to answer "was this a WFH day?".
+  workLocation     WorkLocation @default(office) @map("work_location")
+  sessions         AttendanceSession[]
   createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   @@unique([employeeId, date])
   @@index([approvalStatus])
   @@map("attendance_records")
+}
+
+// One continuous stretch of clocked-in time (2026-08-11). Added because
+// clock-out used to be terminal for the day: an employee who stepped out at
+// lunch could not come back, and the alternative — reopening the single
+// clock_out_raw — would have paid the break as work and destroyed the day's
+// first-in time that late-arrival depends on.
+//
+// Invariants (enforced by the clock-in/clock-out routes, not the DB):
+//  - at most ONE session per record has clock_out = null (the open one);
+//  - sessions never overlap, and run in chronological order;
+//  - record.total_hours = sum of closed sessions (see lib/attendance/sessions).
+// This is also the shape the TeamOffice biometric feed needs: every punch
+// opens or closes a session, so a device day and a manual day are the same
+// object.
+model AttendanceSession {
+  id           String   @id @default(uuid()) @db.Uuid
+  recordId     String   @map("attendance_record_id") @db.Uuid
+  record       AttendanceRecord @relation(fields: [recordId], references: [id], onDelete: Cascade)
+  clockIn      DateTime @map("clock_in") @db.Timestamptz(6)
+  clockOut     DateTime? @map("clock_out") @db.Timestamptz(6)
+  source       AttendanceSource @default(manual)
+  workLocation WorkLocation @default(office) @map("work_location")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([recordId])
+  @@map("attendance_sessions")
 }
 
 // Per-employee weekly-off override (owner request, 2026-08-08). Each team has

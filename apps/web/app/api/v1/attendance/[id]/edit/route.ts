@@ -4,6 +4,7 @@ import { getSession } from "@/lib/auth";
 import { requireRole, AuthzError, FINANCE_ROLES } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { computeHours } from "@/lib/attendance/time";
+import { summariseSessions } from "@/lib/attendance/sessions";
 import { audit, clientIp } from "@/lib/audit";
 
 // Track A. PATCH /api/v1/attendance/:id/edit — Admin/HR. Edits the
@@ -77,7 +78,23 @@ export async function PATCH(
       "The resulting clock-out time must be after the clock-in time.",
     );
   }
-  const hours = effectiveIn && effectiveOut ? computeHours(effectiveIn, effectiveOut) : null;
+
+  // A day can be several sessions (2026-08-11), so out-minus-in is the span of
+  // the day, breaks included — using it would pay a two-hour lunch as work.
+  // Recompute from the sessions UNLESS this request explicitly sets an approved
+  // time, in which case the admin's stated times are the correction and win.
+  const timesEdited =
+    parsed.data.clock_in_approved !== undefined || parsed.data.clock_out_approved !== undefined;
+  const sessions = await prisma.attendanceSession.findMany({
+    where: { recordId: params.id },
+    select: { clockIn: true, clockOut: true },
+  });
+  const hours =
+    !timesEdited && sessions.length > 0
+      ? summariseSessions(sessions)
+      : effectiveIn && effectiveOut
+        ? computeHours(effectiveIn, effectiveOut)
+        : null;
 
   const updated = await prisma.attendanceRecord.update({
     where: { id: params.id },

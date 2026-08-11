@@ -585,7 +585,19 @@ function greeting() {
   return "Good evening";
 }
 
-type TodayAttendance = { date: string; clockInRaw: string | null; clockOutRaw: string | null };
+type TodaySession = {
+  id: string;
+  clockIn: string;
+  clockOut: string | null;
+  workLocation: "office" | "wfh";
+};
+type TodayAttendance = {
+  date: string;
+  clockInRaw: string | null;
+  clockOutRaw: string | null;
+  workLocation: "office" | "wfh";
+  sessions?: TodaySession[];
+};
 type WeeklyOffStatus = {
   canClaimToday: boolean;
   offToday: boolean;
@@ -602,9 +614,12 @@ function fmtDuration(ms: number): string {
 }
 
 /** Employee clock-status card: clocked in/out, live elapsed, total today +
- *  current session (equal until breaks land — the split is wired now).
- *  When the employee hasn't clocked in yet and is eligible, also shows a
- *  "Take Weekly Off" button that posts to /attendance/weekly-off. */
+ *  current session. Since 2026-08-11 a day is a list of sessions, so the two
+ *  figures genuinely differ once someone has stepped out and come back — total
+ *  is the sum of every session's worked time, never last-out minus first-in,
+ *  so breaks are excluded. When the employee hasn't clocked in yet and is
+ *  eligible, also shows a "Take Weekly Off" button that posts to
+ *  /attendance/weekly-off. */
 function ClockCard() {
   const [rec, setRec] = useState<TodayAttendance | null | undefined>(undefined);
   const [now, setNow] = useState(() => Date.now());
@@ -614,7 +629,12 @@ function ClockCard() {
 
   useEffect(() => {
     apiFetch<TodayAttendance[]>("/attendance").then((r) => {
-      const today = new Date().toISOString().slice(0, 10);
+      const d = new Date();
+      // Local calendar day: the UTC form rolls back to yesterday for the whole
+      // early-morning window in any timezone ahead of UTC (IST is +5:30).
+      const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+        d.getDate(),
+      ).padStart(2, "0")}`;
       setRec((r.data ?? []).find((a) => a.date.slice(0, 10) === today) ?? null);
     });
     apiFetch<WeeklyOffStatus>("/attendance/weekly-off").then((r) => {
@@ -622,9 +642,13 @@ function ClockCard() {
     });
   }, []);
 
-  const clockedIn = !!rec?.clockInRaw;
-  const clockedOut = !!rec?.clockOutRaw;
-  const ticking = clockedIn && !clockedOut;
+  const sessions = rec?.sessions ?? [];
+  const openSession = sessions.find((s) => s.clockOut === null) ?? null;
+  const clockedIn = openSession !== null;
+  // Been in today, but currently out — a break or the end of the day. Either
+  // way they can clock back in.
+  const clockedOut = !clockedIn && !!rec?.clockInRaw;
+  const ticking = clockedIn;
 
   // Only tick while actively clocked in.
   useEffect(() => {
@@ -633,11 +657,12 @@ function ClockCard() {
     return () => clearInterval(id);
   }, [ticking]);
 
-  const elapsedMs =
-    rec?.clockInRaw != null
-      ? (rec.clockOutRaw ? new Date(rec.clockOutRaw).getTime() : now) -
-      new Date(rec.clockInRaw).getTime()
-      : 0;
+  // Worked time = sum of sessions (open one running to `now`). The gaps
+  // between sessions are breaks and are deliberately not counted.
+  const sessionMs = (s: TodaySession) =>
+    Math.max(0, (s.clockOut ? new Date(s.clockOut).getTime() : now) - new Date(s.clockIn).getTime());
+  const totalMs = sessions.reduce((acc, s) => acc + sessionMs(s), 0);
+  const currentMs = openSession ? sessionMs(openSession) : 0;
 
   async function claimWeeklyOff() {
     setClaiming(true);
@@ -717,26 +742,26 @@ function ClockCard() {
           <div className="flex flex-col gap-3">
             <p className="text-muted-foreground">
               {clockedOut
-                ? `Clocked out at ${new Date(rec.clockOutRaw!).toLocaleTimeString()}.`
-                : `Clocked in at ${new Date(rec.clockInRaw!).toLocaleTimeString()}.`}
+                ? `Clocked out at ${new Date(rec.clockOutRaw!).toLocaleTimeString()}. You can clock back in any time.`
+                : `Clocked in at ${new Date(openSession!.clockIn).toLocaleTimeString()}${
+                    openSession!.workLocation === "wfh" ? " (from home)" : ""
+                  }.`}
             </p>
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <div className="text-xs text-muted-foreground">Total today</div>
-                <div className="text-2xl font-bold tabular-nums">{fmtDuration(elapsedMs)}</div>
+                <div className="text-2xl font-bold tabular-nums">{fmtDuration(totalMs)}</div>
               </div>
               <div>
                 <div className="text-xs text-muted-foreground">Current session</div>
                 <div className="text-2xl font-bold tabular-nums">
-                  {clockedOut ? "—" : fmtDuration(elapsedMs)}
+                  {clockedIn ? fmtDuration(currentMs) : "—"}
                 </div>
               </div>
             </div>
-            {!clockedOut && (
-              <Link href="/planning" className="w-fit">
-                <Button variant="outline">Clock Out</Button>
-              </Link>
-            )}
+            <Link href="/planning" className="w-fit">
+              <Button variant="outline">{clockedIn ? "Clock Out" : "Clock Back In"}</Button>
+            </Link>
           </div>
         )}
       </CardContent>

@@ -1,12 +1,13 @@
-import { prisma } from "@/lib/db/prisma";
-import { todayDateOnly } from "@/lib/attendance/time";
+import { hasOpenSessionToday } from "@/lib/attendance/sessions";
 
-// Track A helper, consumed by Track B's work-item routes to gate task
-// modification on the assignee's own clock-in state (flagged — new cross-
-// track coupling, attendance -> work-items).
+// Attendance helper consumed by the work-item routes to gate task modification
+// on the assignee's own clock-in state.
+//
+// "Clocked in" means an OPEN session right now, not "clocked in at some point
+// today and hasn't finished". Since 2026-08-11 an employee can clock out and
+// back in freely, and the rule the owner asked for is exactly this: you may
+// clock in again whenever you like, but while you are clocked out you cannot
+// log progress.
 export async function isClockedInNow(employeeId: string): Promise<boolean> {
-  const record = await prisma.attendanceRecord.findUnique({
-    where: { employeeId_date: { employeeId, date: todayDateOnly() } },
-  });
-  return !!record?.clockInRaw && !record?.clockOutRaw;
+  return hasOpenSessionToday(employeeId);
 }
