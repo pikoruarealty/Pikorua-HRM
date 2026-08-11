@@ -4,6 +4,7 @@ import { getSession } from "@/lib/auth";
 import { FINANCE_ROLES, isLeadRole } from "@/lib/rbac";
 import { getLedEmployeeIds } from "@/lib/employees/managed-scope";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
+import { uuidFilter, dateFilter, enumFilter } from "@/lib/api/params";
 
 // Track A. GET /api/v1/attendance — Admin/HR see all (optionally filtered to
 // one employee), Lead sees their own team, Employee sees only themselves.
@@ -16,25 +17,36 @@ export async function GET(req: Request) {
     return failFor(ErrorCode.UNAUTHENTICATED);
   }
 
+  // Every filter is rejected rather than dropped when it's malformed.
+  // `?date_from=notadate` used to become an Invalid Date and 500; an unknown
+  // `approval_status` was silently ignored, so a screen asking for "pending
+  // only" quietly rendered approved days alongside them.
   const { searchParams } = new URL(req.url);
-  const employeeIdParam = searchParams.get("employee_id") ?? undefined;
-  const dateFrom = searchParams.get("date_from");
-  const dateTo = searchParams.get("date_to");
-  const approvalStatusParam = searchParams.get("approval_status");
+  const employeeIdParam = uuidFilter(searchParams.get("employee_id"));
+  const dateFrom = dateFilter(searchParams.get("date_from"));
+  const dateTo = dateFilter(searchParams.get("date_to"));
+  const approvalStatusParam = enumFilter(searchParams.get("approval_status"), AttendanceApprovalStatus);
+  if (employeeIdParam === null) return failFor(ErrorCode.VALIDATION, "employee_id must be a uuid.");
+  if (dateFrom === null || dateTo === null) {
+    return failFor(ErrorCode.VALIDATION, "date_from and date_to must be valid dates.");
+  }
+  if (approvalStatusParam === null) {
+    return failFor(
+      ErrorCode.VALIDATION,
+      `approval_status must be one of: ${Object.values(AttendanceApprovalStatus).join(", ")}.`,
+    );
+  }
 
   const where: Prisma.AttendanceRecordWhereInput = {};
 
   if (dateFrom || dateTo) {
     where.date = {
-      ...(dateFrom ? { gte: new Date(dateFrom) } : {}),
-      ...(dateTo ? { lte: new Date(dateTo) } : {}),
+      ...(dateFrom ? { gte: dateFrom } : {}),
+      ...(dateTo ? { lte: dateTo } : {}),
     };
   }
-  if (
-    approvalStatusParam &&
-    Object.values(AttendanceApprovalStatus).includes(approvalStatusParam as AttendanceApprovalStatus)
-  ) {
-    where.approvalStatus = approvalStatusParam as AttendanceApprovalStatus;
+  if (approvalStatusParam !== undefined) {
+    where.approvalStatus = approvalStatusParam;
   }
 
   if (FINANCE_ROLES.includes(session.role)) {

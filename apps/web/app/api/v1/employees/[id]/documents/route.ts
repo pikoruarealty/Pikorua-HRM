@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { isFinanceRole } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
+import { isUuid } from "@/lib/api/params";
 import { saveUploadedFile } from "@/lib/storage/local";
 import type { Role } from "@prisma/client";
 
@@ -41,6 +42,7 @@ async function loadEmployeeAndAuthorize(
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   const session = await getSession();
   if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
+  if (!isUuid(params.id)) return failFor(ErrorCode.NOT_FOUND);
 
   const { employee, authorized } = await loadEmployeeAndAuthorize(params.id, session);
   if (!employee) return failFor(ErrorCode.NOT_FOUND);
@@ -75,6 +77,7 @@ const ALLOWED_DOC_TYPES: Record<string, string> = {
 export async function POST(req: Request, { params }: { params: { id: string } }) {
   const session = await getSession();
   if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
+  if (!isUuid(params.id)) return failFor(ErrorCode.NOT_FOUND);
 
   const { employee, authorized } = await loadEmployeeAndAuthorize(params.id, session);
   if (!employee) return failFor(ErrorCode.NOT_FOUND);

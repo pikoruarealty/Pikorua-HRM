@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { isFinanceRole, isLeadRole } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
+import { isUuid } from "@/lib/api/params";
 import { WorkUnitStatus } from "@prisma/client";
 
 // Track B. GET/PATCH/DELETE /api/v1/work-units/:id — Milestone 1.1.
@@ -22,6 +23,7 @@ const nestedInclude = {
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   const session = await getSession();
   if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
+  if (!isUuid(params.id)) return failFor(ErrorCode.NOT_FOUND);
 
   const workUnit = await prisma.workUnit.findUnique({
     where: { id: params.id },
@@ -71,6 +73,7 @@ const patchSchema = z.object({
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
   const session = await getSession();
   if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
+  if (!isUuid(params.id)) return failFor(ErrorCode.NOT_FOUND);
 
   const workUnit = await prisma.workUnit.findUnique({ where: { id: params.id } });
   if (!workUnit || workUnit.deletedAt) return failFor(ErrorCode.NOT_FOUND);
@@ -122,6 +125,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
   const session = await getSession();
   if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
+  if (!isUuid(params.id)) return failFor(ErrorCode.NOT_FOUND);
 
   const workUnit = await prisma.workUnit.findUnique({ where: { id: params.id } });
   if (!workUnit || workUnit.deletedAt) return failFor(ErrorCode.NOT_FOUND);

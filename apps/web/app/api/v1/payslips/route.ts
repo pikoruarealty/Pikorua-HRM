@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { FINANCE_ROLES } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
+import { uuidFilter, intFilter } from "@/lib/api/params";
 
 // Track A. GET /api/v1/payslips — Admin/HR see all (filterable), Employee
 // sees only their own **finalized** payslips (drafts must never be visible
@@ -15,13 +16,20 @@ export async function GET(req: Request) {
   }
 
   const { searchParams } = new URL(req.url);
-  const employeeIdParam = searchParams.get("employee_id") ?? undefined;
-  const monthParam = searchParams.get("month");
-  const yearParam = searchParams.get("year");
+  // `?month=abc` used to reach Prisma as NaN and throw a bare 500, and
+  // `?month=99` sailed through to a period that can never match — answering
+  // 200 with an empty list, which reads as "you have no payslips" rather than
+  // "that isn't a month".
+  const employeeIdParam = uuidFilter(searchParams.get("employee_id"));
+  const monthParam = intFilter(searchParams.get("month"), 1, 12);
+  const yearParam = intFilter(searchParams.get("year"), 2000, 2100);
+  if (employeeIdParam === null) return failFor(ErrorCode.VALIDATION, "employee_id must be a uuid.");
+  if (monthParam === null) return failFor(ErrorCode.VALIDATION, "month must be an integer 1-12.");
+  if (yearParam === null) return failFor(ErrorCode.VALIDATION, "year must be an integer 2000-2100.");
 
   const where: Prisma.PayslipWhereInput = {};
-  if (monthParam) where.periodMonth = Number(monthParam);
-  if (yearParam) where.periodYear = Number(yearParam);
+  if (monthParam !== undefined) where.periodMonth = monthParam;
+  if (yearParam !== undefined) where.periodYear = yearParam;
 
   if (FINANCE_ROLES.includes(session.role)) {
     if (employeeIdParam) where.employeeId = employeeIdParam;

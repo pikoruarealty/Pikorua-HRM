@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
+import { isUuid } from "@/lib/api/params";
 import { audit, clientIp } from "@/lib/audit";
 import { getReviewAccess } from "@/lib/performance/authority";
 import {
@@ -40,6 +41,7 @@ const createSchema = z
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   const session = await getSession();
   if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
+  if (!isUuid(params.id)) return failFor(ErrorCode.NOT_FOUND);
 
   const access = await getReviewAccess(session, params.id);
   if (!access) return failFor(ErrorCode.NOT_FOUND);
@@ -78,6 +80,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 export async function POST(req: Request, { params }: { params: { id: string } }) {
   const session = await getSession();
   if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
+  if (!isUuid(params.id)) return failFor(ErrorCode.NOT_FOUND);
   if (!session.employeeId) {
     return failFor(ErrorCode.FORBIDDEN, "Only an employee record can author a review.");
   }

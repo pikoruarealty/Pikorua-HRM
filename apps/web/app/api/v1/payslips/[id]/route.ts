@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { FINANCE_ROLES, Role } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
+import { isUuid } from "@/lib/api/params";
 import { audit, clientIp } from "@/lib/audit";
 
 // Track A. GET /api/v1/payslips/:id — Admin/HR (any), Employee (self only,
@@ -15,6 +16,7 @@ export async function GET(
   if (!session) {
     return failFor(ErrorCode.UNAUTHENTICATED);
   }
+  if (!isUuid(params.id)) return failFor(ErrorCode.NOT_FOUND);
 
   const payslip = await prisma.payslip.findUnique({
     where: { id: params.id },
@@ -55,6 +57,7 @@ export async function DELETE(
 ) {
   const session = await getSession();
   if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
+  if (!isUuid(params.id)) return failFor(ErrorCode.NOT_FOUND);
   if (session.role !== Role.admin) return failFor(ErrorCode.FORBIDDEN);
 
   const payslip = await prisma.payslip.findUnique({ where: { id: params.id } });

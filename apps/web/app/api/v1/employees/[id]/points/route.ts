@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { isFinanceRole, isLeadRole } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
+import { isUuid } from "@/lib/api/params";
 import { leadsEmployee } from "@/lib/employees/managed-scope";
 
 // Track B. GET /api/v1/employees/:id/points — Milestone 2.3.
@@ -12,6 +13,7 @@ import { leadsEmployee } from "@/lib/employees/managed-scope";
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   const session = await getSession();
   if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
+  if (!isUuid(params.id)) return failFor(ErrorCode.NOT_FOUND);
 
   const employee = await prisma.employee.findUnique({
     where: { id: params.id },

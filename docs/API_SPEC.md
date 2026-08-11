@@ -8,6 +8,10 @@
 - Auth via session cookie (or `Authorization: Bearer <token>`) — every route below requires authentication unless marked Public.
 - Role shorthand: `Admin/HR` = finance roles, `Lead` = Team Lead roles, `Employee` = individual contributor roles, `Any` = any authenticated role.
 
+**Parameter validation (2026-08-11).** Two rules hold across every route, backed by `lib/api/params.ts`:
+- **A malformed `:id` returns `404 NOT_FOUND`, never `500`.** Every `:id` is a Postgres `uuid`; a non-UUID string makes Prisma throw P2023, which used to escape the handler as a bare, envelope-less 500 on **22 endpoints**. Ids are now checked with `isUuid()` before any query. 404 (not 422) is deliberate: a malformed id cannot name a row, and it keeps "doesn't exist" and "not yours" indistinguishable, matching the scoped read routes.
+- **A malformed query filter returns `422 VALIDATION`, never a silently unfiltered list.** `uuidFilter` / `dateFilter` / `intFilter` / `enumFilter` return `undefined` when absent and `null` when present-but-invalid, so the route can tell "no filter" from "bad filter". Dropping a bad filter would answer 200 with every row the caller may see — a failed narrow search that looks like a successful broad one. `?month=99` is rejected for the same reason it used to return an empty list that read as "you have no payslips".
+
 ---
 
 ## 1. Auth
@@ -25,7 +29,7 @@
 
 | Method | Path | Roles | Notes |
 |---|---|---|---|
-| GET | `/employees` | Admin/HR (all), Lead (own team only), Employee (self only) | Query filters: `department_id`, `team_id`. Response scoped server-side by role — do not rely on frontend filtering. |
+| GET | `/employees` | Admin/HR (all), Lead (own team only), Employee (self only) | Query filters: `department_id`, `team_id` (uuid), `status`, `role`, `employment_type` (enum), `q` (name/email/phone substring). Each is **422 on a malformed value**, not ignored. Response scoped server-side by role — do not rely on frontend filtering. |
 | GET | `/employees/:id` | Admin/HR (any), Lead (if in own team), Employee (self only) | Responses include `photoUrl` (authenticated serving path) since 2026-07-15 |
 | POST | `/employees` | Admin/HR | **multipart/form-data since 2026-07-15**: employee fields as form fields + a **required `photo` image file** (JPEG/PNG/WebP ≤ 5MB). JSON bodies are rejected with 422. |
 | PATCH | `/employees/:id` | Admin/HR | Editable: salary, department, team, status, device_uid mapping |

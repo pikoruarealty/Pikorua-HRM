@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { requireRole, isLeadRole, AuthzError, FINANCE_ROLES } from "@/lib/rbac";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
+import { isUuid } from "@/lib/api/params";
 import { HHMM_REGEX } from "@/lib/attendance/time";
 
 // Track A. GET /api/v1/teams/:id — Admin/HR see any team; everyone else is
@@ -16,6 +17,7 @@ export async function GET(
   if (!session) {
     return failFor(ErrorCode.UNAUTHENTICATED);
   }
+  if (!isUuid(params.id)) return failFor(ErrorCode.NOT_FOUND);
 
   const team = await prisma.team.findUnique({
     where: { id: params.id },

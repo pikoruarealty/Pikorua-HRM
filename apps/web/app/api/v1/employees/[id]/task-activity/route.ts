@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { isFinanceRole, isLeadRole } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
+import { isUuid } from "@/lib/api/params";
 import { leadsEmployee } from "@/lib/employees/managed-scope";
 
 // GET /api/v1/employees/:id/task-activity?period=daily|weekly|monthly|total&date=YYYY-MM-DD
@@ -52,6 +53,7 @@ function resolveRange(period: Period, anchor: Date, joinedAt: Date): { from: Dat
 export async function GET(req: Request, { params }: { params: { id: string } }) {
   const session = await getSession();
   if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
+  if (!isUuid(params.id)) return failFor(ErrorCode.NOT_FOUND);
 
   const employee = await prisma.employee.findUnique({
     where: { id: params.id },

@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { FINANCE_ROLES } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
+import { isUuid } from "@/lib/api/params";
 import { saveUploadedFile, readUploadedFile } from "@/lib/storage/local";
 import { validatePhotoFile, photoApiPath } from "@/lib/employees/photo";
 import { audit, clientIp } from "@/lib/audit";
@@ -22,6 +23,7 @@ const CONTENT_TYPES: Record<string, string> = {
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   const session = await getSession();
   if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
+  if (!isUuid(params.id)) return failFor(ErrorCode.NOT_FOUND);
 
   const employee = await prisma.employee.findUnique({
     where: { id: params.id },
@@ -49,6 +51,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 export async function POST(req: Request, { params }: { params: { id: string } }) {
   const session = await getSession();
   if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
+  if (!isUuid(params.id)) return failFor(ErrorCode.NOT_FOUND);
   if (!FINANCE_ROLES.includes(session.role)) return failFor(ErrorCode.FORBIDDEN);
 
   const employee = await prisma.employee.findUnique({

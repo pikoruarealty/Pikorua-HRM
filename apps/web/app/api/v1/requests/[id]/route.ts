@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { isAdmin, isFinanceRole, isLeadRole } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
+import { isUuid } from "@/lib/api/params";
 import { redactRequestFinancials } from "@/lib/requests/redact";
 import { leadsEmployee } from "@/lib/employees/managed-scope";
 import { audit, clientIp } from "@/lib/audit";
@@ -29,6 +30,7 @@ const EMPLOYEE_SUMMARY = {
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   const session = await getSession();
   if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
+  if (!isUuid(params.id)) return failFor(ErrorCode.NOT_FOUND);
 
   const request = await prisma.request.findUnique({
     where: { id: params.id },
@@ -69,6 +71,7 @@ const patchSchema = z.object({
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
   const session = await getSession();
   if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
+  if (!isUuid(params.id)) return failFor(ErrorCode.NOT_FOUND);
   if (!session.employeeId) return failFor(ErrorCode.FORBIDDEN, "Session has no linked employee record.");
 
   const existing = await prisma.request.findUnique({ where: { id: params.id } });
@@ -134,6 +137,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 export async function DELETE(req: Request, { params }: { params: { id: string } }) {
   const session = await getSession();
   if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
+  if (!isUuid(params.id)) return failFor(ErrorCode.NOT_FOUND);
 
   const existing = await prisma.request.findUnique({ where: { id: params.id } });
   if (!existing) return failFor(ErrorCode.NOT_FOUND);

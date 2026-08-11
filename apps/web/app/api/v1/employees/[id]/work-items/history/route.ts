@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { isFinanceRole, isLeadRole } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
+import { isUuid } from "@/lib/api/params";
 import { WorkItemMode } from "@prisma/client";
 import { leadsEmployee } from "@/lib/employees/managed-scope";
 
@@ -22,6 +23,7 @@ const querySchema = z.object({
 export async function GET(req: Request, { params }: { params: { id: string } }) {
   const session = await getSession();
   if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
+  if (!isUuid(params.id)) return failFor(ErrorCode.NOT_FOUND);
 
   const employee = await prisma.employee.findUnique({
     where: { id: params.id },

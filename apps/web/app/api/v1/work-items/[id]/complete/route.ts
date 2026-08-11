@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
+import { isUuid } from "@/lib/api/params";
 import { Prisma, WorkItemMode, WorkItemStatus } from "@prisma/client";
 import { isClockedInNow } from "@/lib/attendance/status";
 import { requiresReviewForItem } from "@/lib/work/review";
@@ -22,6 +23,7 @@ import { notifyReviewSubmitted } from "@/lib/work/notify";
 export async function POST(_req: Request, { params }: { params: { id: string } }) {
   const session = await getSession();
   if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
+  if (!isUuid(params.id)) return failFor(ErrorCode.NOT_FOUND);
 
   const workItem = await prisma.workItem.findUnique({
     where: { id: params.id },

@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { FINANCE_ROLES, Role, isLeadRole } from "@/lib/rbac";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
+import { isUuid } from "@/lib/api/params";
 import { audit, clientIp } from "@/lib/audit";
 import { withPhotoPath } from "@/lib/employees/photo";
 import { getLedEmployeeIds } from "@/lib/employees/managed-scope";
@@ -44,6 +45,7 @@ export async function GET(
   if (!session) {
     return failFor(ErrorCode.UNAUTHENTICATED);
   }
+  if (!isUuid(params.id)) return failFor(ErrorCode.NOT_FOUND);
 
   const isFinance = FINANCE_ROLES.includes(session.role);
   const isLead = isLeadRole(session.role);
@@ -119,6 +121,7 @@ export async function PATCH(
   if (!session) {
     return failFor(ErrorCode.UNAUTHENTICATED);
   }
+  if (!isUuid(params.id)) return failFor(ErrorCode.NOT_FOUND);
   if (!FINANCE_ROLES.includes(session.role)) {
     return failFor(ErrorCode.FORBIDDEN);
   }
@@ -250,6 +253,7 @@ export async function DELETE(
   if (!session) {
     return failFor(ErrorCode.UNAUTHENTICATED);
   }
+  if (!isUuid(params.id)) return failFor(ErrorCode.NOT_FOUND);
   if (session.role !== Role.admin) {
     return failFor(ErrorCode.FORBIDDEN);
   }

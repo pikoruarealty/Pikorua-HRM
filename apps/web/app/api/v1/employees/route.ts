@@ -6,6 +6,7 @@ import { getSession, hashPassword } from "@/lib/auth";
 import { EmployeeStatus } from "@prisma/client";
 import { FINANCE_ROLES, Role, isLeadRole } from "@/lib/rbac";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
+import { uuidFilter, enumFilter } from "@/lib/api/params";
 import { audit, clientIp } from "@/lib/audit";
 import { saveUploadedFile } from "@/lib/storage/local";
 import { validatePhotoFile, withPhotoPath } from "@/lib/employees/photo";
@@ -89,21 +90,23 @@ export async function GET(req: Request) {
     return failFor(ErrorCode.UNAUTHENTICATED);
   }
 
+  // A malformed filter is rejected, never dropped. `?department_id=xyz` used
+  // to reach Prisma and 500; the enum filters did the opposite and were
+  // silently ignored, so `?status=Active` (wrong case) returned inactive
+  // people too under a heading that promised only active ones.
   const { searchParams } = new URL(req.url);
-  const departmentIdFilter = searchParams.get("department_id") ?? undefined;
-  const teamIdFilter = searchParams.get("team_id") ?? undefined;
-  const statusParam = searchParams.get("status") ?? undefined;
-  const statusFilter =
-    statusParam && (statusParam === EmployeeStatus.active || statusParam === EmployeeStatus.inactive)
-      ? statusParam
-      : undefined;
-  const roleParam = searchParams.get("role") ?? undefined;
-  const roleFilter = roleParam && (Object.values(Role) as string[]).includes(roleParam) ? (roleParam as Role) : undefined;
-  const employmentTypeParam = searchParams.get("employment_type") ?? undefined;
-  const employmentTypeFilter =
-    employmentTypeParam && (Object.values(EmploymentType) as string[]).includes(employmentTypeParam)
-      ? (employmentTypeParam as EmploymentType)
-      : undefined;
+  const departmentIdFilter = uuidFilter(searchParams.get("department_id"));
+  const teamIdFilter = uuidFilter(searchParams.get("team_id"));
+  const statusFilter = enumFilter(searchParams.get("status"), EmployeeStatus);
+  const roleFilter = enumFilter(searchParams.get("role"), Role);
+  const employmentTypeFilter = enumFilter(searchParams.get("employment_type"), EmploymentType);
+  if (departmentIdFilter === null) return failFor(ErrorCode.VALIDATION, "department_id must be a uuid.");
+  if (teamIdFilter === null) return failFor(ErrorCode.VALIDATION, "team_id must be a uuid.");
+  if (statusFilter === null) return failFor(ErrorCode.VALIDATION, "status must be active or inactive.");
+  if (roleFilter === null) return failFor(ErrorCode.VALIDATION, "role is not a known role.");
+  if (employmentTypeFilter === null) {
+    return failFor(ErrorCode.VALIDATION, "employment_type is not a known employment type.");
+  }
   const q = searchParams.get("q")?.trim() || undefined;
   const searchFilter = q
     ? {

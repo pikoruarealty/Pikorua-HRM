@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { isFinanceRole, isLeadRole } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
+import { isUuid } from "@/lib/api/params";
 
 // Track B. GET/PATCH/DELETE /api/v1/sub-units/:id.
 // RBAC mirrors POST /work-units/:id/sub-units — Admin/HR, or the owning
@@ -21,6 +22,7 @@ async function loadManageable(id: string) {
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   const session = await getSession();
   if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
+  if (!isUuid(params.id)) return failFor(ErrorCode.NOT_FOUND);
 
   const subUnit = await loadManageable(params.id);
   if (!subUnit) return failFor(ErrorCode.NOT_FOUND);
@@ -50,6 +52,7 @@ const patchSchema = z.object({ name: z.string().min(1) }).strict();
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
   const session = await getSession();
   if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
+  if (!isUuid(params.id)) return failFor(ErrorCode.NOT_FOUND);
 
   const subUnit = await loadManageable(params.id);
   if (!subUnit) return failFor(ErrorCode.NOT_FOUND);
@@ -84,6 +87,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
   const session = await getSession();
   if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
+  if (!isUuid(params.id)) return failFor(ErrorCode.NOT_FOUND);
 
   const subUnit = await loadManageable(params.id);
   if (!subUnit) return failFor(ErrorCode.NOT_FOUND);

@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { isFinanceRole, isLeadRole } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
+import { uuidFilter, enumFilter } from "@/lib/api/params";
 import { redactRequestFinancials } from "@/lib/requests/redact";
 import { getLedEmployeeIds } from "@/lib/employees/managed-scope";
 import { notifyFinanceUsers } from "@/lib/notifications/push";
@@ -183,10 +184,19 @@ export async function GET(req: Request) {
   const session = await getSession();
   if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
 
+  // These were cast straight to their enum types with no check, so
+  // `?status=bogus` reached Prisma and 500'd.
   const { searchParams } = new URL(req.url);
-  const typeFilter = searchParams.get("type") as RequestType | null;
-  const statusFilter = searchParams.get("status") as RequestStatus | null;
-  const employeeIdFilter = searchParams.get("employee_id") ?? undefined;
+  const typeFilter = enumFilter(searchParams.get("type"), RequestType);
+  const statusFilter = enumFilter(searchParams.get("status"), RequestStatus);
+  const employeeIdFilter = uuidFilter(searchParams.get("employee_id"));
+  if (typeFilter === null) {
+    return failFor(ErrorCode.VALIDATION, `type must be one of: ${Object.values(RequestType).join(", ")}.`);
+  }
+  if (statusFilter === null) {
+    return failFor(ErrorCode.VALIDATION, `status must be one of: ${Object.values(RequestStatus).join(", ")}.`);
+  }
+  if (employeeIdFilter === null) return failFor(ErrorCode.VALIDATION, "employee_id must be a uuid.");
 
   const role = session.role;
 

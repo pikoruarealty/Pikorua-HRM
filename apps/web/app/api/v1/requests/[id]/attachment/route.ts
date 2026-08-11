@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { isFinanceRole } from "@/lib/rbac";
 import { failFor, ErrorCode } from "@/lib/api/response";
+import { isUuid } from "@/lib/api/params";
 import { readUploadedFile } from "@/lib/storage/local";
 import { RequestType } from "@prisma/client";
 
@@ -25,6 +26,7 @@ const CONTENT_TYPES: Record<string, string> = {
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   const session = await getSession();
   if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
+  if (!isUuid(params.id)) return failFor(ErrorCode.NOT_FOUND);
 
   const request = await prisma.request.findUnique({ where: { id: params.id } });
   if (!request) return failFor(ErrorCode.NOT_FOUND);
