@@ -34,7 +34,6 @@ export function PlanningScreen({ isAdmin = false }: { isAdmin?: boolean }) {
   const [checked, setChecked] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [workLocation, setWorkLocation] = useState<"office" | "wfh">("office");
   const {
     attendance,
     sessions,
@@ -80,7 +79,7 @@ export function PlanningScreen({ isAdmin = false }: { isAdmin?: boolean }) {
     const workItemIds = selectedIds();
     const res = await apiFetch("/attendance/clock-in", {
       method: "POST",
-      body: JSON.stringify({ ...(workItemIds.length ? { workItemIds } : {}), workLocation }),
+      body: JSON.stringify({ ...(workItemIds.length ? { workItemIds } : {}) }),
     });
     setBusy(false);
     if (res.error) setError(`${res.error.code}: ${res.error.message}`);
@@ -173,24 +172,15 @@ export function PlanningScreen({ isAdmin = false }: { isAdmin?: boolean }) {
                   ))}
                 </div>
               )}
-              {/* Where they're working from. A WFH day is a fully worked, fully
-                  paid day — it just isn't recorded by the office device. */}
-              <div className="flex items-center gap-3 text-sm">
-                <span className="text-muted-foreground">Working from</span>
-                {(["office", "wfh"] as const).map((loc) => (
-                  <label key={loc} className="flex items-center gap-1">
-                    <input
-                      type="radio"
-                      name="workLocation"
-                      checked={workLocation === loc}
-                      onChange={() => setWorkLocation(loc)}
-                    />
-                    {loc === "office" ? "Office" : "Home"}
-                  </label>
-                ))}
-              </div>
+              {/* Office attendance is biometric-only (2026-08-12) — a manual
+                  clock-in here is always recorded as work-from-home. Punch
+                  the office device to be recorded as in-office. */}
+              <p className="text-xs text-muted-foreground">
+                This records a work-from-home day. In-office attendance is captured
+                automatically by the biometric device — no manual clock-in needed there.
+              </p>
               <Button className="w-fit" onClick={clockIn} disabled={busy || (!clockedOut && clockInBlocked)}>
-                {clockedOut ? "Clock back in" : "Clock in"}
+                {clockedOut ? "Clock back in (WFH)" : "Clock In WFH"}
                 {!clockedOut && selectedIds().length ? ` with ${selectedIds().length} task(s)` : ""}
               </Button>
               {!clockedOut && clockInBlocked && (

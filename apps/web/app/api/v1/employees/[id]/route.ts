@@ -8,6 +8,8 @@ import { isUuid } from "@/lib/api/params";
 import { audit, clientIp } from "@/lib/audit";
 import { withPhotoPath } from "@/lib/employees/photo";
 import { getLedEmployeeIds } from "@/lib/employees/managed-scope";
+import { dateOnly } from "@/lib/attendance/time";
+import { reconcileEmployeeDay } from "@/lib/integrations/teamoffice/reconcile";
 
 // Track A. GET/PATCH/DELETE /api/v1/employees/:id — role-scoped per PRD/API_SPEC.
 
@@ -164,6 +166,18 @@ export async function PATCH(
     const team = await prisma.team.findUnique({ where: { id: d.team_id } });
     if (!team) return failFor(ErrorCode.VALIDATION, "team_id does not reference an existing team.");
   }
+  // deviceUid is not DB-unique (an unmapped Empcode must stay ingestible for
+  // the device-mapping suggestion list), so app-level uniqueness is checked
+  // here — otherwise two employees could claim the same Empcode and
+  // reconciliation would arbitrarily pick one of them.
+  if (d.device_uid) {
+    const claimedBy = await prisma.employee.findFirst({
+      where: { deviceUid: d.device_uid, id: { not: params.id } },
+    });
+    if (claimedBy) {
+      return fail(ErrorCode.CONFLICT, "This deviceUid is already mapped to a different employee.", 409);
+    }
+  }
 
   const existing = await prisma.employee.findUnique({
     where: { id: params.id },
@@ -226,6 +240,22 @@ export async function PATCH(
         ...(roleChanged ? { tokenVersion: { increment: 1 } } : {}),
       },
     });
+  }
+
+  // A newly-mapped Empcode may already have punches sitting unreconciled
+  // (the near-universal order of events: device punches arrive, THEN an
+  // Admin/HR gets around to mapping them) — reconcile its backlog immediately
+  // rather than waiting for the next 2-minute poll to sweep it up.
+  const deviceUidChanged = d.device_uid !== undefined && d.device_uid !== existing.deviceUid;
+  if (deviceUidChanged && d.device_uid) {
+    const backlogDates = await prisma.devicePunchRaw.findMany({
+      where: { deviceUid: d.device_uid, reconciledAt: null },
+      select: { punchTime: true },
+    });
+    const distinctDays = new Set(backlogDates.map((p) => dateOnly(p.punchTime).toISOString()));
+    for (const iso of distinctDays) {
+      await reconcileEmployeeDay(d.device_uid, new Date(iso));
+    }
   }
 
   // Salary changes are exactly what an HR audit trail exists for — record

@@ -19,7 +19,6 @@ import {
   Bell,
   Package,
   ScrollText,
-  Fingerprint,
   type LucideIcon,
 } from "lucide-react";
 
@@ -115,12 +114,6 @@ export const NAV_GROUPS: NavGroup[] = [
         show: (c) => c.isFinance,
       },
       { href: "/audit", label: "Audit Log", icon: ScrollText, show: (c) => c.isAdmin },
-      {
-        href: "/settings/device-mapping",
-        label: "Device Mapping",
-        icon: Fingerprint,
-        show: (c) => c.isAdmin,
-      },
     ],
   },
 ];

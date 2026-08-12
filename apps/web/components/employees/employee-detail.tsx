@@ -47,7 +47,7 @@ type Employee = {
   status: "active" | "inactive";
   dateOfBirth: string | null;
   dateOfJoining: string;
-  deviceUid: number | null;
+  deviceUid: string | null;
   photoUrl: string | null;
   createdAt: string;
   baseSalary?: string;
@@ -58,6 +58,12 @@ type Employee = {
 
 type Department = { id: string; name: string; typeKey?: string };
 type Team = { id: string; name: string; departmentId: string; defaultWeeklyOffDay?: number };
+type UnmatchedDevice = {
+  deviceUid: string;
+  name: string | null;
+  punchCount: number;
+  suggestions: { employeeId: string; fullName: string; similarity: number }[];
+};
 
 const ROLES = [
   "admin",
@@ -153,6 +159,7 @@ export function EmployeeDetail({
   const [pendingWorkCounts, setPendingWorkCounts] = useState<{ assignedWorkItems: number; ledWorkUnits: number; finalizedPayslips: number } | null>(null);
   const [activeEmployees, setActiveEmployees] = useState<ActiveEmployee[]>([]);
   const [reassignToId, setReassignToId] = useState("");
+  const [unmatchedDevices, setUnmatchedDevices] = useState<UnmatchedDevice[]>([]);
 
   const router = useRouter();
 
@@ -163,18 +170,33 @@ export function EmployeeDetail({
       // Departments/teams are fetched for every viewer so the profile can
       // show names instead of ids (both endpoints are role-safe: departments
       // is Any, teams is server-scoped).
-      const [emp, deptData, teamData] = await Promise.all([
+      const [emp, deptData, teamData, unmatched] = await Promise.all([
         getJson(await fetch(`/api/v1/employees/${employeeId}`)),
         getJson(await fetch("/api/v1/departments")).catch(() => []),
         getJson(await fetch("/api/v1/teams")).catch(() => []),
+        // Admin-only endpoint — a non-Admin viewer falls back to the plain
+        // text input, so a fetch failure there is expected, not an error.
+        isAdmin
+          ? getJson(await fetch("/api/v1/device-mapping/unmatched")).then((d) => d.unmatched as UnmatchedDevice[]).catch(() => [])
+          : Promise.resolve([]),
       ]);
       setEmployee(emp);
       setDepartments(deptData);
       setTeams(teamData);
+      setUnmatchedDevices(unmatched);
       setDepartmentId(emp.departmentId ?? "");
       setTeamId(emp.teamId ?? "");
       setBaseSalary(emp.baseSalary ?? "");
-      setDeviceUid(emp.deviceUid?.toString() ?? "");
+      // Default-select the name-matched suggestion when this employee has no
+      // deviceUid yet — otherwise keep whatever is already assigned.
+      if (!emp.deviceUid) {
+        const matched = unmatched.find((u: UnmatchedDevice) =>
+          u.suggestions.some((s) => s.employeeId === employeeId),
+        );
+        setDeviceUid(matched?.deviceUid ?? "");
+      } else {
+        setDeviceUid(emp.deviceUid);
+      }
       setRole(emp.role);
       setEmploymentType(emp.employmentType ?? "fulltime");
       setRequiredDaysPerWeek(emp.requiredDaysPerWeek?.toString() ?? "");
@@ -227,7 +249,7 @@ export function EmployeeDetail({
             department_id: departmentId || null,
             team_id: teamId || null,
             base_salary: Number(baseSalary),
-            device_uid: deviceUid ? Number(deviceUid) : null,
+            device_uid: deviceUid.trim() ? deviceUid.trim() : null,
             employment_type: employmentType,
             required_days_per_week: employmentType !== "fulltime" && requiredDaysPerWeek ? Number(requiredDaysPerWeek) : null,
             default_weekly_off_day: defaultWeeklyOffDay !== "__default__" ? Number(defaultWeeklyOffDay) : null,
@@ -688,13 +710,39 @@ export function EmployeeDetail({
                 />
               </div>
               <div className="flex flex-col gap-2">
-                <Label htmlFor="device_uid">Device UID</Label>
-                <Input
-                  id="device_uid"
-                  type="number"
-                  value={deviceUid}
-                  onChange={(e) => setDeviceUid(e.target.value)}
-                />
+                <Label htmlFor="device_uid">Device UID (Empcode)</Label>
+                {isAdmin ? (
+                  <>
+                    <Select value={deviceUid || "__none__"} onValueChange={(v) => setDeviceUid(v === "__none__" ? "" : v)}>
+                      <SelectTrigger id="device_uid">
+                        <SelectValue placeholder="Not mapped" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">Not mapped</SelectItem>
+                        {/* The employee's current mapping may no longer appear in
+                            unmatchedDevices (a reconciled Empcode drops off that
+                            list), so it's always offered as an option here. */}
+                        {employee?.deviceUid && !unmatchedDevices.some((u) => u.deviceUid === employee.deviceUid) && (
+                          <SelectItem value={employee.deviceUid}>
+                            {employee.deviceUid} (currently mapped)
+                          </SelectItem>
+                        )}
+                        {unmatchedDevices.map((u) => (
+                          <SelectItem key={u.deviceUid} value={u.deviceUid}>
+                            {u.deviceUid}
+                            {u.name ? ` — ${u.name}` : ""} ({u.punchCount} punch{u.punchCount === 1 ? "" : "es"})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      Unmapped Empcodes seen recently on the biometric device. The name-matched
+                      one is pre-selected when available.
+                    </p>
+                  </>
+                ) : (
+                  <Input id="device_uid" type="text" value={deviceUid} disabled />
+                )}
               </div>
               {isAdmin && (
                 <div className="flex flex-col gap-2">

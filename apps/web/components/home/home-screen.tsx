@@ -48,6 +48,8 @@ type AttendanceRow = {
   photoUrl: string | null;
   status: "present" | "half_day" | "on_leave" | "absent" | "holiday" | "weekly_off";
   leaveType: string | null;
+  clockIn: string | null;
+  clockOut: string | null;
 };
 type AttendanceOverview = {
   counts: { total: number; present: number; halfDay: number; onLeave: number; absent: number; weeklyOff: number; late: number; pendingApproval: number };
@@ -317,6 +319,13 @@ export function HomeScreen({
               title="Present today"
               count={attendance ? attendance.counts.present + attendance.counts.halfDay : null}
               rows={presentRows}
+              subLabel={(r) =>
+                r.clockOut
+                  ? `${fmtClockTime(r.clockIn)} – ${fmtClockTime(r.clockOut)}`
+                  : r.clockIn
+                    ? `${fmtClockTime(r.clockIn)} – now`
+                    : "—"
+              }
               emptyLabel="No one clocked in yet."
               href="/attendance"
             />
@@ -568,6 +577,11 @@ export function HomeScreen({
   );
 }
 
+function fmtClockTime(iso: string | null): string {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
 function formatMeetingWhen(iso: string): string {
   const d = new Date(iso);
   const today = new Date();
@@ -718,10 +732,13 @@ function ClockCard() {
           </>
         ) : !clockedIn ? (
           <>
-            <p className="text-muted-foreground">You haven&apos;t clocked in today.</p>
+            <p className="text-muted-foreground">
+              You haven&apos;t clocked in today. In-office attendance is captured automatically by
+              the biometric device — clock in here only if you&apos;re working from home.
+            </p>
             <div className="flex flex-wrap gap-2">
               <Link href="/planning" className="w-fit">
-                <Button>Clock In</Button>
+                <Button>Clock In WFH</Button>
               </Link>
               {weeklyOff?.canClaimToday && (
                 <Button
@@ -762,7 +779,7 @@ function ClockCard() {
               </div>
             </div>
             <Link href="/planning" className="w-fit">
-              <Button variant="outline">{clockedIn ? "Clock Out" : "Clock Back In"}</Button>
+              <Button variant="outline">{clockedIn ? "Clock Out" : "Clock Back In (WFH)"}</Button>
             </Link>
           </div>
         )}

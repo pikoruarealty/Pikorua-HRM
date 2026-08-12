@@ -23,13 +23,16 @@ import { audit } from "@/lib/audit";
 // an AttendanceSession and each clock-out closes it, so an employee can step out
 // and come back as often as they need; only the open session gates progress
 // logging ("you may clock in again, but you can't log work while clocked out").
-// `workLocation` marks the session as office or work-from-home — a WFH day is a
-// normally worked, normally paid day, it just never comes off the biometric
-// device.
+//
+// 2026-08-12: office attendance is biometric-only — this route no longer
+// accepts workLocation: office. A manual app clock-in is always recorded as
+// wfh; a real office day only ever comes from the TeamOffice device sync
+// (lib/integrations/teamoffice/reconcile.ts), which writes workLocation:
+// office directly and never goes through this route.
 const bodySchema = z
   .object({
     workItemIds: z.array(z.string().uuid()).optional(),
-    workLocation: z.nativeEnum(WorkLocation).optional(),
+    workLocation: z.literal(WorkLocation.wfh).optional(),
   })
   .strict()
   .optional();
@@ -46,7 +49,7 @@ export async function POST(req: Request) {
 
   // Body is optional — a bare clock-in with no task selection is still valid.
   let workItemIds: string[] = [];
-  let workLocation: WorkLocation = WorkLocation.office;
+  const workLocation: WorkLocation = WorkLocation.wfh;
   const raw = await req.text();
   if (raw.trim().length > 0) {
     let parsedBody: unknown;
@@ -59,11 +62,10 @@ export async function POST(req: Request) {
     if (!parsed.success) {
       return failFor(
         ErrorCode.VALIDATION,
-        "workItemIds must be an array of UUIDs and workLocation one of: office, wfh.",
+        "workItemIds must be an array of UUIDs; workLocation, if present, must be \"wfh\" — office attendance is recorded automatically by the biometric device.",
       );
     }
     workItemIds = [...new Set(parsed.data?.workItemIds ?? [])];
-    workLocation = parsed.data?.workLocation ?? WorkLocation.office;
   }
 
   const date = todayDateOnly();
