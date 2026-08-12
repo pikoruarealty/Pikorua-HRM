@@ -182,7 +182,7 @@ const createSchema = z.object({
   date_of_birth: z.string().optional(),
   date_of_joining: z.string(),
   base_salary: z.coerce.number().positive(),
-  device_uid: z.coerce.number().int().optional(),
+  device_uid: z.string().min(1).optional(),
   password: z.string().min(8).optional(),
 });
 

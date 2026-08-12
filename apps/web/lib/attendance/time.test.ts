@@ -1,5 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { computeHours, dayCredit, getDefaultClockOut, isLateArrival, isValidHHMM, todayDateOnly } from "./time";
+import {
+  computeHours,
+  dayCredit,
+  getDefaultClockOut,
+  isImplausibleDuration,
+  isLateArrival,
+  isLateWaivedByMakeup,
+  isSuspectedReversedPunch,
+  isValidHHMM,
+  MAX_PLAUSIBLE_SHIFT_HOURS,
+  todayDateOnly,
+} from "./time";
 
 describe("isValidHHMM", () => {
   test("accepts 24h HH:MM", () => {
@@ -107,27 +118,125 @@ describe("todayDateOnly", () => {
   });
 });
 
+describe("isSuspectedReversedPunch", () => {
+  const at = (h: number, m = 0) => new Date(2026, 6, 15, h, m);
+
+  test("not flagged when it isn't the day's only session", () => {
+    expect(isSuspectedReversedPunch(at(18, 0), false, "11:00")).toBe(false);
+  });
+
+  test("a plausible morning arrival (even a late one, within grace) is not flagged", () => {
+    expect(isSuspectedReversedPunch(at(11, 0), true, "11:00")).toBe(false);
+    expect(isSuspectedReversedPunch(at(14, 59), true, "11:00")).toBe(false);
+  });
+
+  test("a solo punch well past the grace window is flagged", () => {
+    expect(isSuspectedReversedPunch(at(15, 1), true, "11:00")).toBe(true);
+    expect(isSuspectedReversedPunch(at(20, 0), true, "11:00")).toBe(true);
+  });
+
+  test("falls back to 11:00 expected start when the team has none configured", () => {
+    expect(isSuspectedReversedPunch(at(20, 0), true, null)).toBe(true);
+    expect(isSuspectedReversedPunch(at(12, 0), true, null)).toBe(false);
+  });
+});
+
 describe("getDefaultClockOut", () => {
-  test("defaults to 20:00 when expected start is 11:00", () => {
+  test("defaults to 19:00 when expected start/end are the 11:00-19:00 company default", () => {
     const date = new Date(2026, 6, 15, 11, 0);
-    const out = getDefaultClockOut(date, "11:00");
-    expect(out.getHours()).toBe(20);
+    const out = getDefaultClockOut(date, "11:00", "19:00");
+    expect(out.getHours()).toBe(19);
     expect(out.getMinutes()).toBe(0);
     expect(out.getDate()).toBe(15);
   });
 
-  test("uses expected start time + 9h when configured differently (e.g. 09:00 -> 18:00)", () => {
+  test("uses the team's configured expectedEndTime when different (e.g. 09:00 -> 18:00)", () => {
     const date = new Date(2026, 6, 15, 9, 15);
-    const out = getDefaultClockOut(date, "09:00");
+    const out = getDefaultClockOut(date, "09:00", "18:00");
     expect(out.getHours()).toBe(18);
     expect(out.getMinutes()).toBe(0);
   });
 
-  test("handles clockIn after standard end time by adding 8 hours", () => {
+  test("omitted expectedStartTime/expectedEndTime fall back to the 11:00-19:00 company default", () => {
+    const date = new Date(2026, 6, 15, 11, 0);
+    const out = getDefaultClockOut(date);
+    expect(out.getHours()).toBe(19);
+    expect(out.getMinutes()).toBe(0);
+  });
+
+  test("handles clockIn after standard end time by adding one shift-length (derived, not hardcoded)", () => {
     const lateNightIn = new Date(2026, 6, 15, 21, 30);
-    const out = getDefaultClockOut(lateNightIn, "11:00");
+    const out = getDefaultClockOut(lateNightIn, "11:00", "19:00");
     expect(out.getTime()).toBeGreaterThan(lateNightIn.getTime());
+    // shift length = 19:00 - 11:00 = 8h, not a hardcoded 9h assumption.
     expect(out.getTime() - lateNightIn.getTime()).toBe(8 * 3600 * 1000);
+  });
+
+  test("a shorter configured shift (e.g. 09:00-17:00, 8h) still derives its own length", () => {
+    const lateNightIn = new Date(2026, 6, 15, 22, 0);
+    const out = getDefaultClockOut(lateNightIn, "09:00", "17:00");
+    expect(out.getTime() - lateNightIn.getTime()).toBe(8 * 3600 * 1000);
+  });
+
+  test("misconfigured end<=start falls back to an 8h default shift length", () => {
+    const lateNightIn = new Date(2026, 6, 15, 22, 0);
+    const out = getDefaultClockOut(lateNightIn, "11:00", "10:00");
+    expect(out.getTime() - lateNightIn.getTime()).toBe(8 * 3600 * 1000);
+  });
+});
+
+describe("isLateWaivedByMakeup", () => {
+  const at = (h: number, m = 0) => new Date(2026, 6, 15, h, m);
+
+  test("exact make-up (30 min late in, 30 min late out) is waived", () => {
+    // Shift 11:00-19:00; arrives 11:30 (30 min late), leaves 19:30 — exactly compensated.
+    expect(isLateWaivedByMakeup(at(11, 30), at(19, 30), "11:00", "19:00")).toBe(true);
+  });
+
+  test("leaving even one minute short of the exact make-up is not waived", () => {
+    expect(isLateWaivedByMakeup(at(11, 30), at(19, 29), "11:00", "19:00")).toBe(false);
+  });
+
+  test("leaving later than the exact make-up is still waived", () => {
+    expect(isLateWaivedByMakeup(at(11, 30), at(20, 0), "11:00", "19:00")).toBe(true);
+  });
+
+  test("not late in the first place: never waived (nothing to waive)", () => {
+    expect(isLateWaivedByMakeup(at(10, 55), at(19, 0), "11:00", "19:00")).toBe(false);
+    expect(isLateWaivedByMakeup(at(11, 0), at(19, 0), "11:00", "19:00")).toBe(false);
+  });
+
+  test("no clock-out yet (open day) is never waived", () => {
+    expect(isLateWaivedByMakeup(at(11, 30), null, "11:00", "19:00")).toBe(false);
+  });
+
+  test("missing expectedStartTime or expectedEndTime is never waived", () => {
+    expect(isLateWaivedByMakeup(at(11, 30), at(20, 0), null, "19:00")).toBe(false);
+    expect(isLateWaivedByMakeup(at(11, 30), at(20, 0), "11:00", null)).toBe(false);
+  });
+
+  test("respects a configured grace window when deciding lateness", () => {
+    // 5 min late is within a 15 min grace, so not late at all — no waiver needed, but also not late.
+    expect(isLateWaivedByMakeup(at(11, 5), at(19, 0), "11:00", "19:00", 15)).toBe(false);
+  });
+});
+
+describe("isImplausibleDuration", () => {
+  test("a normal shift, even with overtime, is not implausible", () => {
+    expect(isImplausibleDuration(8)).toBe(false);
+    expect(isImplausibleDuration(MAX_PLAUSIBLE_SHIFT_HOURS)).toBe(false);
+  });
+
+  test("anything past the threshold is implausible", () => {
+    expect(isImplausibleDuration(MAX_PLAUSIBLE_SHIFT_HOURS + 0.01)).toBe(true);
+    // the screenshot's actual figures (2026-08-12): 14.39h and 14.01h
+    expect(isImplausibleDuration(14.39)).toBe(true);
+    expect(isImplausibleDuration(14.01)).toBe(true);
+  });
+
+  test("null/undefined (e.g. an open day) is never implausible", () => {
+    expect(isImplausibleDuration(null)).toBe(false);
+    expect(isImplausibleDuration(undefined)).toBe(false);
   });
 });
 

@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { isEmployeeRole, isLeadRole, Role } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
+import { todayDateOnly } from "@/lib/attendance/time";
 
 // Track B. GET /api/v1/daily-selections/today — Milestone 2.3.
 // Employee, Lead (own team) — and HR (2026-08-11 fix), scoped to self like
@@ -9,17 +10,11 @@ import { ok, failFor, ErrorCode } from "@/lib/api/response";
 // Admin, who doesn't clock in and has no "Daily Planning" nav entry at all;
 // HR does and was hitting a 403 the nav never warned about).
 
-function todayUtcDate(): Date {
-  const d = new Date();
-  d.setUTCHours(0, 0, 0, 0);
-  return d;
-}
-
 export async function GET(req: Request) {
   const session = await getSession();
   if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
 
-  const date = todayUtcDate();
+  const date = todayDateOnly();
   const { searchParams } = new URL(req.url);
   const employeeIdFilter = searchParams.get("employee_id") ?? undefined;
 

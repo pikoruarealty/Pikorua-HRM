@@ -4,6 +4,7 @@ import { runMeetingReminders } from "@/lib/cron/meeting-reminders";
 import { runMetricDailyRollover } from "@/lib/cron/metric-daily-rollover";
 import { runAttendanceEodCleanup } from "@/lib/cron/attendance-eod-cleanup";
 import { runCrmSync } from "@/lib/cron/crm-sync";
+import { runDeviceSync } from "@/lib/integrations/teamoffice/sync";
 
 // In-process scheduler (PRD §6 — "a lightweight scheduled-jobs mechanism").
 // Registered once at server boot from instrumentation.ts. Assumes a single
@@ -72,6 +73,17 @@ export function startScheduler(): void {
     safeRun("crm-sync", () => runCrmSync());
   });
   safeRun("crm-sync-boot", () => runCrmSync());
+
+  // TeamOffice biometric device sync — every 2 minutes (2026-08-12, Phase 28).
+  // Polls the vendor's incremental DownloadLastPunchData endpoint and
+  // reconciles new punches into attendance_sessions; this cadence is what
+  // makes a device badge-in show up on the employee's dashboard as "live" via
+  // the ClockCard's own polling. Skips quietly (catch inside safeRun) if
+  // TEAM_OFFICE_* env vars aren't configured, matching crm-sync's pattern of
+  // failing loud into the console log rather than crashing the process.
+  cron.schedule("*/2 * * * *", () => {
+    safeRun("teamoffice-device-sync", () => runDeviceSync());
+  });
 
   // Recognition weekly/monthly snapshots are no longer auto-scheduled
   // (2026-08-07) — "Employee of the Week/Month" is now an Admin-only manual

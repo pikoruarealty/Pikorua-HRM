@@ -96,7 +96,7 @@ const patchSchema = z.object({
   department_id: z.string().uuid().nullable().optional(),
   team_id: z.string().uuid().nullable().optional(),
   status: z.nativeEnum(EmployeeStatus).optional(),
-  device_uid: z.number().int().nullable().optional(),
+  device_uid: z.string().min(1).nullable().optional(),
   employment_type: z.nativeEnum(EmploymentType).optional(),
   required_days_per_week: z.number().int().min(1).max(7).nullable().optional(),
   default_weekly_off_day: z.number().int().min(0).max(6).nullable().optional(),

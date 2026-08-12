@@ -1,10 +1,12 @@
 import { z } from "zod";
-import { AttendanceApprovalStatus, WorkItemStatus, WorkLocation } from "@prisma/client";
+import { AttendanceApprovalStatus, AttendanceSource, WorkItemStatus, WorkLocation } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { todayDateOnly } from "@/lib/attendance/time";
 import { findOpenSession } from "@/lib/attendance/sessions";
+import { notifyFinanceUsers } from "@/lib/notifications/push";
+import { audit } from "@/lib/audit";
 
 // Track A. POST /api/v1/attendance/clock-in — any authenticated user with a
 // linked employee record clocks themselves in (attendance applies org-wide,
@@ -86,6 +88,20 @@ export async function POST(req: Request) {
     );
   }
 
+  // Mirror of the reconciliation-side guard (lib/integrations/teamoffice/reconcile.ts
+  // guardDecision): the device is the source of truth for a day it has already
+  // established as office, so a manual WFH session can't quietly attach itself
+  // to it — that would leave a device_sync record with a stray wfh-tagged
+  // session inside it. A normal (office) re-clock-in on the same day is
+  // unaffected; only an explicit workLocation=wfh request is blocked here.
+  if (existing?.source === AttendanceSource.device_sync && workLocation === WorkLocation.wfh) {
+    return fail(
+      ErrorCode.CONFLICT,
+      "Today is already recorded as an office day from the biometric device. Contact Admin/HR if this is incorrect.",
+      409,
+    );
+  }
+
   // Whether this opens the day or resumes it. Resuming skips the "pick a task"
   // requirement — the day's plan was already made at the first clock-in, and
   // making someone re-plan after a lunch break is friction, not discipline.
@@ -149,6 +165,29 @@ export async function POST(req: Request) {
     await prisma.dailyTaskSelection.createMany({
       data: workItemIds.map((workItemId) => ({ employeeId, workItemId, date })),
       skipDuplicates: true,
+    });
+  }
+
+  // WFH is notify-then-async-approve, not a blocking gate: Admin/HR find out
+  // immediately but the employee's day proceeds normally (isClockedInNow is
+  // unaffected by workLocation) — approval happens later via the existing
+  // generic PATCH /attendance/:id/approve, same as any other day.
+  if (workLocation === WorkLocation.wfh && isFirstSessionToday) {
+    const employee = await prisma.employee.findUnique({
+      where: { id: employeeId },
+      select: { fullName: true },
+    });
+    await notifyFinanceUsers(
+      "attendance.wfh_started",
+      `${employee?.fullName ?? "An employee"} clocked in from home today.`,
+      "WFH clock-in",
+      session.userId,
+    );
+    await audit({
+      action: "attendance.wfh_clock_in",
+      entityType: "attendance_record",
+      entityId: record.id,
+      metadata: { employee_id: employeeId, date: date.toISOString().slice(0, 10) },
     });
   }
 

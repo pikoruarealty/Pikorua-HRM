@@ -177,35 +177,35 @@ enum EventType {
 // ===========================================================================
 
 model User {
-  id           String   @id @default(uuid()) @db.Uuid
-  email        String   @unique
-  passwordHash String   @map("password_hash")
-  role         Role
+  id                 String    @id @default(uuid()) @db.Uuid
+  email              String    @unique
+  passwordHash       String    @map("password_hash")
+  role               Role
   // Bumped on password change / deactivation to revoke all outstanding JWTs
   // (session.ts embeds this as the `tv` claim and rejects a mismatch).
-  tokenVersion Int      @default(0) @map("token_version")
+  tokenVersion       Int       @default(0) @map("token_version")
   // True while the account still uses its onboarding temp password; the
   // dashboard layout forces a password change before anything else is usable.
   // Cleared on the first successful change-password. Default false so existing
   // and seeded accounts are never force-prompted.
-  mustChangePassword Boolean @default(false) @map("must_change_password")
-  employeeId   String?  @unique @map("employee_id") @db.Uuid
-  employee     Employee? @relation(fields: [employeeId], references: [id])
-  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  mustChangePassword Boolean   @default(false) @map("must_change_password")
+  employeeId         String?   @unique @map("employee_id") @db.Uuid
+  employee           Employee? @relation(fields: [employeeId], references: [id])
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   // Back-relations for audit "actor" columns.
-  approvedAttendance AttendanceRecord[] @relation("AttendanceApprover")
-  approvedRequests   Request[]          @relation("RequestApprover")
-  generatedPayslips  Payslip[]          @relation("PayslipGenerator")
-  notifications      Notification[]
-  createdAnnouncements Announcement[]   @relation("AnnouncementCreator")
-  createdEvents        Event[]          @relation("EventCreator")
-  auditLogs            AuditLog[]       @relation("AuditActor")
-  createdHolidays      Holiday[]        @relation("HolidayCreator")
-  pushTokens           PushToken[]
-  resetTokens          PasswordResetToken[]
-  revertedWeeklyOffMoves WeeklyOffMove[] @relation("WeeklyOffMoveReverter")
+  approvedAttendance     AttendanceRecord[]   @relation("AttendanceApprover")
+  approvedRequests       Request[]            @relation("RequestApprover")
+  generatedPayslips      Payslip[]            @relation("PayslipGenerator")
+  notifications          Notification[]
+  createdAnnouncements   Announcement[]       @relation("AnnouncementCreator")
+  createdEvents          Event[]              @relation("EventCreator")
+  auditLogs              AuditLog[]           @relation("AuditActor")
+  createdHolidays        Holiday[]            @relation("HolidayCreator")
+  pushTokens             PushToken[]
+  resetTokens            PasswordResetToken[]
+  revertedWeeklyOffMoves WeeklyOffMove[]      @relation("WeeklyOffMoveReverter")
 
   @@map("users")
 }
@@ -233,9 +233,9 @@ model Department {
   typeKey   String   @map("type_key") // machine key: tech / sales / bd
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  teams     Team[]
-  employees Employee[]
-  workUnits WorkUnit[]
+  teams                Team[]
+  employees            Employee[]
+  workUnits            WorkUnit[]
   recognitionSnapshots RecognitionSnapshot[]
 
   @@map("departments")
@@ -247,21 +247,21 @@ model Department {
 model DepartmentLabel {
   id                String       @id @default(uuid()) @db.Uuid
   departmentTypeKey String       @unique @map("department_type_key")
-  workUnitLabel     String       @map("work_unit_label")   // "Project" / "Campaign"
-  subUnitLabel      String       @map("sub_unit_label")    // "Feature" / "Target Segment"
-  workItemLabel     String       @map("work_item_label")   // "Task" / "Call"
-  workItemMode      WorkItemMode @map("work_item_mode")    // default progress model
+  workUnitLabel     String       @map("work_unit_label") // "Project" / "Campaign"
+  subUnitLabel      String       @map("sub_unit_label") // "Feature" / "Target Segment"
+  workItemLabel     String       @map("work_item_label") // "Task" / "Call"
+  workItemMode      WorkItemMode @map("work_item_mode") // default progress model
 
   @@map("department_labels")
 }
 
 model Team {
-  id           String   @id @default(uuid()) @db.Uuid
-  departmentId String   @map("department_id") @db.Uuid
-  department   Department @relation(fields: [departmentId], references: [id])
-  name         String
-  teamLeadId   String?  @map("team_lead_id") @db.Uuid
-  teamLead     Employee? @relation("TeamLead", fields: [teamLeadId], references: [id])
+  id                  String     @id @default(uuid()) @db.Uuid
+  departmentId        String     @map("department_id") @db.Uuid
+  department          Department @relation(fields: [departmentId], references: [id])
+  name                String
+  teamLeadId          String?    @map("team_lead_id") @db.Uuid
+  teamLead            Employee?  @relation("TeamLead", fields: [teamLeadId], references: [id])
   // "HH:MM" 24h, server-local time. Admin/HR-set per team; defaults to
   // "11:00" unless explicitly customized (owner request, 2026-08-08 — team
   // creation/edit UI always sends a value now). Still nullable at the schema
@@ -269,7 +269,14 @@ model Team {
   // skipped for that team's attendance records (Track A decision,
   // 2026-07-13 — see docs/TRACK_A_TASKS.md) — that escape hatch stays
   // available via direct API calls even though the UI no longer offers it.
-  expectedStartTime String? @default("11:00") @map("expected_start_time")
+  expectedStartTime   String?    @default("11:00") @map("expected_start_time")
+  // Company-default shift end (2026-08-12, owner request): 11:00-19:00 (8h)
+  // is the default for every team, editable per team same as
+  // expectedStartTime. Used both by the late-arrival "made it up by staying
+  // late" waiver (lib/attendance/time.ts#isLateWaivedByMakeup) and as the
+  // real per-team input to getDefaultClockOut's EOD auto-fill (which
+  // previously assumed a hardcoded 9h workday regardless of team config).
+  expectedEndTime     String?    @default("19:00") @map("expected_end_time")
   // Day of week this team is off by default (owner request, 2026-08-08).
   // 0=Sunday..6=Saturday (matches JS Date#getUTCDay()). Defaults to Sunday —
   // the old hardcoded rule in lib/attendance/monthly-breakdown.ts — but is
@@ -277,8 +284,8 @@ model Team {
   // expectedStartTime. An individual employee can self-declare a one-off
   // WeeklyOffMove to a different day for a given week without changing the
   // team's default.
-  defaultWeeklyOffDay Int @default(0) @map("default_weekly_off_day")
-  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  defaultWeeklyOffDay Int        @default(0) @map("default_weekly_off_day")
+  createdAt           DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
 
   members       Employee[]     @relation("TeamMembers")
   eventInvitees EventInvitee[]
@@ -287,55 +294,60 @@ model Team {
 }
 
 model Employee {
-  id            String   @id @default(uuid()) @db.Uuid
-  fullName      String   @map("full_name")
-  email         String   @unique
-  phone         String?
-  departmentId  String?  @map("department_id") @db.Uuid
-  department    Department? @relation(fields: [departmentId], references: [id])
-  teamId        String?  @map("team_id") @db.Uuid
-  team          Team?    @relation("TeamMembers", fields: [teamId], references: [id])
-  role          Role
-  dateOfBirth   DateTime? @map("date_of_birth") @db.Date
-  dateOfJoining DateTime  @map("date_of_joining") @db.Date
-  baseSalary    Decimal   @map("base_salary") @db.Decimal(12, 2)
+  id                     String         @id @default(uuid()) @db.Uuid
+  fullName               String         @map("full_name")
+  email                  String         @unique
+  phone                  String?
+  departmentId           String?        @map("department_id") @db.Uuid
+  department             Department?    @relation(fields: [departmentId], references: [id])
+  teamId                 String?        @map("team_id") @db.Uuid
+  team                   Team?          @relation("TeamMembers", fields: [teamId], references: [id])
+  role                   Role
+  dateOfBirth            DateTime?      @map("date_of_birth") @db.Date
+  dateOfJoining          DateTime       @map("date_of_joining") @db.Date
+  baseSalary             Decimal        @map("base_salary") @db.Decimal(12, 2)
   // Opaque local-storage key (lib/storage/local.ts), served via
   // GET /employees/:id/photo. Nullable in the DB because pre-2026-07-15 rows
   // predate the requirement; the create API requires a photo for new hires.
-  photoUrl      String?  @map("photo_url")
-  deviceUid     Int?     @map("device_uid") // reserved for future device-sync phase
-  status        EmployeeStatus @default(active)
-  employmentType      EmploymentType @default(fulltime) @map("employment_type")
-  requiredDaysPerWeek Int?           @map("required_days_per_week") // 1-6 for parttime/intern; null for standard fulltime
-  defaultWeeklyOffDay Int?           @map("default_weekly_off_day") // 0=Sun..6=Sat; overrides Team.defaultWeeklyOffDay if set
+  photoUrl               String?        @map("photo_url")
+  // TeamOffice biometric device employee key ("Empcode", a string — 2026-08-12).
+  // Not DB-unique: an unmapped Empcode must still be ingestible into
+  // device_punch_raw so it can surface on the Admin mapping screen before a
+  // human confirms the link; "one employee per Empcode" is an application-
+  // layer check in the mapping-confirm route, not a DB constraint.
+  deviceUid              String?        @map("device_uid")
+  status                 EmployeeStatus @default(active)
+  employmentType         EmploymentType @default(fulltime) @map("employment_type")
+  requiredDaysPerWeek    Int?           @map("required_days_per_week") // 1-6 for parttime/intern; null for standard fulltime
+  defaultWeeklyOffDay    Int?           @map("default_weekly_off_day") // 0=Sun..6=Sat; overrides Team.defaultWeeklyOffDay if set
   // Per-employee sales targets (2026-08-10). Null = fall back to the org-wide
   // SalesTargetConfig. Lead-set, so a senior rep can carry 150 calls/day while
   // a new joiner carries 60 without changing everyone's default.
-  dailyCallTarget        Int? @map("daily_call_target")
-  monthlySiteVisitTarget Int? @map("monthly_site_visit_target")
-  monthlyBookingTarget   Int? @map("monthly_booking_target")
-  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  dailyCallTarget        Int?           @map("daily_call_target")
+  monthlySiteVisitTarget Int?           @map("monthly_site_visit_target")
+  monthlyBookingTarget   Int?           @map("monthly_booking_target")
+  createdAt              DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  user               User?
-  ledTeams           Team[]               @relation("TeamLead")
-  ledWorkUnits       WorkUnit[]           @relation("WorkUnitProjectLead")
-  assignedWorkItems  WorkItem[]           @relation("WorkItemAssignee")
-  reviewedWorkItems  WorkItem[]           @relation("WorkItemReviewer")
-  dailySelections    DailyTaskSelection[]
-  pointLedger        EmployeePointLedger[]
-  attendanceRecords  AttendanceRecord[]
-  payslips           Payslip[]
-  requests           Request[]
-  recognitionSnapshots RecognitionSnapshot[]
-  performanceReviews      PerformanceReview[]  @relation("PerformanceReviewSubject")
-  performanceReviewsGiven PerformanceReview[]  @relation("PerformanceReviewReviewer")
-  documents          EmployeeDocument[]
-  assets             Asset[]
-  eventsAbout        Event[]              @relation("EventSubject")
-  eventInvitees      EventInvitee[]
-  weeklyOffMoves     WeeklyOffMove[]
-  salesActivitySyncs SalesActivitySync[]
+  user                    User?
+  ledTeams                Team[]                 @relation("TeamLead")
+  ledWorkUnits            WorkUnit[]             @relation("WorkUnitProjectLead")
+  assignedWorkItems       WorkItem[]             @relation("WorkItemAssignee")
+  reviewedWorkItems       WorkItem[]             @relation("WorkItemReviewer")
+  dailySelections         DailyTaskSelection[]
+  pointLedger             EmployeePointLedger[]
+  attendanceRecords       AttendanceRecord[]
+  payslips                Payslip[]
+  requests                Request[]
+  recognitionSnapshots    RecognitionSnapshot[]
+  performanceReviews      PerformanceReview[]    @relation("PerformanceReviewSubject")
+  performanceReviewsGiven PerformanceReview[]    @relation("PerformanceReviewReviewer")
+  documents               EmployeeDocument[]
+  assets                  Asset[]
+  eventsAbout             Event[]                @relation("EventSubject")
+  eventInvitees           EventInvitee[]
+  weeklyOffMoves          WeeklyOffMove[]
+  salesActivitySyncs      SalesActivitySync[]
   offlineClaims           OfflineActivityClaim[] @relation("OfflineClaimSubject")
   offlineClaimsReviewed   OfflineActivityClaim[] @relation("OfflineClaimReviewer")
 
@@ -347,25 +359,25 @@ model Employee {
 // ===========================================================================
 
 model WorkUnit {
-  id           String   @id @default(uuid()) @db.Uuid
-  departmentId String   @map("department_id") @db.Uuid
-  department   Department @relation(fields: [departmentId], references: [id])
-  name         String
+  id            String         @id @default(uuid()) @db.Uuid
+  departmentId  String         @map("department_id") @db.Uuid
+  department    Department     @relation(fields: [departmentId], references: [id])
+  name          String
   // Free-text project brief. Feeds the LLM task-generator
   // (POST /work-units/:id/generate-tasks) which proposes SubUnits + WorkItems
   // from this description. Optional; null = no brief captured yet.
-  description  String?
+  description   String?
   // Renamed from teamLeadId 2026-08-07: a WorkUnit's lead can now be any
   // employee (not just a tech_lead/sales_lead role) — see lib/rbac's
   // canAssignAtOrBelow hierarchy helper. Not to be confused with the
   // unrelated, unchanged Team.teamLeadId (actual org-team leadership).
-  projectLeadId String   @map("project_lead_id") @db.Uuid
-  projectLead   Employee @relation("WorkUnitProjectLead", fields: [projectLeadId], references: [id])
-  status       WorkUnitStatus @default(active)
-  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  projectLeadId String         @map("project_lead_id") @db.Uuid
+  projectLead   Employee       @relation("WorkUnitProjectLead", fields: [projectLeadId], references: [id])
+  status        WorkUnitStatus @default(active)
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
   // Soft delete — kept for audit trail (points ledger / recognition history
   // reference WorkItems underneath). Cascades to subUnits/workItems on delete.
-  deletedAt    DateTime? @map("deleted_at") @db.Timestamptz(6)
+  deletedAt     DateTime?      @map("deleted_at") @db.Timestamptz(6)
 
   subUnits SubUnit[]
 
@@ -373,11 +385,11 @@ model WorkUnit {
 }
 
 model SubUnit {
-  id         String   @id @default(uuid()) @db.Uuid
-  workUnitId String   @map("work_unit_id") @db.Uuid
-  workUnit   WorkUnit @relation(fields: [workUnitId], references: [id])
+  id         String    @id @default(uuid()) @db.Uuid
+  workUnitId String    @map("work_unit_id") @db.Uuid
+  workUnit   WorkUnit  @relation(fields: [workUnitId], references: [id])
   name       String
-  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   deletedAt  DateTime? @map("deleted_at") @db.Timestamptz(6)
 
   workItems WorkItem[]
@@ -390,64 +402,64 @@ model SubUnit {
 // frequency=daily target), tracked as a new row per period rather than an
 // in-place reset.
 model WorkItem {
-  id          String   @id @default(uuid()) @db.Uuid
-  subUnitId   String   @map("sub_unit_id") @db.Uuid
-  subUnit     SubUnit  @relation(fields: [subUnitId], references: [id])
-  assignedTo  String   @map("assigned_to") @db.Uuid
-  assignee    Employee @relation("WorkItemAssignee", fields: [assignedTo], references: [id])
-  title       String
+  id           String             @id @default(uuid()) @db.Uuid
+  subUnitId    String             @map("sub_unit_id") @db.Uuid
+  subUnit      SubUnit            @relation(fields: [subUnitId], references: [id])
+  assignedTo   String             @map("assigned_to") @db.Uuid
+  assignee     Employee           @relation("WorkItemAssignee", fields: [assignedTo], references: [id])
+  title        String
   // Acceptance criteria / definition of done for this one item — plain text,
   // deliberately not a separately-trackable checklist table (Pillar 1, 2026-08-08).
-  description String?
+  description  String?
   // Lead-set target date (AI may propose one at generation; the Lead confirms).
   // Date-only: a due date is a calendar day, not an instant.
-  dueDate     DateTime? @map("due_date") @db.Date
-  mode        WorkItemMode
-  taskPoints  Int?     @map("task_points")     // required if atomic
-  targetValue Decimal? @map("target_value") @db.Decimal(12, 2) // required if metric; editable anytime
-  currentValue Decimal? @map("current_value") @db.Decimal(12, 2) // required if metric
-  frequency   WorkItemFrequency? @map("frequency") // required if metric; immutable after creation
-  periodMonth Int?     @map("period_month")    // required if metric
-  periodYear  Int?     @map("period_year")     // required if metric
-  periodDay   Int?     @map("period_day")      // required if metric && frequency=daily, else null
+  dueDate      DateTime?          @map("due_date") @db.Date
+  mode         WorkItemMode
+  taskPoints   Int?               @map("task_points") // required if atomic
+  targetValue  Decimal?           @map("target_value") @db.Decimal(12, 2) // required if metric; editable anytime
+  currentValue Decimal?           @map("current_value") @db.Decimal(12, 2) // required if metric
+  frequency    WorkItemFrequency? @map("frequency") // required if metric; immutable after creation
+  periodMonth  Int?               @map("period_month") // required if metric
+  periodYear   Int?               @map("period_year") // required if metric
+  periodDay    Int?               @map("period_day") // required if metric && frequency=daily, else null
   // Which sales number this metric item tracks, when it is CRM-fed (Pillar 4).
   // Null for every non-sales metric item (a BDE target, say) — those stay
   // manually driven exactly as before.
-  salesMetric SalesMetric? @map("sales_metric")
+  salesMetric  SalesMetric?       @map("sales_metric")
   // "Repeat this daily until stopped" (2026-08-10). Applies to BOTH atomic and
   // metric items: the daily rollover cron clones the latest non-deleted row
   // forward each day. Clearing the flag or soft-deleting the newest row stops
   // the chain — no separate template concept. Metric items with
   // frequency=daily are rolled over regardless, for backwards compatibility
   // with the pre-existing behaviour.
-  repeatDaily Boolean  @default(false) @map("repeat_daily")
-  status      WorkItemStatus @default(pending)
-  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
-  completedAt DateTime? @map("completed_at") @db.Timestamptz(6)
+  repeatDaily  Boolean            @default(false) @map("repeat_daily")
+  status       WorkItemStatus     @default(pending)
+  createdAt    DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+  completedAt  DateTime?          @map("completed_at") @db.Timestamptz(6)
   // Lead review trail (Pillar 2, 2026-08-08). `submittedAt` is when the
   // assignee marked a threshold-crossing task done; the reviewed* fields are
   // stamped when the Lead accepts or sends it back. `reviewNote` is the Lead's
   // reason — required when rejecting or when crediting fewer points than
   // taskPoints. Points actually awarded live in EmployeePointLedger, not here:
   // taskPoints stays the nominal size of the task.
-  submittedAt DateTime? @map("submitted_at") @db.Timestamptz(6)
-  reviewedBy  String?   @map("reviewed_by") @db.Uuid
-  reviewer    Employee? @relation("WorkItemReviewer", fields: [reviewedBy], references: [id])
-  reviewedAt  DateTime? @map("reviewed_at") @db.Timestamptz(6)
-  reviewNote  String?   @map("review_note")
+  submittedAt  DateTime?          @map("submitted_at") @db.Timestamptz(6)
+  reviewedBy   String?            @map("reviewed_by") @db.Uuid
+  reviewer     Employee?          @relation("WorkItemReviewer", fields: [reviewedBy], references: [id])
+  reviewedAt   DateTime?          @map("reviewed_at") @db.Timestamptz(6)
+  reviewNote   String?            @map("review_note")
   // Self-logged ad-hoc work (2026-08-10). An employee can log a bug fix or a
   // small feature that nobody assigned them. Points are NOT chosen by the
   // employee and NOT judged by anyone: they come fixed from the picked
   // AdhocTaskType. The Lead's only job at review is "did this happen, yes/no"
   // — a question a non-technical Lead can actually answer, which is why
   // difficulty-estimation (by AI or by human) was rejected as the mechanism.
-  selfLogged  Boolean   @default(false) @map("self_logged")
-  adhocTypeId String?   @map("adhoc_type_id") @db.Uuid
-  adhocType   AdhocTaskType? @relation(fields: [adhocTypeId], references: [id])
+  selfLogged   Boolean            @default(false) @map("self_logged")
+  adhocTypeId  String?            @map("adhoc_type_id") @db.Uuid
+  adhocType    AdhocTaskType?     @relation(fields: [adhocTypeId], references: [id])
   // Soft delete — the points ledger keeps referencing this row for audit even
   // after deletion; deleted rows are just filtered out of normal operation.
-  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(6)
+  deletedAt    DateTime?          @map("deleted_at") @db.Timestamptz(6)
 
   dailySelections DailyTaskSelection[]
   pointLedger     EmployeePointLedger[]
@@ -497,8 +509,8 @@ model EmployeePointLedger {
 // difficulty estimate for anyone to inflate or to have to adjudicate.
 model AdhocTaskType {
   id        String   @id @default(uuid()) @db.Uuid
-  key       String   @unique              // "bug_fix", "small_feature", "chore"
-  label     String                        // "Bug fix"
+  key       String   @unique // "bug_fix", "small_feature", "chore"
+  label     String // "Bug fix"
   points    Int
   active    Boolean  @default(true)
   sortOrder Int      @default(0) @map("sort_order")
@@ -525,19 +537,19 @@ model AdhocTaskType {
 // for a rep who did nothing that day. Absent row = no data; zero row =
 // confirmed zero. Do not conflate them.
 model SalesActivitySync {
-  id                String    @id @default(uuid()) @db.Uuid
+  id                String           @id @default(uuid()) @db.Uuid
   // Null when the feed named someone HRM cannot resolve. The row is kept and
   // flagged (matchMethod = unmatched) rather than guessed onto a rep.
-  employeeId        String?   @map("employee_id") @db.Uuid
-  employee          Employee? @relation(fields: [employeeId], references: [id])
-  crmEmail          String    @map("crm_email")
-  crmName           String    @map("crm_name")
-  date              DateTime  @db.Date
-  callsMade         Int       @default(0) @map("calls_made")
-  siteVisits        Int       @default(0) @map("site_visits")
-  bookingsConfirmed Int       @default(0) @map("bookings_confirmed")
+  employeeId        String?          @map("employee_id") @db.Uuid
+  employee          Employee?        @relation(fields: [employeeId], references: [id])
+  crmEmail          String           @map("crm_email")
+  crmName           String           @map("crm_name")
+  date              DateTime         @db.Date
+  callsMade         Int              @default(0) @map("calls_made")
+  siteVisits        Int              @default(0) @map("site_visits")
+  bookingsConfirmed Int              @default(0) @map("bookings_confirmed")
   matchMethod       SalesMatchMethod @map("match_method")
-  syncedAt          DateTime  @default(now()) @map("synced_at") @db.Timestamptz(6)
+  syncedAt          DateTime         @default(now()) @map("synced_at") @db.Timestamptz(6)
 
   // The CRM's own grain: one row per rep per day. Upsert key for re-syncs.
   @@unique([crmEmail, date])
@@ -552,19 +564,19 @@ model SalesActivitySync {
 // count into the day's calls WorkItem, but stay individually visible in the
 // breakdown rather than disappearing into one blended number.
 model OfflineActivityClaim {
-  id         String   @id @default(uuid()) @db.Uuid
-  employeeId String   @map("employee_id") @db.Uuid
-  employee   Employee @relation("OfflineClaimSubject", fields: [employeeId], references: [id])
-  date       DateTime @db.Date
+  id         String             @id @default(uuid()) @db.Uuid
+  employeeId String             @map("employee_id") @db.Uuid
+  employee   Employee           @relation("OfflineClaimSubject", fields: [employeeId], references: [id])
+  date       DateTime           @db.Date
   calls      Int
   // The rep's justification. Required — an unexplained claim is not reviewable.
   note       String
   status     OfflineClaimStatus @default(pending)
-  reviewedBy String?  @map("reviewed_by") @db.Uuid
-  reviewer   Employee? @relation("OfflineClaimReviewer", fields: [reviewedBy], references: [id])
-  reviewedAt DateTime? @map("reviewed_at") @db.Timestamptz(6)
-  reviewNote String?  @map("review_note")
-  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  reviewedBy String?            @map("reviewed_by") @db.Uuid
+  reviewer   Employee?          @relation("OfflineClaimReviewer", fields: [reviewedBy], references: [id])
+  reviewedAt DateTime?          @map("reviewed_at") @db.Timestamptz(6)
+  reviewNote String?            @map("review_note")
+  createdAt  DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
 
   // Deliberately NOT unique per (employee, date): a rejected claim must be
   // re-submittable, and a rep may log two Excel batches in one day. Approved
@@ -595,17 +607,17 @@ model SalesTargetConfig {
 // Knobs for the composite performance score (Pillar 6). Versioned like the
 // other config tables.
 model PerformanceConfig {
-  id                       String   @id @default(uuid()) @db.Uuid
+  id                   String   @id @default(uuid()) @db.Uuid
   // Grace period (2026-08-10): HRM runs tracking-only until an Admin flips
   // this on. Before that, tasks and attendance are recorded but no composite
   // score is published, because the first weeks' data is knowingly incomplete
   // (in-flight projects predate HRM) and scoring people on it would be wrong.
-  scoringEnabled           Boolean  @default(false) @map("scoring_enabled")
+  scoringEnabled       Boolean  @default(false) @map("scoring_enabled")
   // Ceiling on how much of an employee's monthly points may come from
   // self-logged ad-hoc work, as a percentage. Stops ad-hoc logging from
   // becoming the cheapest route to a high output score.
-  selfLoggedCapPercent     Int      @default(30) @map("self_logged_cap_percent")
-  effectiveFrom            DateTime @map("effective_from") @db.Date
+  selfLoggedCapPercent Int      @default(30) @map("self_logged_cap_percent")
+  effectiveFrom        DateTime @map("effective_from") @db.Date
 
   @@map("performance_config")
 }
@@ -615,42 +627,63 @@ model PerformanceConfig {
 // ===========================================================================
 
 model AttendanceRecord {
-  id               String   @id @default(uuid()) @db.Uuid
-  employeeId       String   @map("employee_id") @db.Uuid
-  employee         Employee @relation(fields: [employeeId], references: [id])
-  date             DateTime @db.Date
+  id               String                   @id @default(uuid()) @db.Uuid
+  employeeId       String                   @map("employee_id") @db.Uuid
+  employee         Employee                 @relation(fields: [employeeId], references: [id])
+  date             DateTime                 @db.Date
   // The day's BOUNDS, not a single stretch of work. With re-clock-in
   // (2026-08-11) a day can be several sessions: clock_in_raw is the first
   // punch in of the day (what late-arrival is measured from) and
   // clock_out_raw the last punch out, or null while a session is open.
   // Worked time is the SUM of attendance_sessions, never out-minus-in —
   // otherwise a lunch break would be paid as work.
-  clockInRaw       DateTime? @map("clock_in_raw") @db.Timestamptz(6)
-  clockOutRaw      DateTime? @map("clock_out_raw") @db.Timestamptz(6)
-  clockInApproved  DateTime? @map("clock_in_approved") @db.Timestamptz(6)
-  clockOutApproved DateTime? @map("clock_out_approved") @db.Timestamptz(6)
-  totalHours       Decimal? @map("total_hours") @db.Decimal(4, 2)
-  isHalfDay        Boolean  @default(false) @map("is_half_day")
+  clockInRaw       DateTime?                @map("clock_in_raw") @db.Timestamptz(6)
+  clockOutRaw      DateTime?                @map("clock_out_raw") @db.Timestamptz(6)
+  clockInApproved  DateTime?                @map("clock_in_approved") @db.Timestamptz(6)
+  clockOutApproved DateTime?                @map("clock_out_approved") @db.Timestamptz(6)
+  totalHours       Decimal?                 @map("total_hours") @db.Decimal(4, 2)
+  isHalfDay        Boolean                  @default(false) @map("is_half_day")
   // Manual admin override (2026-08-07): marks an otherwise-normal present
   // day as a compensation day (e.g. an employee came in to make up for a
   // leave taken elsewhere), independent of the automatic Sunday-clock-in
   // detection in lib/attendance/monthly-breakdown.ts. Both paths feed the
   // same `compensationDays` bucket — this just adds a second, manual way to
   // land in it for a weekday that isn't otherwise a day off.
-  isCompensation   Boolean  @default(false) @map("is_compensation")
+  isCompensation   Boolean                  @default(false) @map("is_compensation")
+  // Manual late-deduction waiver (2026-08-12, owner request): for cases where
+  // a late clock-in wasn't the employee's fault (e.g. office inaccessible,
+  // key not available) and they shouldn't have to "make up" the lost time by
+  // staying late to avoid the deduction. Distinct from the automatic
+  // isLateWaivedByMakeup waiver in lib/attendance/time.ts, which only waives
+  // when the employee's own clock-out compensates for their late arrival —
+  // this is Admin/HR's explicit override when neither lateness nor make-up
+  // is the employee's responsibility. Set via PATCH .../edit, audited.
+  lateExempt       Boolean                  @default(false) @map("late_exempt")
+  lateExemptReason String?                  @map("late_exempt_reason")
   approvalStatus   AttendanceApprovalStatus @default(pending) @map("approval_status")
-  approvedById     String?  @map("approved_by") @db.Uuid // must be admin/hr
-  approvedBy       User?    @relation("AttendanceApprover", fields: [approvedById], references: [id])
-  approvedAt       DateTime? @map("approved_at") @db.Timestamptz(6)
-  source           AttendanceSource @default(manual)
+  approvedById     String?                  @map("approved_by") @db.Uuid // must be admin/hr
+  approvedBy       User?                    @relation("AttendanceApprover", fields: [approvedById], references: [id])
+  approvedAt       DateTime?                @map("approved_at") @db.Timestamptz(6)
+  source           AttendanceSource         @default(manual)
   // The day's location, taken from the FIRST session of the day. Per-session
   // location is the authoritative value (someone can come in after a WFH
   // morning); this copy exists so attendance lists and filters don't have to
   // join sessions to answer "was this a WFH day?".
-  workLocation     WorkLocation @default(office) @map("work_location")
+  workLocation     WorkLocation             @default(office) @map("work_location")
   sessions         AttendanceSession[]
-  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  // Device-sync review flag (2026-08-12): the biometric feed gives no IN/OUT
+  // flag, only a position-based guess (odd=in, even=out — see reconcile.ts).
+  // A lone device punch left open at end-of-day is genuinely ambiguous: it
+  // could be a real forgotten clock-out, or it could be the day's actual
+  // clock-out misread as an "in" because the real clock-in punch never
+  // happened (a missed badge). The EOD cleanup cron flags the latter case
+  // (heuristic: a solo punch implausibly late for a first arrival) rather
+  // than guessing and fabricating totalHours — Admin/HR resolve it via the
+  // existing PATCH .../edit, which clears the flag.
+  flaggedForReview Boolean                  @default(false) @map("flagged_for_review")
+  flagReason       String?                  @map("flag_reason")
+  createdAt        DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   @@unique([employeeId, date])
   @@index([approvalStatus])
@@ -671,14 +704,15 @@ model AttendanceRecord {
 // opens or closes a session, so a device day and a manual day are the same
 // object.
 model AttendanceSession {
-  id           String   @id @default(uuid()) @db.Uuid
-  recordId     String   @map("attendance_record_id") @db.Uuid
+  id           String           @id @default(uuid()) @db.Uuid
+  recordId     String           @map("attendance_record_id") @db.Uuid
   record       AttendanceRecord @relation(fields: [recordId], references: [id], onDelete: Cascade)
-  clockIn      DateTime @map("clock_in") @db.Timestamptz(6)
-  clockOut     DateTime? @map("clock_out") @db.Timestamptz(6)
+  clockIn      DateTime         @map("clock_in") @db.Timestamptz(6)
+  clockOut     DateTime?        @map("clock_out") @db.Timestamptz(6)
   source       AttendanceSource @default(manual)
-  workLocation WorkLocation @default(office) @map("work_location")
-  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  workLocation WorkLocation     @default(office) @map("work_location")
+  createdAt    DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  rawPunches   DevicePunchRaw[]
 
   @@index([recordId])
   @@map("attendance_sessions")
@@ -716,8 +750,48 @@ model WeeklyOffMove {
   @@map("weekly_off_moves")
 }
 
-// NOTE: `device_punch_raw` from SCHEMA.md §3 is intentionally NOT modeled —
-// deferred biometric LAN-sync phase (PRD §5.1.1). Do not add in v1.
+// TeamOffice biometric integration (2026-08-12). The vendor's incremental
+// polling endpoint (DownloadLastPunchData) has no reliable IN/OUT flag, so a
+// punch lands as `unknown` at ingest — reconcile.ts infers direction by
+// pairing consecutive same-day punches per employee (odd = in, even = out).
+enum PunchDirection {
+  in
+  out
+  unknown
+}
+
+// Raw ingest of every TeamOffice punch, kept even after reconciliation
+// (audit trail + replay safety). `dedupKey` makes re-ingesting idempotent via
+// createMany({ skipDuplicates: true }) even after a partial sync failure.
+model DevicePunchRaw {
+  id                  String             @id @default(uuid()) @db.Uuid
+  deviceUid           String             @map("device_uid")
+  punchTime           DateTime           @map("punch_time") @db.Timestamptz(6)
+  direction           PunchDirection     @default(unknown)
+  machineId           String?            @map("machine_id")
+  dedupKey            String             @unique @map("dedup_key")
+  syncedAt            DateTime           @default(now()) @map("synced_at") @db.Timestamptz(6)
+  reconciledAt        DateTime?          @map("reconciled_at") @db.Timestamptz(6)
+  reconciledSessionId String?            @map("reconciled_session_id") @db.Uuid
+  reconciledSession   AttendanceSession? @relation(fields: [reconciledSessionId], references: [id])
+
+  @@index([deviceUid, punchTime])
+  @@index([reconciledAt])
+  @@map("device_punch_raw")
+}
+
+// Cursor for the incremental DownloadLastPunchData poll (LastRecord/MaxRecord,
+// format MMyyyy$ID per the vendor doc). Kept as an ordinary table rather than
+// a fixed-id singleton — no precedent for that pattern elsewhere in this
+// schema — the sync job resolves it via findFirst and creates the one row on
+// first run.
+model DeviceSyncCursor {
+  id         String   @id @default(uuid()) @db.Uuid
+  lastRecord String?  @map("last_record")
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("device_sync_cursor")
+}
 
 // ===========================================================================
 // 4. PAYROLL  (Track A)
@@ -759,45 +833,45 @@ model LeaveConfig {
 }
 
 model Payslip {
-  id                    String   @id @default(uuid()) @db.Uuid
-  employeeId            String   @map("employee_id") @db.Uuid
-  employee              Employee @relation(fields: [employeeId], references: [id])
-  periodMonth           Int      @map("period_month")
-  periodYear            Int      @map("period_year")
-  baseSalary            Decimal  @map("base_salary") @db.Decimal(12, 2)
-  incentiveAmount       Decimal  @default(0) @map("incentive_amount") @db.Decimal(12, 2)
-  bonusAmount           Decimal  @default(0) @map("bonus_amount") @db.Decimal(12, 2)
-  bonusReason           String?  @map("bonus_reason")
-  otherAdditionAmount   Decimal? @map("other_addition_amount") @db.Decimal(12, 2)
-  otherAdditionReason   String?  @map("other_addition_reason")
-  otherDeductionAmount  Decimal? @map("other_deduction_amount") @db.Decimal(12, 2)
-  otherDeductionReason  String?  @map("other_deduction_reason")
-  lateCount             Int      @default(0) @map("late_count")       // from approved attendance only
-  unpaidLeaveCount      Int      @default(0) @map("unpaid_leave_count")
-  halfDayCount          Int      @default(0) @map("half_day_count")
-  absentCount           Int      @default(0) @map("absent_count")     // added 2026-07-17
+  id                   String        @id @default(uuid()) @db.Uuid
+  employeeId           String        @map("employee_id") @db.Uuid
+  employee             Employee      @relation(fields: [employeeId], references: [id])
+  periodMonth          Int           @map("period_month")
+  periodYear           Int           @map("period_year")
+  baseSalary           Decimal       @map("base_salary") @db.Decimal(12, 2)
+  incentiveAmount      Decimal       @default(0) @map("incentive_amount") @db.Decimal(12, 2)
+  bonusAmount          Decimal       @default(0) @map("bonus_amount") @db.Decimal(12, 2)
+  bonusReason          String?       @map("bonus_reason")
+  otherAdditionAmount  Decimal?      @map("other_addition_amount") @db.Decimal(12, 2)
+  otherAdditionReason  String?       @map("other_addition_reason")
+  otherDeductionAmount Decimal?      @map("other_deduction_amount") @db.Decimal(12, 2)
+  otherDeductionReason String?       @map("other_deduction_reason")
+  lateCount            Int           @default(0) @map("late_count") // from approved attendance only
+  unpaidLeaveCount     Int           @default(0) @map("unpaid_leave_count")
+  halfDayCount         Int           @default(0) @map("half_day_count")
+  absentCount          Int           @default(0) @map("absent_count") // added 2026-07-17
   // Added 2026-07-17 (earned-pay proration): every count that feeds
   // earned_base_pay, stored for audit reproducibility alongside the counts
   // above. Present/half-day/paid-leave/holiday/compensation days are paid;
   // unpaid-leave/absent days are simply excluded (no separate deduction).
-  presentCount          Int      @default(0) @map("present_count")
-  paidLeaveCount        Int      @default(0) @map("paid_leave_count")
-  holidayCount          Int      @default(0) @map("holiday_count")
-  compensationCount     Int      @default(0) @map("compensation_count")
+  presentCount         Int           @default(0) @map("present_count")
+  paidLeaveCount       Int           @default(0) @map("paid_leave_count")
+  holidayCount         Int           @default(0) @map("holiday_count")
+  compensationCount    Int           @default(0) @map("compensation_count")
   // earned_base_pay = (present + half*0.5 + paid_leave + holiday + compensation) * per_day_rate
-  earnedBasePay         Decimal  @default(0) @map("earned_base_pay") @db.Decimal(12, 2)
+  earnedBasePay        Decimal       @default(0) @map("earned_base_pay") @db.Decimal(12, 2)
   // Renamed from standard_deduction_total (2026-07-17): now represents ONLY
   // the late-arrival penalty (late_count * late_deduction_percent% *
   // per_day_rate) — half-day/unpaid-leave/absent no longer separately
   // deduct, they're excluded from earned_base_pay instead.
-  lateDeductionTotal    Decimal  @default(0) @map("late_deduction_total") @db.Decimal(12, 2)
-  reimbursementTotal    Decimal  @default(0) @map("reimbursement_total") @db.Decimal(12, 2)
-  employeeOfMonthRef    Boolean  @default(false) @map("employee_of_month_ref") // reference only
-  netPay                Decimal  @map("net_pay") @db.Decimal(12, 2)
-  generatedById         String   @map("generated_by") @db.Uuid // must be admin/hr
-  generatedBy           User     @relation("PayslipGenerator", fields: [generatedById], references: [id])
-  generatedAt           DateTime @default(now()) @map("generated_at") @db.Timestamptz(6)
-  status                PayslipStatus @default(draft)
+  lateDeductionTotal   Decimal       @default(0) @map("late_deduction_total") @db.Decimal(12, 2)
+  reimbursementTotal   Decimal       @default(0) @map("reimbursement_total") @db.Decimal(12, 2)
+  employeeOfMonthRef   Boolean       @default(false) @map("employee_of_month_ref") // reference only
+  netPay               Decimal       @map("net_pay") @db.Decimal(12, 2)
+  generatedById        String        @map("generated_by") @db.Uuid // must be admin/hr
+  generatedBy          User          @relation("PayslipGenerator", fields: [generatedById], references: [id])
+  generatedAt          DateTime      @default(now()) @map("generated_at") @db.Timestamptz(6)
+  status               PayslipStatus @default(draft)
 
   @@unique([employeeId, periodYear, periodMonth])
   @@map("payslips")
@@ -808,20 +882,20 @@ model Payslip {
 // ===========================================================================
 
 model Request {
-  id            String   @id @default(uuid()) @db.Uuid
-  employeeId    String   @map("employee_id") @db.Uuid
-  employee      Employee @relation(fields: [employeeId], references: [id])
+  id            String        @id @default(uuid()) @db.Uuid
+  employeeId    String        @map("employee_id") @db.Uuid
+  employee      Employee      @relation(fields: [employeeId], references: [id])
   type          RequestType
   status        RequestStatus @default(pending)
-  dateFrom      DateTime? @map("date_from") @db.Date
-  dateTo        DateTime? @map("date_to") @db.Date
-  amount        Decimal? @db.Decimal(12, 2) // for reimbursement
+  dateFrom      DateTime?     @map("date_from") @db.Date
+  dateTo        DateTime?     @map("date_to") @db.Date
+  amount        Decimal?      @db.Decimal(12, 2) // for reimbursement
   description   String?
-  attachmentUrl String?  @map("attachment_url")
-  approverId    String?  @map("approver_id") @db.Uuid // MUST be admin/hr (enforce in app logic)
-  approver      User?    @relation("RequestApprover", fields: [approverId], references: [id])
-  approvedAt    DateTime? @map("approved_at") @db.Timestamptz(6)
-  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  attachmentUrl String?       @map("attachment_url")
+  approverId    String?       @map("approver_id") @db.Uuid // MUST be admin/hr (enforce in app logic)
+  approver      User?         @relation("RequestApprover", fields: [approverId], references: [id])
+  approvedAt    DateTime?     @map("approved_at") @db.Timestamptz(6)
+  createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
 
   @@index([employeeId])
   @@index([type, status])
@@ -833,29 +907,29 @@ model Request {
 // ===========================================================================
 
 model RecognitionSnapshot {
-  id               String   @id @default(uuid()) @db.Uuid
-  periodType       RecognitionPeriodType @map("period_type")
-  periodStart      DateTime @map("period_start") @db.Date
-  departmentId     String   @map("department_id") @db.Uuid
-  department       Department @relation(fields: [departmentId], references: [id])
-  employeeId       String   @map("employee_id") @db.Uuid
-  employee         Employee @relation(fields: [employeeId], references: [id])
-  score            Decimal  @db.Decimal(14, 2)
+  id                String                @id @default(uuid()) @db.Uuid
+  periodType        RecognitionPeriodType @map("period_type")
+  periodStart       DateTime              @map("period_start") @db.Date
+  departmentId      String                @map("department_id") @db.Uuid
+  department        Department            @relation(fields: [departmentId], references: [id])
+  employeeId        String                @map("employee_id") @db.Uuid
+  employee          Employee              @relation(fields: [employeeId], references: [id])
+  score             Decimal               @db.Decimal(14, 2)
   // Pillar 6 (2026-08-08): for MONTHLY snapshots `score` is now a 0-100
   // composite (see lib/performance/composite.ts) and `components` stores the
   // weighted breakdown that produced it, so a score is always explainable
   // after the fact even if the inputs later change. Null on weekly snapshots
   // (still raw single-signal scoring) and on pre-Pillar-6 rows.
-  components       Json?
-  rank             Int
-  isEmployeeOfMonth Boolean @default(false) @map("is_employee_of_month")
+  components        Json?
+  rank              Int
+  isEmployeeOfMonth Boolean               @default(false) @map("is_employee_of_month")
   // 2026-08-07: auto-computation no longer sets isEmployeeOfMonth on its own
   // (see lib/cron/recognition.ts) — it's now Admin-only, via POST
   // /recognition/publish. selectedManually distinguishes an admin pick from
   // legacy/pre-migration rows; publishedAt drives the ~24h dashboard banner
   // window (GET /recognition/published).
-  selectedManually Boolean  @default(false) @map("selected_manually")
-  publishedAt      DateTime? @map("published_at") @db.Timestamptz(6)
+  selectedManually  Boolean               @default(false) @map("selected_manually")
+  publishedAt       DateTime?             @map("published_at") @db.Timestamptz(6)
 
   @@index([periodType, periodStart, departmentId])
   @@index([isEmployeeOfMonth, publishedAt])
@@ -882,7 +956,7 @@ model PerformanceReview {
   reviewer    Employee @relation("PerformanceReviewReviewer", fields: [reviewerId], references: [id])
   periodYear  Int      @map("period_year")
   periodMonth Int      @map("period_month") // 1-12
-  rating      Int      // 1-5, validated in lib/performance/review.ts
+  rating      Int // 1-5, validated in lib/performance/review.ts
   note        String?
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -894,10 +968,10 @@ model PerformanceReview {
 }
 
 model Notification {
-  id        String   @id @default(uuid()) @db.Uuid
-  userId    String   @map("user_id") @db.Uuid
-  user      User     @relation(fields: [userId], references: [id])
-  type      String   // e.g. leave_approved, task_assigned, birthday
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  user      User      @relation(fields: [userId], references: [id])
+  type      String // e.g. leave_approved, task_assigned, birthday
   // Optional headline, rendered above `message` in the UI and used as the FCM
   // push title. Nullable: most notification types are a single sentence and
   // fall back to a humanized `type` for display. Announcements set it to the
@@ -905,7 +979,7 @@ model Notification {
   title     String?
   message   String
   readAt    DateTime? @map("read_at") @db.Timestamptz(6)
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
   @@index([userId, readAt])
   @@map("notifications")
@@ -931,14 +1005,14 @@ model PushToken {
 }
 
 model Announcement {
-  id         String   @id @default(uuid()) @db.Uuid
-  title      String
-  body       String
-  scopeType  AnnouncementScope @map("scope_type")
-  teamIds    String[] @map("team_ids") @db.Uuid // set for specific_teams; single value for team
-  createdById String  @map("created_by") @db.Uuid
-  createdBy   User    @relation("AnnouncementCreator", fields: [createdById], references: [id])
-  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  id          String            @id @default(uuid()) @db.Uuid
+  title       String
+  body        String
+  scopeType   AnnouncementScope @map("scope_type")
+  teamIds     String[]          @map("team_ids") @db.Uuid // set for specific_teams; single value for team
+  createdById String            @map("created_by") @db.Uuid
+  createdBy   User              @relation("AnnouncementCreator", fields: [createdById], references: [id])
+  createdAt   DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
 
   @@map("announcements")
 }
@@ -947,16 +1021,16 @@ model Announcement {
 // Birthday/anniversary may be handled as a derived query instead of persisted
 // rows (see SCHEMA.md note) — table kept for optional historical logging.
 model Event {
-  id                  String   @id @default(uuid()) @db.Uuid
+  id                  String    @id @default(uuid()) @db.Uuid
   type                EventType
   title               String?
-  createdById         String?  @map("created_by") @db.Uuid // meetings: admin/hr/lead; null for system
-  createdBy           User?    @relation("EventCreator", fields: [createdById], references: [id])
+  createdById         String?   @map("created_by") @db.Uuid // meetings: admin/hr/lead; null for system
+  createdBy           User?     @relation("EventCreator", fields: [createdById], references: [id])
   scheduledAt         DateTime? @map("scheduled_at") @db.Timestamptz(6)
-  reminderLeadMinutes Int?     @map("reminder_lead_minutes")
-  employeeId          String?  @map("employee_id") @db.Uuid // birthday/anniversary subject
+  reminderLeadMinutes Int?      @map("reminder_lead_minutes")
+  employeeId          String?   @map("employee_id") @db.Uuid // birthday/anniversary subject
   employee            Employee? @relation("EventSubject", fields: [employeeId], references: [id])
-  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
   invitees EventInvitee[]
 
@@ -964,13 +1038,13 @@ model Event {
 }
 
 model EventInvitee {
-  id         String   @id @default(uuid()) @db.Uuid
-  eventId    String   @map("event_id") @db.Uuid
-  event      Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  employeeId String?  @map("employee_id") @db.Uuid // individual invitee
+  id         String    @id @default(uuid()) @db.Uuid
+  eventId    String    @map("event_id") @db.Uuid
+  event      Event     @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  employeeId String?   @map("employee_id") @db.Uuid // individual invitee
   employee   Employee? @relation(fields: [employeeId], references: [id])
-  teamId     String?  @map("team_id") @db.Uuid    // whole-team invite, expanded at send-time
-  team       Team?    @relation(fields: [teamId], references: [id])
+  teamId     String?   @map("team_id") @db.Uuid // whole-team invite, expanded at send-time
+  team       Team?     @relation(fields: [teamId], references: [id])
 
   @@index([eventId])
   @@map("event_invitees")
@@ -1028,9 +1102,9 @@ model Holiday {
 
 // Stub only — not built out in v1 (PRD §5.12).
 model Asset {
-  id         String   @id @default(uuid()) @db.Uuid
+  id         String    @id @default(uuid()) @db.Uuid
   name       String
-  assignedTo String?  @map("assigned_to") @db.Uuid
+  assignedTo String?   @map("assigned_to") @db.Uuid
   employee   Employee? @relation(fields: [assignedTo], references: [id])
   status     String?
 

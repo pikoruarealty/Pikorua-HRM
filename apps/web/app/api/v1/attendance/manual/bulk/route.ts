@@ -3,7 +3,7 @@ import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { FINANCE_ROLES } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
-import { computeHours } from "@/lib/attendance/time";
+import { computeHours, isImplausibleDuration, MAX_PLAUSIBLE_SHIFT_HOURS } from "@/lib/attendance/time";
 import { AttendanceApprovalStatus, AttendanceSource } from "@prisma/client";
 import { audit, clientIp } from "@/lib/audit";
 
@@ -23,6 +23,14 @@ const recordSchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date must be YYYY-MM-DD"),
   clock_in: z.string().datetime(),
   clock_out: z.string().datetime().optional(),
+  // 2026-08-12 (Phase 28): per-row override, same guard as the single-record
+  // /attendance/manual route — a device-synced day is skipped (not silently
+  // clobbered) unless this row explicitly opts in.
+  override: z.boolean().optional(),
+  // 2026-08-12: per-row sibling of the single-record route's same-named flag
+  // — confirms an implausibly long (>14h) span is intentional, not a
+  // same-day-vs-next-day time slip.
+  confirm_long_duration: z.boolean().optional(),
 });
 
 const bulkSchema = z.object({
@@ -80,9 +88,29 @@ export async function POST(req: Request) {
     }
 
     const hours = clockOut ? computeHours(clockIn, clockOut) : null;
+    if (hours && isImplausibleDuration(hours.totalHours) && !r.confirm_long_duration) {
+      results.push({
+        employee_id: r.employee_id,
+        date: r.date,
+        ok: false,
+        error: `That's ${hours.totalHours}h — beyond a normal shift (>${MAX_PLAUSIBLE_SHIFT_HOURS}h). Pass confirm_long_duration=true on this row if it's genuinely correct.`,
+      });
+      continue;
+    }
+
     const existing = await prisma.attendanceRecord.findUnique({
       where: { employeeId_date: { employeeId: r.employee_id, date } },
     });
+
+    if (existing?.source === AttendanceSource.device_sync && !r.override) {
+      results.push({
+        employee_id: r.employee_id,
+        date: r.date,
+        ok: false,
+        error: "Already device-synced. Pass override=true on this row to overwrite it manually.",
+      });
+      continue;
+    }
 
     const data = {
       clockInApproved: clockIn,

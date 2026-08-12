@@ -51,6 +51,7 @@ const patchSchema = z.object({
   name: z.string().min(1).optional(),
   team_lead_id: z.string().uuid().optional(),
   expected_start_time: z.string().regex(HHMM_REGEX).nullable().optional(),
+  expected_end_time: z.string().regex(HHMM_REGEX).nullable().optional(),
   // 0=Sunday..6=Saturday (owner request, 2026-08-08).
   default_weekly_off_day: z.number().int().min(0).max(6).optional(),
 });
@@ -110,6 +111,9 @@ export async function PATCH(
         : {}),
       ...(parsed.data.expected_start_time !== undefined
         ? { expectedStartTime: parsed.data.expected_start_time }
+        : {}),
+      ...(parsed.data.expected_end_time !== undefined
+        ? { expectedEndTime: parsed.data.expected_end_time }
         : {}),
       ...(parsed.data.default_weekly_off_day !== undefined
         ? { defaultWeeklyOffDay: parsed.data.default_weekly_off_day }

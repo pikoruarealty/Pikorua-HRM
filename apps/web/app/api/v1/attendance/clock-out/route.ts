@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
-import { todayDateOnly } from "@/lib/attendance/time";
+import { todayDateOnly, isImplausibleDuration } from "@/lib/attendance/time";
 import { findOpenSession, summariseSessions } from "@/lib/attendance/sessions";
 import { buildEodSummary, type EodSummary } from "@/lib/eod/summary";
 import { pushNotification } from "@/lib/notifications/push";
@@ -85,9 +85,26 @@ export async function POST(req: Request) {
   });
   const { totalHours, isHalfDay } = summariseSessions(sessions);
 
+  // A day this long is almost certainly a forgotten clock-out rather than a
+  // real shift (2026-08-12) — flag it so /approve refuses it until Admin/HR
+  // looks (see isImplausibleDuration's doc comment). Never overwrite an
+  // existing flag/reason from something else (e.g. a suspected reversed
+  // device punch) that's still unresolved.
+  const implausible = isImplausibleDuration(totalHours);
+
   const record = await prisma.attendanceRecord.update({
     where: { id: existing.id },
-    data: { clockOutRaw: now, totalHours, isHalfDay },
+    data: {
+      clockOutRaw: now,
+      totalHours,
+      isHalfDay,
+      ...(implausible && !existing.flaggedForReview
+        ? {
+            flaggedForReview: true,
+            flagReason: `Worked ${totalHours}h, well beyond a normal shift — likely a forgotten clock-out. Needs manual review via Edit before it can be approved.`,
+          }
+        : {}),
+    },
   });
 
   // EOD wrap-up. Best-effort notifications — never fail the clock-out itself if

@@ -3,6 +3,7 @@ import { FINANCE_ROLES, isLeadRole } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { buildEodSummary } from "@/lib/eod/summary";
 import { getLedEmployeeIds } from "@/lib/employees/managed-scope";
+import { todayDateOnly } from "@/lib/attendance/time";
 
 // Track A. GET /api/v1/attendance/eod?date=YYYY-MM-DD&employee_id=
 // Derived End-of-Day summary (PRD §5.4) for the Daily Planning screen.
@@ -38,7 +39,7 @@ export async function GET(req: Request) {
     }
     date = new Date(`${dateParam}T00:00:00.000Z`);
   } else {
-    date = new Date(new Date().toISOString().slice(0, 10));
+    date = todayDateOnly();
   }
 
   const eod = await buildEodSummary(employeeId, date);

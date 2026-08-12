@@ -13,6 +13,9 @@ const createSchema = z.object({
   team_lead_id: z.string().uuid(),
   // "HH:MM" 24h — used by attendance summary to compute the team's late count.
   expected_start_time: z.string().regex(HHMM_REGEX).nullable().optional(),
+  // "HH:MM" 24h shift end (2026-08-12, owner request) — feeds the late-arrival
+  // make-up waiver and the EOD auto-fill default.
+  expected_end_time: z.string().regex(HHMM_REGEX).nullable().optional(),
   // 0=Sunday..6=Saturday — this team's default weekly-off day (owner
   // request, 2026-08-08). Defaults to Sunday (0) if omitted.
   default_weekly_off_day: z.number().int().min(0).max(6).optional(),
@@ -75,7 +78,8 @@ export async function POST(req: Request) {
     );
   }
 
-  const { department_id, name, team_lead_id, expected_start_time, default_weekly_off_day } = parsed.data;
+  const { department_id, name, team_lead_id, expected_start_time, expected_end_time, default_weekly_off_day } =
+    parsed.data;
 
   const department = await prisma.department.findUnique({ where: { id: department_id } });
   if (!department) {
@@ -103,6 +107,7 @@ export async function POST(req: Request) {
       // request, 2026-08-08) — previously fell back to null, which skips
       // late-tracking entirely for the team.
       expectedStartTime: expected_start_time ?? "11:00",
+      expectedEndTime: expected_end_time ?? "19:00",
       defaultWeeklyOffDay: default_weekly_off_day ?? 0,
     },
     include: {

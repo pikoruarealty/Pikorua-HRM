@@ -22,6 +22,7 @@ import { DatePicker } from "@/components/ui/date-picker";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ChevronsUpDown, Search, X } from "lucide-react";
 import { formatDate, formatDateTime } from "@/lib/format-date";
+import { MAX_PLAUSIBLE_SHIFT_HOURS } from "@/lib/attendance/time";
 
 type AttendanceRecord = {
   id: string;
@@ -35,7 +36,11 @@ type AttendanceRecord = {
   totalHours: string | null;
   isHalfDay: boolean;
   isCompensation: boolean;
+  lateExempt: boolean;
+  lateExemptReason: string | null;
   approvalStatus: "pending" | "approved";
+  flaggedForReview: boolean;
+  flagReason: string | null;
 };
 
 async function getJson(res: Response) {
@@ -263,6 +268,15 @@ function AttendanceTable({
                               {r.isCompensation && (
                                 <Badge variant="outline" className="ml-2">Compensation</Badge>
                               )}
+                              {r.lateExempt && (
+                                <Badge
+                                  variant="outline"
+                                  className="ml-2"
+                                  title={r.lateExemptReason ?? undefined}
+                                >
+                                  Late exempt
+                                </Badge>
+                              )}
                             </TableCell>
                             <TableCell>
                               <div className="flex items-center gap-1.5">
@@ -272,6 +286,15 @@ function AttendanceTable({
                                 {isIncomplete && (
                                   <Badge variant="destructive" className="text-[10px] uppercase tracking-wider">
                                     Incomplete
+                                  </Badge>
+                                )}
+                                {r.flaggedForReview && (
+                                  <Badge
+                                    variant="destructive"
+                                    className="text-[10px] uppercase tracking-wider"
+                                    title={r.flagReason ?? undefined}
+                                  >
+                                    Needs review
                                   </Badge>
                                 )}
                               </div>
@@ -286,18 +309,26 @@ function AttendanceTable({
                                   >
                                     {editingId === r.id ? "Close" : "Edit"}
                                   </Button>
-                                  {Boolean(r.clockInApproved ?? r.clockInRaw) && r.approvalStatus === "pending" && (
-                                    <Button
-                                      size="sm"
-                                      disabled={busyId === r.id}
-                                      onClick={() => approve(r.id)}
-                                      title={!r.clockOutApproved && !r.clockOutRaw ? "Missing clock-out will be auto-set to default shift end (20:00)" : undefined}
-                                    >
-                                      {busyId === r.id ? "Approving…" : "Approve"}
-                                    </Button>
-                                  )}
-                                  {/* Allow deletion of incomplete or unapproved records */}
-                                  {(isIncomplete || r.approvalStatus === "pending") && (
+                                  {Boolean(r.clockInApproved ?? r.clockInRaw) &&
+                                    r.approvalStatus === "pending" &&
+                                    !r.flaggedForReview && (
+                                      <Button
+                                        size="sm"
+                                        disabled={busyId === r.id}
+                                        onClick={() => approve(r.id)}
+                                        title={!r.clockOutApproved && !r.clockOutRaw ? "Missing clock-out will be auto-set to default shift end (19:00)" : undefined}
+                                      >
+                                        {busyId === r.id ? "Approving…" : "Approve"}
+                                      </Button>
+                                    )}
+                                  {/* Matches the DELETE route's actual guard exactly (not
+                                      just "incomplete or pending") — it only ever accepts a
+                                      true phantom record: never approved, and never punched
+                                      (no raw clock-in or clock-out at all). Anything with real
+                                      clock data is history payroll may depend on; use Edit to
+                                      correct it instead. Showing the button more broadly than
+                                      this just invites a 409 on click. */}
+                                  {r.approvalStatus !== "approved" && !r.clockInRaw && !r.clockOutRaw && (
                                     <Button
                                       variant="destructive"
                                       size="sm"
@@ -386,11 +417,13 @@ function EditRecordForm({
     toLocalInputValue(record.clockOutApproved ?? record.clockOutRaw),
   );
   const [isCompensation, setIsCompensation] = useState(record.isCompensation);
+  const [lateExempt, setLateExempt] = useState(record.lateExempt);
+  const [lateExemptReason, setLateExemptReason] = useState(record.lateExemptReason ?? "");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [longDurationError, setLongDurationError] = useState(false);
 
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  async function save(confirmLongDuration = false) {
     setSubmitting(true);
     setError(null);
     try {
@@ -402,15 +435,25 @@ function EditRecordForm({
             clock_in_approved: clockIn ? new Date(clockIn).toISOString() : null,
             clock_out_approved: clockOut ? new Date(clockOut).toISOString() : null,
             is_compensation: isCompensation,
+            late_exempt: lateExempt,
+            late_exempt_reason: lateExempt ? lateExemptReason || null : null,
+            confirm_long_duration: confirmLongDuration || undefined,
           }),
         }),
       );
       onSaved();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to save.");
+      const msg = e instanceof Error ? e.message : "Failed to save.";
+      setLongDurationError(/beyond a normal shift/.test(msg));
+      setError(msg);
     } finally {
       setSubmitting(false);
     }
+  }
+
+  function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    save(false);
   }
 
   return (
@@ -434,10 +477,10 @@ function EditRecordForm({
               onClick={() => {
                 const baseDate = clockIn ? new Date(clockIn) : new Date(record.date);
                 const pad = (n: number) => String(n).padStart(2, "0");
-                setClockOut(`${baseDate.getFullYear()}-${pad(baseDate.getMonth() + 1)}-${pad(baseDate.getDate())}T20:00`);
+                setClockOut(`${baseDate.getFullYear()}-${pad(baseDate.getMonth() + 1)}-${pad(baseDate.getDate())}T19:00`);
               }}
             >
-              Default (20:00)
+              Default (19:00)
             </button>
           )}
         </div>
@@ -460,7 +503,47 @@ function EditRecordForm({
           Mark as compensation day
         </label>
       </div>
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      <div className="flex flex-col gap-2">
+        <label className="text-xs text-muted-foreground">&nbsp;</label>
+        <label className="flex h-9 cursor-pointer items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="size-4"
+            checked={lateExempt}
+            onChange={(e) => setLateExempt(e.target.checked)}
+          />
+          Late exempt (not employee&apos;s fault)
+        </label>
+      </div>
+      {lateExempt && (
+        <div className="flex flex-col gap-2">
+          <label className="text-xs text-muted-foreground">Exempt reason</label>
+          <input
+            type="text"
+            className="flex h-9 rounded-md border border-input bg-background px-3 py-1 text-sm"
+            placeholder="e.g. office inaccessible"
+            value={lateExemptReason}
+            onChange={(e) => setLateExemptReason(e.target.value)}
+          />
+        </div>
+      )}
+      {error && (
+        <div className="flex flex-col gap-1.5">
+          <p className="text-sm text-destructive">{error}</p>
+          {longDurationError && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="w-fit"
+              disabled={submitting}
+              onClick={() => save(true)}
+            >
+              Save anyway — this duration is correct
+            </Button>
+          )}
+        </div>
+      )}
       <Button type="submit" size="sm" disabled={submitting}>
         {submitting ? "Saving…" : "Save"}
       </Button>
@@ -615,6 +698,7 @@ function ManualRecordForm() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [longDurationError, setLongDurationError] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -624,8 +708,7 @@ function ManualRecordForm() {
     })();
   }, []);
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
+  async function save(confirmLongDuration = false) {
     setBusy(true);
     setError(null);
     setMessage(null);
@@ -639,10 +722,15 @@ function ManualRecordForm() {
           clock_in: new Date(`${date}T${clockIn}`).toISOString(),
           clock_out: clockOut ? new Date(`${date}T${clockOut}`).toISOString() : undefined,
           reason,
+          confirm_long_duration: confirmLongDuration || undefined,
         }),
       });
       const json = await res.json();
-      if (json.error) throw new Error(json.error.message);
+      if (json.error) {
+        setLongDurationError(/beyond a normal shift/.test(json.error.message));
+        throw new Error(json.error.message);
+      }
+      setLongDurationError(false);
       setMessage("Record saved (pre-approved). Refresh the table below to see it.");
       setReason("");
     } catch (err) {
@@ -650,6 +738,11 @@ function ManualRecordForm() {
     } finally {
       setBusy(false);
     }
+  }
+
+  function submit(e: React.FormEvent) {
+    e.preventDefault();
+    save(false);
   }
 
   return (
@@ -692,7 +785,23 @@ function ManualRecordForm() {
           required
         />
       </div>
-      {error && <p className="text-sm text-destructive sm:col-span-2 lg:col-span-3">{error}</p>}
+      {error && (
+        <div className="flex flex-col gap-1.5 sm:col-span-2 lg:col-span-3">
+          <p className="text-sm text-destructive">{error}</p>
+          {longDurationError && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="w-fit"
+              disabled={busy}
+              onClick={() => save(true)}
+            >
+              Save anyway — this duration is correct
+            </Button>
+          )}
+        </div>
+      )}
       {message && <p className="text-sm text-muted-foreground sm:col-span-2 lg:col-span-3">{message}</p>}
       <Button type="submit" disabled={busy || !employeeId} className="w-fit">
         {busy ? "Saving…" : "Save manual record"}
@@ -740,6 +849,7 @@ function BulkManualRecordForm() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [longDurationRows, setLongDurationRows] = useState<BulkRow[]>([]);
 
   useEffect(() => {
     (async () => {
@@ -768,6 +878,7 @@ function BulkManualRecordForm() {
     setRows(next);
     setMessage(null);
     setError(null);
+    setLongDurationRows([]);
   }
 
   function updateRow(key: string, field: "clockIn" | "clockOut", value: string) {
@@ -778,38 +889,59 @@ function BulkManualRecordForm() {
     setRows((prev) => (prev ? prev.filter((r) => r.key !== key) : prev));
   }
 
-  async function submitAll() {
-    if (!rows || rows.length === 0) return;
+  async function submitRows(rowsToSubmit: BulkRow[], confirmLongDuration: boolean) {
     setBusy(true);
     setError(null);
-    setMessage(null);
+    if (!confirmLongDuration) {
+      setMessage(null);
+      setLongDurationRows([]);
+    }
     try {
       const res = await fetch("/api/v1/attendance/manual/bulk", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           reason,
-          records: rows.map((r) => ({
+          records: rowsToSubmit.map((r) => ({
             employee_id: r.employeeId,
             date: r.date,
             clock_in: new Date(`${r.date}T${r.clockIn}`).toISOString(),
             clock_out: r.clockOut ? new Date(`${r.date}T${r.clockOut}`).toISOString() : undefined,
+            confirm_long_duration: confirmLongDuration || undefined,
           })),
         }),
       });
       const json = await res.json();
       if (json.error) throw new Error(json.error.message);
-      const { created, updated, failed } = json.data;
+      const { created, updated, failed, results } = json.data as {
+        created: number;
+        updated: number;
+        failed: number;
+        results: { employee_id: string; date: string; ok: boolean; error?: string }[];
+      };
+      const stillLongDuration = results.filter((r) => !r.ok && /beyond a normal shift/.test(r.error ?? ""));
+      const flaggedRows = rowsToSubmit.filter((row) =>
+        stillLongDuration.some((r) => r.employee_id === row.employeeId && r.date === row.date),
+      );
+      setLongDurationRows(flaggedRows);
       setMessage(
-        `${created} created, ${updated} updated${failed ? `, ${failed} failed` : ""}. Refresh the table below to see them.`,
+        `${created} created, ${updated} updated${failed ? `, ${failed} failed` : ""}` +
+          (flaggedRows.length > 0
+            ? ` — ${flaggedRows.length} flagged below for an unusually long duration.`
+            : ". Refresh the table below to see them."),
       );
       setRows(null);
-      setReason("");
+      if (flaggedRows.length === 0) setReason("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save records.");
     } finally {
       setBusy(false);
     }
+  }
+
+  function submitAll() {
+    if (!rows || rows.length === 0) return;
+    submitRows(rows, false);
   }
 
   return (
@@ -896,8 +1028,6 @@ function BulkManualRecordForm() {
               </TableBody>
             </Table>
           </div>
-          {error && <p className="text-sm text-destructive">{error}</p>}
-          {message && <p className="text-sm text-muted-foreground">{message}</p>}
           <Button
             type="button"
             onClick={submitAll}
@@ -905,6 +1035,32 @@ function BulkManualRecordForm() {
             className="w-fit"
           >
             {busy ? "Saving…" : `Save ${rows.length} record(s)`}
+          </Button>
+        </div>
+      )}
+      {error && <p className="text-sm text-destructive">{error}</p>}
+      {message && <p className="text-sm text-muted-foreground">{message}</p>}
+      {longDurationRows.length > 0 && (
+        <div className="flex flex-col gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 p-3 dark:bg-amber-950/20">
+          <p className="text-sm text-muted-foreground">
+            These rows are beyond a normal shift (&gt;{MAX_PLAUSIBLE_SHIFT_HOURS}h) — double-check the times, or confirm they&apos;re correct:
+          </p>
+          <ul className="text-sm">
+            {longDurationRows.map((r) => (
+              <li key={r.key}>
+                {r.employeeName} — {r.date}, {r.clockIn}–{r.clockOut}
+              </li>
+            ))}
+          </ul>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="w-fit"
+            disabled={busy}
+            onClick={() => submitRows(longDurationRows, true)}
+          >
+            Save anyway — these durations are correct
           </Button>
         </div>
       )}

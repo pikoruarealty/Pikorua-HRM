@@ -1,7 +1,9 @@
 import { prisma } from "@/lib/db/prisma";
-import { todayDateOnly, getDefaultClockOut } from "@/lib/attendance/time";
+import { todayDateOnly, getDefaultClockOut, isSuspectedReversedPunch } from "@/lib/attendance/time";
 import { summariseSessions } from "@/lib/attendance/sessions";
-import { Prisma } from "@prisma/client";
+import { notifyFinanceUsers } from "@/lib/notifications/push";
+import { audit } from "@/lib/audit";
+import { AttendanceSource, Prisma } from "@prisma/client";
 
 /**
  * End-of-day attendance maintenance and dangling request cleanup.
@@ -11,13 +13,18 @@ import { Prisma } from "@prisma/client";
  *    neither a clock-in nor a clock-out (empty placeholders/unwanted rows).
  * 2. Missing Clock-Out Records: For any past attendance record left with an open
  *    session (clocked in, never clocked out), auto-populates the default clock-out
- *    time (based on the team's expected start time + 9h, or 20:00 default) and
+ *    time (the team's configured shift end, company default 19:00) and
  *    re-sums the day's sessions so the record is complete and ready for standard
  *    approval.
+ * 3. Suspected Reversed Punches (2026-08-12): a device-synced day whose ONLY
+ *    punch is still open and implausibly late for a first arrival is not
+ *    auto-closed with a fabricated default — see isSuspectedReversedPunch's
+ *    doc comment. Flagged for Admin/HR to resolve via PATCH .../edit instead.
  */
 export async function runAttendanceEodCleanup(): Promise<{
   autoClockedOut: number;
   deletedPhantoms: number;
+  flaggedForReview: number;
 }> {
   const today = todayDateOnly();
 
@@ -57,18 +64,52 @@ export async function runAttendanceEodCleanup(): Promise<{
         select: {
           id: true,
           fullName: true,
-          team: { select: { expectedStartTime: true } },
+          team: { select: { expectedStartTime: true, expectedEndTime: true } },
         },
       },
     },
   });
 
   let autoClockedOut = 0;
+  let flaggedForReview = 0;
   for (const record of incompleteRecords) {
+    // Already flagged on a prior night's run — leave it for Admin/HR to
+    // resolve via PATCH .../edit rather than re-notifying every night.
+    if (record.flaggedForReview) continue;
+
     const expectedStart = record.employee?.team?.expectedStartTime ?? "11:00";
+    const expectedEnd = record.employee?.team?.expectedEndTime ?? "19:00";
+
+    const soleSession = record.sessions.length === 1 ? record.sessions[0]! : null;
+    if (
+      record.source === AttendanceSource.device_sync &&
+      soleSession &&
+      !soleSession.clockOut &&
+      isSuspectedReversedPunch(soleSession.clockIn, true, expectedStart)
+    ) {
+      const reason = `Single device punch at ${soleSession.clockIn.toISOString()} with no matching pair — implausibly late to be a first arrival, more likely the day's clock-out misread as a clock-in (the vendor feed has no IN/OUT flag). Needs manual correction via Edit.`;
+      await prisma.attendanceRecord.update({
+        where: { id: record.id },
+        data: { flaggedForReview: true, flagReason: reason },
+      });
+      await notifyFinanceUsers(
+        "attendance.needs_review",
+        `${record.employee?.fullName ?? "An employee"}'s attendance on ${record.date.toISOString().slice(0, 10)} has an unmatched device punch and needs manual review.`,
+        "Attendance needs review",
+      );
+      await audit({
+        action: "attendance.flag_review",
+        entityType: "attendance_record",
+        entityId: record.id,
+        metadata: { employee_id: record.employeeId, date: record.date.toISOString().slice(0, 10), reason },
+      });
+      flaggedForReview += 1;
+      continue;
+    }
+
     const closed = record.sessions.map((s) => ({
       ...s,
-      clockOut: s.clockOut ?? getDefaultClockOut(s.clockIn, expectedStart),
+      clockOut: s.clockOut ?? getDefaultClockOut(s.clockIn, expectedStart, expectedEnd),
     }));
 
     const { totalHours, isHalfDay } = summariseSessions(closed);
@@ -98,5 +139,5 @@ export async function runAttendanceEodCleanup(): Promise<{
     autoClockedOut += 1;
   }
 
-  return { autoClockedOut, deletedPhantoms };
+  return { autoClockedOut, deletedPhantoms, flaggedForReview };
 }

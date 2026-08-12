@@ -5,6 +5,7 @@ import { isFinanceRole, isLeadRole } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { isUuid } from "@/lib/api/params";
 import { leadsEmployee } from "@/lib/employees/managed-scope";
+import { todayDateOnly } from "@/lib/attendance/time";
 
 // GET /api/v1/employees/:id/task-activity?period=daily|weekly|monthly|total&date=YYYY-MM-DD
 // General task-activity history for an employee — which tasks they worked on
@@ -77,8 +78,7 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
   }
   const { period, date: dateParam } = parsed.data;
 
-  const anchor = dateParam ? new Date(`${dateParam}T00:00:00.000Z`) : new Date();
-  anchor.setUTCHours(0, 0, 0, 0);
+  const anchor = dateParam ? new Date(`${dateParam}T00:00:00.000Z`) : todayDateOnly();
   if (Number.isNaN(anchor.getTime())) {
     return failFor(ErrorCode.VALIDATION, "date is not a valid calendar date.");
   }

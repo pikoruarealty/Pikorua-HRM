@@ -2,8 +2,8 @@ import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { FINANCE_ROLES } from "@/lib/rbac";
-import { ok, failFor, ErrorCode } from "@/lib/api/response";
-import { computeHours } from "@/lib/attendance/time";
+import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
+import { computeHours, isImplausibleDuration, MAX_PLAUSIBLE_SHIFT_HOURS } from "@/lib/attendance/time";
 import { AttendanceApprovalStatus, AttendanceSource } from "@prisma/client";
 import { audit, clientIp } from "@/lib/audit";
 
@@ -21,6 +21,15 @@ const manualSchema = z.object({
   clock_in: z.string().datetime(),
   clock_out: z.string().datetime().optional(),
   reason: z.string().min(3, "A reason is required for a manual record."),
+  // 2026-08-12 (Phase 28): a day already reconciled from the biometric device
+  // must not be silently clobbered by a plain manual entry — pass override=true
+  // to confirm the overwrite is intentional (e.g. the device mis-synced).
+  override: z.boolean().optional(),
+  // 2026-08-12: clock_in/clock_out are typed by hand as HH:MM against a
+  // single date, so this can only fire on a >14h span within the same day —
+  // almost always a same-day-vs-next-day mistake in the time, not a real
+  // shift. Requires an explicit second submit to confirm it's intentional.
+  confirm_long_duration: z.boolean().optional(),
 });
 
 export async function POST(req: Request) {
@@ -51,9 +60,25 @@ export async function POST(req: Request) {
   }
 
   const hours = clockOut ? computeHours(clockIn, clockOut) : null;
+  if (hours && isImplausibleDuration(hours.totalHours) && !d.confirm_long_duration) {
+    return fail(
+      ErrorCode.VALIDATION,
+      `That's ${hours.totalHours}h — beyond a normal shift (>${MAX_PLAUSIBLE_SHIFT_HOURS}h). Double-check the times, or pass confirm_long_duration=true if this is genuinely correct.`,
+      422,
+    );
+  }
+
   const existing = await prisma.attendanceRecord.findUnique({
     where: { employeeId_date: { employeeId: d.employee_id, date } },
   });
+
+  if (existing?.source === AttendanceSource.device_sync && !d.override) {
+    return fail(
+      ErrorCode.CONFLICT,
+      "This date is already synced from the biometric device. Pass override=true to overwrite it manually.",
+      409,
+    );
+  }
 
   const data = {
     clockInApproved: clockIn,

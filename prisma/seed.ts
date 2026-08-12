@@ -9,7 +9,7 @@
  * Idempotent: re-running upserts by email, so it's safe to run repeatedly.
  * Run with:  npm run db:seed   (from repo root)
  */
-import { PrismaClient, Role, WorkItemMode } from "@prisma/client";
+import { PrismaClient, Role, WorkItemMode, PunchDirection } from "@prisma/client";
 import bcrypt from "bcryptjs";
 
 const prisma = new PrismaClient();
@@ -257,6 +257,25 @@ async function main() {
       },
     });
   }
+
+  // --- TeamOffice device mapping (Phase 28, 2026-08-12) ----------------------
+  // One employee already mapped (demonstrates a normal reconciled link) and
+  // one raw punch left unmapped (demonstrates what the Admin device-mapping
+  // screen surfaces before a human confirms a link).
+  await prisma.employee.update({
+    where: { id: employees["tech_emp"] },
+    data: { deviceUid: "1001" },
+  });
+  await prisma.devicePunchRaw.upsert({
+    where: { dedupKey: "9999:2026-01-01T09:00:00.000Z" },
+    update: {},
+    create: {
+      deviceUid: "9999",
+      punchTime: new Date("2026-01-01T09:00:00.000Z"),
+      direction: PunchDirection.in,
+      dedupKey: "9999:2026-01-01T09:00:00.000Z",
+    },
+  });
 
   console.log("Seed complete.");
   console.log(`  Users created/updated: ${employeeSeeds.length}`);

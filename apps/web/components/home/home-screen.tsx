@@ -19,6 +19,7 @@ import {
   AlertCircle,
   ClipboardCheck,
   Star,
+  RefreshCw,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -28,6 +29,7 @@ import { cn } from "@/lib/utils";
 import { AdminProgressPanel } from "@/components/home/admin-progress-panel";
 import { EmployeeAvatar } from "@/components/employees/employee-avatar";
 import { formatDate } from "@/lib/format-date";
+import { useAttendanceStatus } from "@/components/_lib/use-attendance-status";
 
 type Me = { email: string; role: string; employeeId: string | null };
 type Notification = { id: string; readAt: string | null };
@@ -585,19 +587,6 @@ function greeting() {
   return "Good evening";
 }
 
-type TodaySession = {
-  id: string;
-  clockIn: string;
-  clockOut: string | null;
-  workLocation: "office" | "wfh";
-};
-type TodayAttendance = {
-  date: string;
-  clockInRaw: string | null;
-  clockOutRaw: string | null;
-  workLocation: "office" | "wfh";
-  sessions?: TodaySession[];
-};
 type WeeklyOffStatus = {
   canClaimToday: boolean;
   offToday: boolean;
@@ -621,33 +610,20 @@ function fmtDuration(ms: number): string {
  *  eligible, also shows a "Take Weekly Off" button that posts to
  *  /attendance/weekly-off. */
 function ClockCard() {
-  const [rec, setRec] = useState<TodayAttendance | null | undefined>(undefined);
+  const { attendance: rec, sessions, openSession, clockedIn, clockedOut, loading, refresh } =
+    useAttendanceStatus();
   const [now, setNow] = useState(() => Date.now());
   const [weeklyOff, setWeeklyOff] = useState<WeeklyOffStatus | null>(null);
   const [claiming, setClaiming] = useState(false);
   const [claimError, setClaimError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
-    apiFetch<TodayAttendance[]>("/attendance").then((r) => {
-      const d = new Date();
-      // Local calendar day: the UTC form rolls back to yesterday for the whole
-      // early-morning window in any timezone ahead of UTC (IST is +5:30).
-      const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
-        d.getDate(),
-      ).padStart(2, "0")}`;
-      setRec((r.data ?? []).find((a) => a.date.slice(0, 10) === today) ?? null);
-    });
     apiFetch<WeeklyOffStatus>("/attendance/weekly-off").then((r) => {
       if (r.data) setWeeklyOff(r.data);
     });
   }, []);
 
-  const sessions = rec?.sessions ?? [];
-  const openSession = sessions.find((s) => s.clockOut === null) ?? null;
-  const clockedIn = openSession !== null;
-  // Been in today, but currently out — a break or the end of the day. Either
-  // way they can clock back in.
-  const clockedOut = !clockedIn && !!rec?.clockInRaw;
   const ticking = clockedIn;
 
   // Only tick while actively clocked in.
@@ -657,9 +633,25 @@ function ClockCard() {
     return () => clearInterval(id);
   }, [ticking]);
 
+  // Light polling so a device badge-in (which lands via the biometric sync,
+  // not this browser tab) shows up as "live" without a manual refresh — only
+  // while the tab is actually visible, to avoid pointless background traffic.
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (document.visibilityState === "visible") refresh();
+    }, 30_000);
+    return () => clearInterval(id);
+  }, [refresh]);
+
+  async function manualRefresh() {
+    setRefreshing(true);
+    await refresh();
+    setRefreshing(false);
+  }
+
   // Worked time = sum of sessions (open one running to `now`). The gaps
   // between sessions are breaks and are deliberately not counted.
-  const sessionMs = (s: TodaySession) =>
+  const sessionMs = (s: { clockIn: string; clockOut: string | null }) =>
     Math.max(0, (s.clockOut ? new Date(s.clockOut).getTime() : now) - new Date(s.clockIn).getTime());
   const totalMs = sessions.reduce((acc, s) => acc + sessionMs(s), 0);
   const currentMs = openSession ? sessionMs(openSession) : 0;
@@ -681,12 +673,12 @@ function ClockCard() {
 
   return (
     <Card>
-      <CardHeader>
+      <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle className="flex items-center gap-2 text-base">
           <Clock className="size-4" />
           Attendance
           <Badge variant={ticking ? "default" : "outline"}>
-            {rec === undefined
+            {loading
               ? "…"
               : weeklyOff?.offToday
                 ? "weekly off"
@@ -697,9 +689,19 @@ function ClockCard() {
                     : "not clocked in"}
           </Badge>
         </CardTitle>
+        <Button
+          size="icon"
+          variant="ghost"
+          className="size-7"
+          onClick={manualRefresh}
+          disabled={refreshing}
+          aria-label="Refresh attendance"
+        >
+          <RefreshCw className={cn("size-4", refreshing && "animate-spin")} />
+        </Button>
       </CardHeader>
       <CardContent className="flex flex-col gap-3 text-sm">
-        {rec === undefined ? (
+        {loading ? (
           <p className="text-muted-foreground">Loading…</p>
         ) : weeklyOff?.offToday ? (
           <>
@@ -742,7 +744,7 @@ function ClockCard() {
           <div className="flex flex-col gap-3">
             <p className="text-muted-foreground">
               {clockedOut
-                ? `Clocked out at ${new Date(rec.clockOutRaw!).toLocaleTimeString()}. You can clock back in any time.`
+                ? `Clocked out at ${new Date(rec!.clockOutRaw!).toLocaleTimeString()}. You can clock back in any time.`
                 : `Clocked in at ${new Date(openSession!.clockIn).toLocaleTimeString()}${
                     openSession!.workLocation === "wfh" ? " (from home)" : ""
                   }.`}

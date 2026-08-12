@@ -31,6 +31,7 @@ type Team = {
   teamLeadId: string | null;
   teamLead: { id: string; fullName: string } | null;
   expectedStartTime: string | null;
+  expectedEndTime: string | null;
   defaultWeeklyOffDay: number;
 };
 
@@ -122,6 +123,10 @@ export function TeamDetail({ teamId, canManage }: { teamId: string; canManage: b
             {team.expectedStartTime ?? "11:00"}
           </div>
           <div>
+            <span className="text-muted-foreground">Expected end time: </span>
+            {team.expectedEndTime ?? "19:00"}
+          </div>
+          <div>
             <span className="text-muted-foreground">Default day off: </span>
             {DAY_NAMES[team.defaultWeeklyOffDay] ?? "Sunday"}
           </div>
@@ -197,6 +202,7 @@ function EditTeamForm({ team, onSaved }: { team: Team; onSaved: () => void }) {
   const [name, setName] = useState(team.name);
   const [teamLeadId, setTeamLeadId] = useState(team.teamLeadId ?? "");
   const [expectedStartTime, setExpectedStartTime] = useState(team.expectedStartTime ?? "11:00");
+  const [expectedEndTime, setExpectedEndTime] = useState(team.expectedEndTime ?? "19:00");
   const [defaultWeeklyOffDay, setDefaultWeeklyOffDay] = useState(String(team.defaultWeeklyOffDay ?? 0));
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -214,6 +220,7 @@ function EditTeamForm({ team, onSaved }: { team: Team; onSaved: () => void }) {
             name,
             ...(teamLeadId ? { team_lead_id: teamLeadId } : {}),
             expected_start_time: expectedStartTime || null,
+            expected_end_time: expectedEndTime || null,
             default_weekly_off_day: parseInt(defaultWeeklyOffDay, 10),
           }),
         }),
@@ -243,6 +250,15 @@ function EditTeamForm({ team, onSaved }: { team: Team; onSaved: () => void }) {
           type="time"
           value={expectedStartTime}
           onChange={(e) => setExpectedStartTime(e.target.value)}
+        />
+      </div>
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="edit_expected_end_time">Expected end time (HH:MM)</Label>
+        <Input
+          id="edit_expected_end_time"
+          type="time"
+          value={expectedEndTime}
+          onChange={(e) => setExpectedEndTime(e.target.value)}
         />
       </div>
       <div className="flex flex-col gap-2">

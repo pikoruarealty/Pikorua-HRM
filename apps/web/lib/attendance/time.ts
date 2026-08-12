@@ -31,8 +31,53 @@ export function isLateArrival(
   return arrivalMinutes > parseHHMM(expectedStartTime) + graceMinutes;
 }
 
+/**
+ * Waives a late-arrival deduction when the employee made up the exact lost
+ * time by staying correspondingly late (owner request, 2026-08-12): a
+ * shift of 11:00-19:00 with an 11:30 arrival (30 min late) is waived if
+ * clock-out is at/after 19:30 — shift-end plus however late they were.
+ * Lateness is measured from the same start+grace cutoff isLateArrival uses,
+ * so this never fires for an arrival that wasn't actually late in the first
+ * place. Requires both expectedStartTime and expectedEndTime to be
+ * configured and a clock-out to exist (an incomplete day can't be judged) —
+ * missing either simply means no waiver, not an error.
+ */
+export function isLateWaivedByMakeup(
+  clockIn: Date,
+  clockOut: Date | null,
+  expectedStartTime: string | null,
+  expectedEndTime: string | null,
+  graceMinutes = 0,
+): boolean {
+  if (!clockOut || !expectedStartTime || !expectedEndTime) return false;
+  const cutoff = parseHHMM(expectedStartTime) + graceMinutes;
+  const arrivalMinutes = clockIn.getHours() * 60 + clockIn.getMinutes();
+  const lateMinutes = arrivalMinutes - cutoff;
+  if (lateMinutes <= 0) return false; // not actually late
+
+  const requiredDepartureMinutes = parseHHMM(expectedEndTime) + lateMinutes;
+  const departureMinutes = clockOut.getHours() * 60 + clockOut.getMinutes();
+  return departureMinutes >= requiredDepartureMinutes;
+}
+
 /** Below this many hours a day is a half-day; at or above it, a full day. */
 export const FULL_DAY_HOURS = 5;
+
+/**
+ * A day this long is almost certainly bad data, not a real shift (2026-08-12,
+ * after a pending record was found on-screen at 14.39h with a clock-out timestamped
+ * into the next calendar day). Company default shift is 8h; 14h is nearly double
+ * that with room for genuine occasional overtime. Anything past this should never
+ * be silently approved — see isImplausibleDuration's call sites, which flag the
+ * record for review (clock-out/device sync — a real action, can't be rejected) or
+ * reject outright pending explicit confirmation (manual/bulk/edit — a human typing
+ * a time, most likely a same-day-vs-next-day slip).
+ */
+export const MAX_PLAUSIBLE_SHIFT_HOURS = 14;
+
+export function isImplausibleDuration(totalHours: number | null | undefined): boolean {
+  return totalHours != null && totalHours > MAX_PLAUSIBLE_SHIFT_HOURS;
+}
 
 export function computeHours(clockIn: Date, clockOut: Date): { totalHours: number; isHalfDay: boolean } {
   const ms = clockOut.getTime() - clockIn.getTime();
@@ -49,31 +94,32 @@ export function computeHours(clockIn: Date, clockOut: Date): { totalHours: numbe
 
 /**
  * Computes default clock-out Date for an attendance record.
- * Uses the record's date and the team's expectedStartTime + 9 hours (default 20:00),
- * or 8 hours after clockIn if clockIn was after the standard end time.
+ * Uses the record's date and the team's expectedEndTime (company default
+ * 19:00 — an 11:00-19:00, 8h shift), or the shift's own length after
+ * clockIn if clockIn was already past the standard end time.
  */
 export function getDefaultClockOut(
   dateOrClockIn: Date,
   expectedStartTime: string | null = "11:00",
+  expectedEndTime: string | null = "19:00",
 ): Date {
   const base = new Date(dateOrClockIn);
-  let endHour = 20; // 8:00 PM default (11:00 AM + 9 hours)
-  let endMinute = 0;
-
-  if (expectedStartTime && isValidHHMM(expectedStartTime)) {
-    const [h, m] = expectedStartTime.split(":").map(Number);
-    const totalMinutes = h * 60 + m + 9 * 60; // 9-hour workday standard
-    endHour = Math.floor(totalMinutes / 60) % 24;
-    endMinute = totalMinutes % 60;
-  }
+  const startMinutes =
+    expectedStartTime && isValidHHMM(expectedStartTime) ? parseHHMM(expectedStartTime) : parseHHMM("11:00");
+  const endMinutes =
+    expectedEndTime && isValidHHMM(expectedEndTime) ? parseHHMM(expectedEndTime) : parseHHMM("19:00");
+  // Shift length drives the "clocked in after standard end time" fallback
+  // below, so it always matches this team's actual configured shift instead
+  // of a hardcoded 8/9h guess. Guards against a misconfigured end<=start.
+  const shiftMinutes = endMinutes > startMinutes ? endMinutes - startMinutes : 8 * 60;
 
   const defaultOut = new Date(base);
-  defaultOut.setHours(endHour, endMinute, 0, 0);
+  defaultOut.setHours(Math.floor(endMinutes / 60), endMinutes % 60, 0, 0);
 
   // If clockIn is on the same day and happened after the default end time,
-  // set default clock-out to 8 hours after clockIn.
+  // set default clock-out to one shift-length after clockIn.
   if (defaultOut.getTime() <= base.getTime()) {
-    return new Date(base.getTime() + 8 * 3600 * 1000);
+    return new Date(base.getTime() + shiftMinutes * 60 * 1000);
   }
 
   return defaultOut;
@@ -89,8 +135,45 @@ export function getDefaultClockOut(
  *  monthly-breakdown.ts) already uses local fields, so this makes the pair
  *  agree. */
 export function todayDateOnly(): Date {
-  const now = new Date();
-  return new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+  return dateOnly(new Date());
+}
+
+/** Same local-calendar-fields conversion as todayDateOnly, generalized to any
+ *  instant — used to bucket a device punch timestamp onto the @db.Date row it
+ *  belongs to. */
+export function dateOnly(d: Date): Date {
+  return new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+}
+
+// Grace window (2026-08-12) for the reversed-punch heuristic below: how far
+// past the expected start time a device day's SOLE punch can still plausibly
+// be a genuine (if late) first arrival, before it's flagged as more likely a
+// missed clock-in whose only punch was actually the clock-out.
+const REVERSED_PUNCH_GRACE_MINUTES = 4 * 60;
+
+/**
+ * Heuristic used by the EOD cleanup cron: the TeamOffice feed carries no
+ * IN/OUT flag, only punch timestamps, so reconcile.ts infers direction
+ * purely by position (odd=in, even=out — see reconcile.ts pairPunches). A
+ * day left with exactly one, still-open, device-sourced punch at end-of-day
+ * is genuinely ambiguous — it could be a real forgotten clock-out (present
+ * all day, punch device caught only the morning), or it could be a missed
+ * clock-in whose only punch was actually the evening clock-out, misread as
+ * an "in" for lack of any other punch to pair against.
+ *
+ * This can never be certain from timestamps alone, so it is deliberately a
+ * heuristic flag for a human to resolve (via PATCH .../edit), not an
+ * auto-correction — guessing wrong here would silently fabricate pay.
+ */
+export function isSuspectedReversedPunch(
+  clockIn: Date,
+  isOnlySessionOfDay: boolean,
+  expectedStartTime: string | null,
+): boolean {
+  if (!isOnlySessionOfDay) return false;
+  const cutoff = parseHHMM(expectedStartTime ?? "11:00") + REVERSED_PUNCH_GRACE_MINUTES;
+  const clockInMinutes = clockIn.getHours() * 60 + clockIn.getMinutes();
+  return clockInMinutes > cutoff;
 }
 
 /** How much of a working day one attendance record is worth. */

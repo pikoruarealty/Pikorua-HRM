@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { isEmployeeRole, isLeadRole } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
+import { todayDateOnly } from "@/lib/attendance/time";
 
 // Track B. POST /api/v1/daily-selections — Milestone 2.3.
 // Called at clock-in: employee selects which of their assigned WorkItems
@@ -15,12 +16,6 @@ import { ok, failFor, ErrorCode } from "@/lib/api/response";
 const createSchema = z.object({
   workItemIds: z.array(z.string().uuid()).min(1),
 });
-
-function todayUtcDate(): Date {
-  const d = new Date();
-  d.setUTCHours(0, 0, 0, 0);
-  return d;
-}
 
 export async function POST(req: Request) {
   const session = await getSession();
@@ -46,7 +41,7 @@ export async function POST(req: Request) {
     return failFor(ErrorCode.VALIDATION, "All workItemIds must reference WorkItems assigned to you.");
   }
 
-  const date = todayUtcDate();
+  const date = todayDateOnly();
   await prisma.dailyTaskSelection.createMany({
     data: uniqueIds.map((workItemId) => ({ employeeId: session.employeeId!, workItemId, date })),
     skipDuplicates: true,

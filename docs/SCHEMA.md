@@ -45,6 +45,9 @@ Config table implementing the generic label mapping described in PRD §4.1.
 | department_id | uuid FK → departments.id | |
 | name | text | e.g. "Team 1" |
 | team_lead_id | uuid FK → employees.id | |
+| expected_start_time | text? | "HH:MM" 24h. Defaults to "11:00" (owner request, 2026-08-08); `null` = late-tracking skipped for this team's records |
+| expected_end_time | text? | "HH:MM" 24h shift end. Defaults to "19:00" (owner request, 2026-08-12), pairing with `expected_start_time` for a default 11:00-19:00 (8h) shift. Feeds the late-arrival make-up waiver (`isLateWaivedByMakeup`) and the EOD auto-fill default clock-out |
+| default_weekly_off_day | int | 0=Sunday..6=Saturday (owner request, 2026-08-08). Defaults to Sunday |
 | created_at | timestamptz | |
 
 ### `employees`
@@ -60,7 +63,7 @@ Config table implementing the generic label mapping described in PRD §4.1.
 | date_of_birth | date? | used by Event Management |
 | date_of_joining | date | used by Event Management (anniversary) and salary proration |
 | base_salary | numeric(12,2) | editable |
-| device_uid | integer? | reserved for the future biometric device-sync phase (not used in v1 manual attendance) |
+| device_uid | text? | TeamOffice biometric Empcode (2026-08-12). Not DB-unique — an unmapped Empcode must still be ingestible into device_punch_raw before an Admin confirms the mapping; "one employee per Empcode" is enforced at the application layer. |
 | status | enum | `active`, `inactive` |
 | created_at | timestamptz | |
 | updated_at | timestamptz | |
@@ -165,11 +168,16 @@ One row per employee per day. The clock columns are the day's **bounds**, not a 
 | clock_out_approved | timestamptz? | HR/Admin-edited/approved value; falls back to `clock_out_raw` if unedited |
 | total_hours | numeric(4,2)? | **sum of the day's closed sessions**, not last-out minus first-in — otherwise breaks would be paid as work. `null` while a session is open |
 | is_half_day | boolean | derived: `0 < total_hours < 5` |
+| is_compensation | boolean | (2026-08-07) Admin/HR manual override marking an otherwise-normal present day as a compensation day (e.g. making up for leave taken elsewhere), independent of the automatic Sunday-clock-in detection. Both paths feed the same `compensationDays` bucket. Set via `.../edit` |
+| late_exempt | boolean | (2026-08-12) Admin/HR manual override: waives the late-arrival deduction for a day where lateness wasn't the employee's fault (e.g. office inaccessible) and no make-up should be required. Checked first in `getAttendanceSummary`'s `lateCount` loop, before the automatic `isLateWaivedByMakeup` make-up waiver. Set via `.../edit`, audited |
+| late_exempt_reason | text? | human-readable reason set alongside `late_exempt` |
 | approval_status | enum | `pending`, `approved` — payroll should only count `approved` records for a finalized payslip |
 | approved_by | uuid FK → users.id ? | must be role admin/hr |
 | approved_at | timestamptz? | |
 | source | enum | `manual` (default), `device_sync`, `manual_import` (both for the biometric feed) |
 | work_location | enum | `office` (default) or `wfh`. Copied from the day's **first** session; per-session location is authoritative. A WFH day is a normally worked, normally paid day — it simply never comes off the office device |
+| flagged_for_review | boolean | (2026-08-12) set by the EOD cleanup cron when a device-synced day's sole open punch is implausibly late to be a genuine first arrival — likely a missed clock-in whose only punch was actually the clock-out (the vendor feed has no IN/OUT flag). Blocks `.../approve`; cleared by an explicit `.../edit` correction |
+| flag_reason | text? | human-readable reason set alongside `flagged_for_review` |
 | created_at | timestamptz | |
 | updated_at | timestamptz | |
 
@@ -192,9 +200,27 @@ Invariants (enforced by the clock-in/clock-out routes, not by DB constraints):
 
 "Clocked in **right now**" — which is what gates task completion and self-logging — means *an open session exists today*, not "clocked in at some point today".
 
-### Planned: `device_punch_raw` (TeamOffice biometric feed)
+### `device_punch_raw` (TeamOffice biometric feed, 2026-08-12)
 
-Raw punches pulled from / pushed by the device, kept separate from `attendance_records` so reconciliation can be re-run without re-polling. Columns: `device_uid`, `punch_time`, `direction`, `synced_at`, `dedup_key`. Reconciliation maps a punch pair onto one `attendance_sessions` row, so a device day and a manual day are the same object; `employees.device_uid` maps the employee and `attendance_records.source` becomes `device_sync`.
+Raw punches pulled from the vendor's cloud API (`api.etimeoffice.com`, polled incrementally via `DownloadLastPunchData` + `device_sync_cursor`), kept separate from `attendance_records` so reconciliation can be re-run without re-polling.
+
+| column | type | notes |
+|---|---|---|
+| id | uuid PK | |
+| device_uid | text | TeamOffice Empcode |
+| punch_time | timestamptz | |
+| direction | enum | `in` / `out` / `unknown` — the incremental endpoint has no reliable flag, so it lands `unknown` at ingest; reconciliation infers direction by pairing consecutive same-day punches (odd = in, even = out) |
+| machine_id | text? | |
+| dedup_key | text unique | `device_uid + punch_time`, makes re-ingesting idempotent via `skipDuplicates` |
+| synced_at | timestamptz | |
+| reconciled_at | timestamptz? | null while unreconciled (no employee mapping, or the day's source-of-truth guard skipped it) |
+| reconciled_session_id | uuid FK → attendance_sessions.id ? | |
+
+Reconciliation maps a day's punch pairs onto `attendance_sessions` rows (`source: device_sync`, `workLocation: office` — device punches are always office), so a device day and a manual day are the same object. Source-of-truth guard, checked before any write: a day already `work_location = wfh` is skipped entirely (WFH is manual-authoritative, never overwritten by a device punch), and a day already `approval_status = approved` with `source` still manual is also skipped (an approved manual day isn't silently clobbered).
+
+### `device_sync_cursor`
+
+Ordinary table, not a fixed-id singleton (no precedent for that pattern elsewhere in this schema) — the sync job resolves the one row via `findFirst`, creating it on first run. Holds `last_record` (the vendor's `LastRecord`/`MaxRecord` cursor, format `MMyyyy$ID`) and `updated_at`.
 
 ---
 

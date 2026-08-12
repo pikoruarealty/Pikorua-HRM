@@ -1,6 +1,6 @@
 import { AttendanceApprovalStatus } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
-import { isLateArrival } from "@/lib/attendance/time";
+import { isLateArrival, isLateWaivedByMakeup } from "@/lib/attendance/time";
 import { getApprovedUnpaidLeaveDays } from "@/lib/requests/leave";
 import { NotImplementedError } from "@/lib/errors";
 
@@ -28,7 +28,7 @@ export async function getAttendanceSummary(
 ): Promise<AttendanceSummary> {
   const employee = await prisma.employee.findUnique({
     where: { id: employeeId },
-    select: { team: { select: { expectedStartTime: true } } },
+    select: { team: { select: { expectedStartTime: true, expectedEndTime: true } } },
   });
 
   const periodStart = new Date(Date.UTC(year, month - 1, 1));
@@ -43,6 +43,7 @@ export async function getAttendanceSummary(
   });
 
   const expectedStartTime = employee?.team?.expectedStartTime ?? null;
+  const expectedEndTime = employee?.team?.expectedEndTime ?? null;
   let lateCount = 0;
   let halfDayCount = 0;
   let lateTrackingUnavailable = false;
@@ -53,9 +54,20 @@ export async function getAttendanceSummary(
       lateTrackingUnavailable = true;
       continue;
     }
-    if (r.clockInApproved && isLateArrival(r.clockInApproved, expectedStartTime, lateGraceMinutes)) {
-      lateCount += 1;
+    if (!r.clockInApproved || !isLateArrival(r.clockInApproved, expectedStartTime, lateGraceMinutes)) {
+      continue;
     }
+    // Admin/HR's explicit override (e.g. late through no fault of the
+    // employee's — office inaccessible) always wins, checked before the
+    // automatic make-up waiver.
+    if (r.lateExempt) continue;
+    const effectiveClockOut = r.clockOutApproved ?? r.clockOutRaw;
+    if (
+      isLateWaivedByMakeup(r.clockInApproved, effectiveClockOut, expectedStartTime, expectedEndTime, lateGraceMinutes)
+    ) {
+      continue;
+    }
+    lateCount += 1;
   }
 
   let unpaidLeaveCount: number | null = null;

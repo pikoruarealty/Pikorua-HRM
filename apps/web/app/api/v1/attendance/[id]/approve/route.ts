@@ -9,9 +9,10 @@ import { audit, clientIp } from "@/lib/audit";
 
 // Track A. PATCH /api/v1/attendance/:id/approve — Admin/HR. If not
 // separately edited first (via .../edit), approved times default to the raw
-// values. If clock-out is missing, defaults to standard shift end time (20:00 or
-// expectedStartTime + 9h). Recomputes total_hours/is_half_day from the final approved
-// times, since those are what payroll reads.
+// values. If clock-out is missing, defaults to the team's configured shift
+// end (company default 19:00, an 11:00-19:00 shift). Recomputes
+// total_hours/is_half_day from the final approved times, since those are
+// what payroll reads.
 export async function PATCH(
   _req: Request,
   { params }: { params: { id: string } },
@@ -31,7 +32,7 @@ export async function PATCH(
       employee: {
         select: {
           id: true,
-          team: { select: { expectedStartTime: true } },
+          team: { select: { expectedStartTime: true, expectedEndTime: true } },
         },
       },
     },
@@ -49,10 +50,27 @@ export async function PATCH(
     );
   }
 
+  // Flagged by the EOD cleanup cron: this day's times are suspected wrong
+  // (a solo device punch that's more likely a reversed clock-out than a
+  // genuine clock-in — see isSuspectedReversedPunch). Approving would bake in
+  // a guess via the default-clock-out fallback below; Admin/HR must correct
+  // the times via PATCH .../edit first, which clears the flag.
+  if (existing.flaggedForReview) {
+    return fail(
+      ErrorCode.VALIDATION,
+      existing.flagReason ?? "This record is flagged for review — correct the times via Edit before approving.",
+      422,
+    );
+  }
+
   const clockOutApproved =
     existing.clockOutApproved ??
     existing.clockOutRaw ??
-    getDefaultClockOut(clockInApproved, existing.employee?.team?.expectedStartTime ?? "11:00");
+    getDefaultClockOut(
+      clockInApproved,
+      existing.employee?.team?.expectedStartTime ?? "11:00",
+      existing.employee?.team?.expectedEndTime ?? "19:00",
+    );
 
   // Hours come from the day's sessions when it has them — a day can be several
   // stretches of work with breaks between (2026-08-11), and approved-out minus

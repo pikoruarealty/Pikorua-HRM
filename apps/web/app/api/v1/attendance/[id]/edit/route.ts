@@ -3,7 +3,7 @@ import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { requireRole, AuthzError, FINANCE_ROLES } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
-import { computeHours } from "@/lib/attendance/time";
+import { computeHours, isImplausibleDuration, MAX_PLAUSIBLE_SHIFT_HOURS } from "@/lib/attendance/time";
 import { summariseSessions } from "@/lib/attendance/sessions";
 import { audit, clientIp } from "@/lib/audit";
 
@@ -19,10 +19,23 @@ import { audit, clientIp } from "@/lib/audit";
 // clock-in auto-detected in lib/attendance/monthly-breakdown.ts) regardless
 // of what day of the week it actually falls on. See that file's classifyMonth
 // for how this flag is combined with the automatic Sunday detection.
+// late_exempt (2026-08-12): Admin/HR override for a late clock-in that
+// wasn't the employee's fault (e.g. office inaccessible) — waives the late
+// deduction without requiring the employee to compensate by staying late.
+// late_exempt_reason is free text, shown alongside the flag; not required
+// by the schema (mirrors flagReason's optionality) but the UI always
+// collects one.
 const editSchema = z.object({
   clock_in_approved: z.string().datetime().nullable().optional(),
   clock_out_approved: z.string().datetime().nullable().optional(),
   is_compensation: z.boolean().optional(),
+  late_exempt: z.boolean().optional(),
+  late_exempt_reason: z.string().nullable().optional(),
+  // 2026-08-12: confirms an implausibly long (>14h) resulting span is
+  // intentional — same guard/rationale as the manual-entry routes' flag of
+  // the same name. Editing is also how flaggedForReview records get fixed,
+  // so this only fires when the CORRECTED times are still implausible.
+  confirm_long_duration: z.boolean().optional(),
 });
 
 export async function PATCH(
@@ -96,6 +109,27 @@ export async function PATCH(
         ? computeHours(effectiveIn, effectiveOut)
         : null;
 
+  // Only checked when the admin is actively setting new times — if they're
+  // just resolved-flagged elsewhere (is_compensation, late_exempt) without
+  // touching the clock, an already-implausible duration is unaffected by
+  // this request either way.
+  if (
+    timesEdited &&
+    hours &&
+    isImplausibleDuration(hours.totalHours) &&
+    !parsed.data.confirm_long_duration
+  ) {
+    return failFor(
+      ErrorCode.VALIDATION,
+      `That's ${hours.totalHours}h — beyond a normal shift (>${MAX_PLAUSIBLE_SHIFT_HOURS}h). Double-check the times, or pass confirm_long_duration=true if this is genuinely correct.`,
+    );
+  }
+
+  // A hand-set time is Admin/HR's explicit correction — it resolves whatever
+  // the EOD cleanup cron flagged (e.g. a suspected reversed device punch), so
+  // the flag is cleared rather than left to nag on an already-fixed record.
+  const clearsReviewFlag = timesEdited && existing.flaggedForReview;
+
   const updated = await prisma.attendanceRecord.update({
     where: { id: params.id },
     data: {
@@ -103,6 +137,9 @@ export async function PATCH(
       clockOutApproved,
       ...(hours ? { totalHours: hours.totalHours, isHalfDay: hours.isHalfDay } : {}),
       ...(parsed.data.is_compensation !== undefined ? { isCompensation: parsed.data.is_compensation } : {}),
+      ...(parsed.data.late_exempt !== undefined ? { lateExempt: parsed.data.late_exempt } : {}),
+      ...(parsed.data.late_exempt_reason !== undefined ? { lateExemptReason: parsed.data.late_exempt_reason } : {}),
+      ...(clearsReviewFlag ? { flaggedForReview: false, flagReason: null } : {}),
     },
   });
 
@@ -121,6 +158,10 @@ export async function PATCH(
       ...(parsed.data.is_compensation !== undefined
         ? { is_compensation_before: existing.isCompensation, is_compensation_after: parsed.data.is_compensation }
         : {}),
+      ...(parsed.data.late_exempt !== undefined
+        ? { late_exempt_before: existing.lateExempt, late_exempt_after: parsed.data.late_exempt }
+        : {}),
+      ...(clearsReviewFlag ? { review_flag_cleared: true } : {}),
     },
     ip: clientIp(req),
   });

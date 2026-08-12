@@ -42,3 +42,5 @@ coverage/
 
 # Local file storage (documents, receipts) — apps/web/lib/storage/local.ts
 apps/web/uploads/
+
+teamoffice_API_documentation.pdf
