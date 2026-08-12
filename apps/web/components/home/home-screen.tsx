@@ -38,7 +38,7 @@ type TodayEvents = {
   anniversaries: { employeeId: string; fullName: string }[];
   events: { employeeId: string | null; fullName: string | null; title: string }[];
 };
-type WorkItem = { id: string; status: "pending" | "wip" | "completed" };
+type WorkItem = { id: string; status: "pending" | "wip" | "in_review" | "completed" };
 type RequestRow = { id: string; status: string };
 type Payslip = { id: string; periodMonth: number; periodYear: number; status: string };
 type Announcement = { id: string; title: string; createdAt: string };
@@ -96,6 +96,7 @@ export function HomeScreen({
   const [me, setMe] = useState<Me | null>(null);
   const [unread, setUnread] = useState(0);
   const [events, setEvents] = useState<TodayEvents | null>(null);
+  const { clockedIn, openSession } = useAttendanceStatus();
 
   // Individual-contributor data.
   const [tasks, setTasks] = useState<WorkItem[] | null>(null);
@@ -103,6 +104,7 @@ export function HomeScreen({
   const [points, setPoints] = useState<number | null>(null);
   const [latestPayslip, setLatestPayslip] = useState<Payslip | null>(null);
   const [plannedToday, setPlannedToday] = useState<number | null>(null);
+  const [mySelectionsToday, setMySelectionsToday] = useState<number | null>(null);
 
   // Lead / finance shared: pending approvals in the viewer's scope.
   const [pendingApprovals, setPendingApprovals] = useState<number | null>(null);
@@ -144,6 +146,9 @@ export function HomeScreen({
         apiFetch<{ balance: number }>(`/employees/${r.data.employeeId}/points`).then((p) => {
           if (p.data) setPoints(p.data.balance);
         });
+        apiFetch<{ id: string }[]>(
+          `/daily-selections/today?employee_id=${r.data.employeeId}`,
+        ).then((s) => setMySelectionsToday(s.data?.length ?? 0));
       }
     });
     apiFetch<{ notifications: Notification[] }>("/notifications").then((r) => {
@@ -208,6 +213,18 @@ export function HomeScreen({
   const visiblePicks = publishedPicks.filter((p) => !dismissed.includes(p.id));
 
   const openTasks = tasks?.filter((t) => t.status !== "completed").length ?? null;
+  // Biometric clock-in never goes through Planning, so device days can start
+  // with zero tasks picked. Nudge once there's an open office session, tasks
+  // to pick from, and nothing selected yet today.
+  const activeTaskCount =
+    tasks?.filter((t) => t.status !== "completed" && t.status !== "in_review").length ?? 0;
+  const needsTaskPick =
+    hasEmployee &&
+    !isAdmin &&
+    clockedIn &&
+    openSession?.workLocation === "office" &&
+    activeTaskCount > 0 &&
+    mySelectionsToday === 0;
   const pendingMyRequests = myRequests?.filter((r) => r.status === "pending").length ?? null;
   const presentRows = attendance?.rows.filter((r) => r.status === "present" || r.status === "half_day") ?? [];
   const onLeaveRows = attendance?.rows.filter((r) => r.status === "on_leave") ?? [];
@@ -270,6 +287,20 @@ export function HomeScreen({
 
       {/* Clock status — employees/leads/HR who clock in; not admin. */}
       {hasEmployee && !isAdmin && <ClockCard />}
+
+      {needsTaskPick && (
+        <Card className="border-amber-400/50 bg-amber-50/50 dark:bg-amber-950/20">
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 py-4 text-sm">
+            <span>
+              You&apos;re clocked in but haven&apos;t picked today&apos;s tasks yet — the
+              biometric device doesn&apos;t ask for them.
+            </span>
+            <Link href="/planning" className="w-fit">
+              <Button size="sm">Pick today&apos;s tasks</Button>
+            </Link>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Personal stat tiles — shown to anyone with an employee record. */}
       {hasEmployee && (
@@ -730,7 +761,7 @@ function ClockCard() {
               </p>
             )}
           </>
-        ) : !clockedIn ? (
+        ) : !clockedIn && !clockedOut ? (
           <>
             <p className="text-muted-foreground">
               You haven&apos;t clocked in today. In-office attendance is captured automatically by
