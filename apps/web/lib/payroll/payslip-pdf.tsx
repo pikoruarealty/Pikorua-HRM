@@ -20,6 +20,7 @@ export type PayslipPdfInput = {
     fullName: string;
     email: string;
     role: string;
+    dateOfJoining: string | null;
     departmentName: string | null;
   };
   payslip: {
@@ -189,6 +190,14 @@ export function PayslipPdfDocument({ employee, payslip }: PayslipPdfInput) {
             <View style={styles.gridItem}>
               <Text style={styles.label}>Department</Text>
               <Text style={styles.value}>{employee.departmentName ?? "—"}</Text>
+            </View>
+            <View style={styles.gridItem}>
+              <Text style={styles.label}>Date of joining</Text>
+              <Text style={styles.value}>
+                {employee.dateOfJoining
+                  ? new Date(employee.dateOfJoining).toLocaleDateString("en-IN")
+                  : "—"}
+              </Text>
             </View>
           </View>
         </View>

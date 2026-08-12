@@ -14,6 +14,7 @@ type PayslipDetail = {
     fullName: string;
     email?: string;
     role?: string;
+    dateOfJoining?: string | null;
     department?: { name: string } | null;
   };
   periodMonth: number;
@@ -129,6 +130,7 @@ export function PayslipDetail({ id, canFinalize }: { id: string; canFinalize: bo
             fullName: payslip.employee.fullName,
             email: payslip.employee.email,
             role: payslip.employee.role,
+            dateOfJoining: payslip.employee.dateOfJoining ?? null,
             departmentName: payslip.employee.department?.name ?? null,
           },
           periodMonth: payslip.periodMonth,

@@ -28,6 +28,7 @@ export async function GET(
           fullName: true,
           email: true,
           role: true,
+          dateOfJoining: true,
           department: { select: { name: true } },
         },
       },
@@ -48,6 +49,7 @@ export async function GET(
         fullName: payslip.employee.fullName,
         email: payslip.employee.email,
         role: payslip.employee.role,
+        dateOfJoining: payslip.employee.dateOfJoining?.toISOString() ?? null,
         departmentName: payslip.employee.department?.name ?? null,
       },
       payslip: {

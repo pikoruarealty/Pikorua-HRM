@@ -22,6 +22,7 @@ export type PayslipVisualInput = {
     fullName: string;
     email?: string;
     role?: string;
+    dateOfJoining?: string | null;
     departmentName?: string | null;
   };
   periodMonth: number;
@@ -136,6 +137,14 @@ export function PayslipVisual({ payslip }: { payslip: PayslipVisualInput }) {
             <VisualField label="Role" value={payslip.employee.role.replace(/_/g, " ")} />
           )}
           <VisualField label="Department" value={payslip.employee.departmentName ?? "—"} />
+          <VisualField
+            label="Date of joining"
+            value={
+              payslip.employee.dateOfJoining
+                ? new Date(payslip.employee.dateOfJoining).toLocaleDateString("en-IN")
+                : "—"
+            }
+          />
         </div>
 
         {/* Attendance summary */}

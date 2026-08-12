@@ -27,6 +27,7 @@ export async function GET(
           fullName: true,
           email: true,
           role: true,
+          dateOfJoining: true,
           department: { select: { name: true } },
         },
       },
