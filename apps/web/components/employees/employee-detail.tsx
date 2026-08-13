@@ -18,6 +18,7 @@ import { EmployeeAvatar } from "@/components/employees/employee-avatar";
 import { EmployeeEventsPanel } from "@/components/employees/employee-events-panel";
 import { EmployeeLeaveBalancePanel } from "@/components/employees/employee-leave-balance-panel";
 import { formatDate } from "@/lib/format-date";
+import { isMetricDepartment } from "@/lib/departments/type";
 import { ImageCropModal, isSquare } from "@/components/employees/image-cropper";
 import {
   EmployeeRequestsPanel,
@@ -65,15 +66,7 @@ type UnmatchedDevice = {
   suggestions: { employeeId: string; fullName: string; similarity: number }[];
 };
 
-const ROLES = [
-  "admin",
-  "hr",
-  "tech_lead",
-  "sales_lead",
-  "tech_employee",
-  "sales_employee",
-  "bde",
-];
+type RoleOption = { key: string; label: string };
 
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
@@ -124,6 +117,7 @@ export function EmployeeDetail({
   const [employee, setEmployee] = useState<Employee | null>(null);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
+  const [roles, setRoles] = useState<RoleOption[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<{ code: string; message: string } | null>(null);
   const [loading, setLoading] = useState(true);
@@ -170,7 +164,7 @@ export function EmployeeDetail({
       // Departments/teams are fetched for every viewer so the profile can
       // show names instead of ids (both endpoints are role-safe: departments
       // is Any, teams is server-scoped).
-      const [emp, deptData, teamData, unmatched] = await Promise.all([
+      const [emp, deptData, teamData, unmatched, roleData] = await Promise.all([
         getJson(await fetch(`/api/v1/employees/${employeeId}`)),
         getJson(await fetch("/api/v1/departments")).catch(() => []),
         getJson(await fetch("/api/v1/teams")).catch(() => []),
@@ -179,11 +173,15 @@ export function EmployeeDetail({
         isAdmin
           ? getJson(await fetch("/api/v1/device-mapping/unmatched")).then((d) => d.unmatched as UnmatchedDevice[]).catch(() => [])
           : Promise.resolve([]),
+        // Roles are DB-backed (2026-08-13) — only Admin sees/uses the role
+        // Select, but any authenticated role can list them.
+        isAdmin ? getJson(await fetch("/api/v1/roles")).catch(() => []) : Promise.resolve([]),
       ]);
       setEmployee(emp);
       setDepartments(deptData);
       setTeams(teamData);
       setUnmatchedDevices(unmatched);
+      setRoles(roleData);
       setDepartmentId(emp.departmentId ?? "");
       setTeamId(emp.teamId ?? "");
       setBaseSalary(emp.baseSalary ?? "");
@@ -234,39 +232,65 @@ export function EmployeeDetail({
 
   async function onSave(e: React.FormEvent) {
     e.preventDefault();
-    setSaving(true);
     setError(null);
     setNotice(null);
+    if (!employee) return;
+
     // Only an admin may change role, and only send it when it actually changed
     // (a no-op role in the body would needlessly revoke the employee's session).
-    const roleChanged = isAdmin && !isSelf && role !== employee?.role;
+    const roleChanged = isAdmin && !isSelf && role !== employee.role;
+
+    // Diff against the loaded record and send only what actually changed —
+    // sending the whole form every time meant an edit to one field (e.g. just
+    // the name) could fail PATCH's validation on some unrelated field's stale
+    // or edge-case value, with no way to tell which one from the generic
+    // "Invalid request body" error.
+    const changes: Record<string, unknown> = {};
+    if (fullName !== employee.fullName) changes.full_name = fullName;
+    if (email !== employee.email) changes.email = email;
+    const newPhone = phone || null;
+    if (newPhone !== (employee.phone ?? null)) changes.phone = newPhone;
+    const newDob = dateOfBirth || null;
+    const origDob = employee.dateOfBirth ? employee.dateOfBirth.slice(0, 10) : null;
+    if (newDob !== origDob) changes.date_of_birth = newDob;
+    if (dateOfJoining !== employee.dateOfJoining.slice(0, 10)) changes.date_of_joining = dateOfJoining;
+    if (employmentType !== (employee.employmentType ?? "fulltime")) changes.employment_type = employmentType;
+    const newRequiredDays =
+      employmentType !== "fulltime" && requiredDaysPerWeek ? Number(requiredDaysPerWeek) : null;
+    if (newRequiredDays !== (employee.requiredDaysPerWeek ?? null)) {
+      changes.required_days_per_week = newRequiredDays;
+    }
+    const newOffDay = defaultWeeklyOffDay !== "__default__" ? Number(defaultWeeklyOffDay) : null;
+    if (newOffDay !== (employee.defaultWeeklyOffDay ?? null)) changes.default_weekly_off_day = newOffDay;
+    const newDept = departmentId || null;
+    if (newDept !== (employee.departmentId ?? null)) changes.department_id = newDept;
+    const newTeam = teamId || null;
+    if (newTeam !== (employee.teamId ?? null)) changes.team_id = newTeam;
+    const newSalary = Number(baseSalary);
+    if (newSalary !== Number(employee.baseSalary ?? 0)) changes.base_salary = newSalary;
+    const newDevice = deviceUid.trim() ? deviceUid.trim() : null;
+    if (newDevice !== (employee.deviceUid ?? null)) changes.device_uid = newDevice;
+    if (roleChanged) changes.role = role;
+
+    if (Object.keys(changes).length === 0) {
+      setNotice("No changes to save.");
+      return;
+    }
+
+    setSaving(true);
     try {
       await getJson(
         await fetch(`/api/v1/employees/${employeeId}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            department_id: departmentId || null,
-            team_id: teamId || null,
-            base_salary: Number(baseSalary),
-            device_uid: deviceUid.trim() ? deviceUid.trim() : null,
-            employment_type: employmentType,
-            required_days_per_week: employmentType !== "fulltime" && requiredDaysPerWeek ? Number(requiredDaysPerWeek) : null,
-            default_weekly_off_day: defaultWeeklyOffDay !== "__default__" ? Number(defaultWeeklyOffDay) : null,
-            full_name: fullName,
-            email,
-            phone: phone || null,
-            date_of_birth: dateOfBirth || null,
-            date_of_joining: dateOfJoining,
-            ...(roleChanged ? { role } : {}),
-          }),
+          body: JSON.stringify(changes),
         }),
       );
-      if (roleChanged) {
-        setNotice(
-          "Role updated. The employee's active sessions were revoked — they must sign in again to get the new permissions.",
-        );
-      }
+      setNotice(
+        roleChanged
+          ? "Role updated. The employee's active sessions were revoked — they must sign in again to get the new permissions."
+          : "Saved.",
+      );
       load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save changes.");
@@ -484,8 +508,7 @@ export function EmployeeDetail({
         </CardContent>
       </Card>
 
-      {employee && departments.find((d) => d.id === employee.departmentId)?.typeKey !== undefined &&
-        departments.find((d) => d.id === employee.departmentId)?.typeKey !== "tech" && (
+      {employee && isMetricDepartment(departments.find((d) => d.id === employee.departmentId)?.typeKey) && (
           <Card>
             <CardHeader>
               <CardTitle>Sales targets (override)</CardTitle>
@@ -752,9 +775,9 @@ export function EmployeeDetail({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {ROLES.map((r) => (
-                        <SelectItem key={r} value={r}>
-                          {humanizeRole(r)}
+                      {roles.map((r) => (
+                        <SelectItem key={r.key} value={r.key}>
+                          {r.label}
                         </SelectItem>
                       ))}
                     </SelectContent>

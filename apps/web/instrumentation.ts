@@ -8,6 +8,9 @@ export async function register() {
     const { validateEnv } = await import("@/lib/env");
     validateEnv();
 
+    const { refreshRoleRegistry } = await import("@/lib/rbac");
+    await refreshRoleRegistry();
+
     const { startScheduler } = await import("@/lib/cron/scheduler");
     startScheduler();
   }

@@ -21,16 +21,36 @@ datasource db {
 // ENUMS
 // ===========================================================================
 
-// 7 confirmed roles. `bde_lead` is intentionally NOT included yet — unconfirmed
-// (see docs/PRD.md §7 open questions). Add here + in lib/rbac if confirmed.
-enum Role {
-  admin
-  hr
-  tech_lead
-  sales_lead
-  tech_employee
-  sales_employee
-  bde
+// Roles used to be a fixed 7-value enum here. As of 2026-08-13 they live in
+// the `Role` model below instead, so an Admin can add new roles (e.g. a
+// confirmed `cto`) from the app without a schema migration. The 7 original
+// roles still exist as protected `isSystem` rows (seeded in prisma/seed.ts);
+// `User.role` / `Employee.role` are plain strings referencing `Role.key`.
+// The runtime permission-group logic (FINANCE_ROLES/LEAD_ROLES/EMPLOYEE_ROLES/
+// ROLE_TIER) lives in lib/rbac/index.ts and is kept in sync with this table
+// via refreshRoleRegistry() — see that file for how a new role's `tier` maps
+// onto those groups.
+enum RoleTier {
+  finance
+  lead
+  employee
+}
+
+model Role {
+  key       String   @id
+  label     String
+  tier      RoleTier
+  // System roles (the original 7) can't be renamed-by-key or deleted —
+  // several code paths (golden-rule gates, self-role-change guard, etc.)
+  // still refer to a few of them (admin, hr) by literal key.
+  isSystem  Boolean  @default(false) @map("is_system")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  users     User[]
+  employees Employee[]
+
+  @@map("roles")
 }
 
 enum EmployeeStatus {
@@ -180,7 +200,8 @@ model User {
   id                 String    @id @default(uuid()) @db.Uuid
   email              String    @unique
   passwordHash       String    @map("password_hash")
-  role               Role
+  role               String
+  roleRef            Role      @relation(fields: [role], references: [key])
   // Bumped on password change / deactivation to revoke all outstanding JWTs
   // (session.ts embeds this as the `tv` claim and rejects a mismatch).
   tokenVersion       Int       @default(0) @map("token_version")
@@ -302,7 +323,8 @@ model Employee {
   department             Department?    @relation(fields: [departmentId], references: [id])
   teamId                 String?        @map("team_id") @db.Uuid
   team                   Team?          @relation("TeamMembers", fields: [teamId], references: [id])
-  role                   Role
+  role                   String
+  roleRef                Role           @relation(fields: [role], references: [key])
   dateOfBirth            DateTime?      @map("date_of_birth") @db.Date
   dateOfJoining          DateTime       @map("date_of_joining") @db.Date
   baseSalary             Decimal        @map("base_salary") @db.Decimal(12, 2)
@@ -1071,7 +1093,10 @@ model AuditLog {
   id          String   @id @default(uuid()) @db.Uuid
   actorUserId String?  @map("actor_user_id") @db.Uuid
   actor       User?    @relation("AuditActor", fields: [actorUserId], references: [id])
-  actorRole   Role?    @map("actor_role")
+  // A snapshot of the actor's role *key* at the time of the action — not a
+  // relation to Role, since audit history must stay accurate even if that
+  // role is later renamed or deleted.
+  actorRole   String?  @map("actor_role")
   action      String // dotted verb, e.g. "payslip.generate", "auth.login_failed"
   entityType  String?  @map("entity_type") // e.g. "payslip", "employee"
   entityId    String?  @map("entity_id") @db.Uuid

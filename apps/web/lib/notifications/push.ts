@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db/prisma";
-import { EmployeeStatus, Role, type Notification } from "@prisma/client";
+import { EmployeeStatus, type Notification } from "@prisma/client";
+import { Role } from "@/lib/rbac";
 import { sendPushToUser } from "@/lib/notifications/fcm";
 
 // Track B, Milestone 3.2. Generic notification push service — any module

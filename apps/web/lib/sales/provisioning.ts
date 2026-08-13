@@ -1,4 +1,5 @@
-import { Role, SalesMetric, WorkItemFrequency, WorkItemMode } from "@prisma/client";
+import { SalesMetric, WorkItemFrequency, WorkItemMode } from "@prisma/client";
+import { Role } from "@/lib/rbac";
 import { prisma } from "@/lib/db/prisma";
 import { createLogger } from "@/lib/log";
 import { getSalesTargetConfig, resolveTargets } from "@/lib/sales/targets";

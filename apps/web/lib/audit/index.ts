@@ -1,4 +1,5 @@
-import type { Prisma, Role } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
+import type { Role } from "@/lib/rbac";
 import { prisma } from "@/lib/db/prisma";
 import { createLogger } from "@/lib/log";
 

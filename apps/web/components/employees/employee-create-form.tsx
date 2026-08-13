@@ -112,15 +112,7 @@ function DateField({
   );
 }
 
-const ROLES = [
-  "admin",
-  "hr",
-  "tech_lead",
-  "sales_lead",
-  "tech_employee",
-  "sales_employee",
-  "bde",
-];
+type RoleOption = { key: string; label: string };
 
 type Department = { id: string; name: string };
 type Team = { id: string; name: string; departmentId: string };
@@ -135,6 +127,7 @@ export function EmployeeCreateForm() {
   const router = useRouter();
   const [departments, setDepartments] = useState<Department[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
+  const [roles, setRoles] = useState<RoleOption[]>([]);
 
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
@@ -159,12 +152,14 @@ export function EmployeeCreateForm() {
 
   useEffect(() => {
     (async () => {
-      const [deptData, teamData] = await Promise.all([
+      const [deptData, teamData, roleData] = await Promise.all([
         getJson(await fetch("/api/v1/departments")),
         getJson(await fetch("/api/v1/teams")),
+        getJson(await fetch("/api/v1/roles")),
       ]);
       setDepartments(deptData);
       setTeams(teamData);
+      setRoles(roleData);
     })();
   }, []);
 
@@ -293,9 +288,9 @@ export function EmployeeCreateForm() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {ROLES.map((r) => (
-                  <SelectItem key={r} value={r}>
-                    {r.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}
+                {roles.map((r) => (
+                  <SelectItem key={r.key} value={r.key}>
+                    {r.label}
                   </SelectItem>
                 ))}
               </SelectContent>

@@ -1,7 +1,6 @@
 import { redirect } from "next/navigation";
-import { Role } from "@prisma/client";
 import { getSession } from "@/lib/auth";
-import { FINANCE_ROLES, isLeadRole } from "@/lib/rbac";
+import { FINANCE_ROLES, isLeadRole, type Role } from "@/lib/rbac";
 import { SalesScreen } from "@/components/sales/sales-screen";
 import { SALES_ROLES } from "@/lib/sales/provisioning";
 

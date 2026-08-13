@@ -19,7 +19,7 @@ export function SalesScreen({
 }) {
   return (
     <div className="flex flex-col gap-6">
-      <SalesTeamProgressPanel />
+      <SalesTeamProgressPanel canSync={canReview} />
       <OfflineClaimsPanel
         employeeId={employeeId}
         canReview={canReview}

@@ -1,4 +1,5 @@
-import { Role, SalesMatchMethod } from "@prisma/client";
+import { SalesMatchMethod } from "@prisma/client";
+import { Role } from "@/lib/rbac";
 import { prisma } from "@/lib/db/prisma";
 import { createLogger } from "@/lib/log";
 import { CrmSyncError, crmConfigured, fetchActivity } from "@/lib/sales/crm-client";

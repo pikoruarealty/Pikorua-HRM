@@ -1,9 +1,9 @@
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
-import { isFinanceRole } from "@/lib/rbac";
+import { isFinanceRole, type Role } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
-import { EventType, type Role } from "@prisma/client";
+import { EventType } from "@prisma/client";
 
 // Track B. PATCH/DELETE /api/v1/events/meetings/:id — Milestone 3.5.
 // RBAC: Creator or Admin/HR.

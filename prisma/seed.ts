@@ -9,7 +9,20 @@
  * Idempotent: re-running upserts by email, so it's safe to run repeatedly.
  * Run with:  npm run db:seed   (from repo root)
  */
-import { PrismaClient, Role, WorkItemMode, PunchDirection } from "@prisma/client";
+import { PrismaClient, WorkItemMode, PunchDirection } from "@prisma/client";
+
+// Roles are DB-backed now (see migration 20260813120000_add_roles_table /
+// apps/web/lib/rbac) — the 7 system roles are seeded by that migration, so
+// this script just references them by their string key.
+const Role = {
+  admin: "admin",
+  hr: "hr",
+  tech_lead: "tech_lead",
+  sales_lead: "sales_lead",
+  tech_employee: "tech_employee",
+  sales_employee: "sales_employee",
+  bde: "bde",
+} as const;
 import bcrypt from "bcryptjs";
 
 const prisma = new PrismaClient();

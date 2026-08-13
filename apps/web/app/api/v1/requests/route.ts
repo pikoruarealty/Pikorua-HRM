@@ -1,28 +1,25 @@
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
-import { isFinanceRole, isLeadRole } from "@/lib/rbac";
+import { isFinanceRole, isLeadRole, EMPLOYEE_ROLES, LEAD_ROLES, Role } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { uuidFilter, enumFilter } from "@/lib/api/params";
 import { redactRequestFinancials } from "@/lib/requests/redact";
 import { getLedEmployeeIds } from "@/lib/employees/managed-scope";
 import { notifyFinanceUsers } from "@/lib/notifications/push";
 import { saveUploadedFile } from "@/lib/storage/local";
-import { RequestType, RequestStatus, Role } from "@prisma/client";
+import { RequestType, RequestStatus } from "@prisma/client";
 
 // Who may file their own request, in hierarchy order: Employee -> approved by
 // Lead's superiors (HR/Admin); Lead -> approved by HR/Admin; HR -> approved by
 // Admin (self-approval blocked in approve/reject). Admin has no one above it,
 // so Admin is intentionally not included here (would create an unapprovable
-// pending request).
-const CAN_SUBMIT_ROLES: readonly Role[] = [
-  Role.tech_employee,
-  Role.sales_employee,
-  Role.bde,
-  Role.tech_lead,
-  Role.sales_lead,
-  Role.hr,
-];
+// pending request). Sourced from the live EMPLOYEE_ROLES/LEAD_ROLES arrays
+// (@/lib/rbac) so a new custom employee/lead-tier role automatically inherits
+// the ability to submit its own leave/reimbursement requests.
+function canSubmitRoles(): readonly string[] {
+  return [...EMPLOYEE_ROLES, ...LEAD_ROLES, Role.hr];
+}
 
 // Track B. GET/POST /api/v1/requests — Milestone 1.3 (leave) + 2.4 (reimbursement).
 
@@ -82,7 +79,7 @@ const REQUEST_TYPE_LABELS: Record<RequestType, string> = {
 export async function POST(req: Request) {
   const session = await getSession();
   if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
-  if (!CAN_SUBMIT_ROLES.includes(session.role)) return failFor(ErrorCode.FORBIDDEN);
+  if (!canSubmitRoles().includes(session.role)) return failFor(ErrorCode.FORBIDDEN);
   if (!session.employeeId) return failFor(ErrorCode.FORBIDDEN, "Session has no linked employee record.");
 
   // A reimbursement can carry a bill file, so the submit form posts

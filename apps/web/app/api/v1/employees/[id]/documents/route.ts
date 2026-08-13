@@ -1,10 +1,9 @@
 import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
-import { isFinanceRole } from "@/lib/rbac";
+import { isFinanceRole, type Role } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { isUuid } from "@/lib/api/params";
 import { saveUploadedFile } from "@/lib/storage/local";
-import type { Role } from "@prisma/client";
 
 // Track B. GET/POST /api/v1/employees/:id/documents — Milestone 3.4.
 // Physically lives under Track A's `app/api/v1/employees/` folder — owned

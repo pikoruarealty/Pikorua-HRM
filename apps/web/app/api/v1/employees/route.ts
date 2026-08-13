@@ -4,7 +4,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { getSession, hashPassword } from "@/lib/auth";
 import { EmployeeStatus } from "@prisma/client";
-import { FINANCE_ROLES, Role, isLeadRole } from "@/lib/rbac";
+import { FINANCE_ROLES, isLeadRole, isKnownRole } from "@/lib/rbac";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { uuidFilter, enumFilter } from "@/lib/api/params";
 import { audit, clientIp } from "@/lib/audit";
@@ -98,7 +98,8 @@ export async function GET(req: Request) {
   const departmentIdFilter = uuidFilter(searchParams.get("department_id"));
   const teamIdFilter = uuidFilter(searchParams.get("team_id"));
   const statusFilter = enumFilter(searchParams.get("status"), EmployeeStatus);
-  const roleFilter = enumFilter(searchParams.get("role"), Role);
+  const roleParam = searchParams.get("role");
+  const roleFilter = roleParam === null || roleParam === "" ? undefined : isKnownRole(roleParam) ? roleParam : null;
   const employmentTypeFilter = enumFilter(searchParams.get("employment_type"), EmploymentType);
   if (departmentIdFilter === null) return failFor(ErrorCode.VALIDATION, "department_id must be a uuid.");
   if (teamIdFilter === null) return failFor(ErrorCode.VALIDATION, "team_id must be a uuid.");
@@ -175,7 +176,7 @@ const createSchema = z.object({
   phone: z.string().optional(),
   department_id: z.string().uuid().optional(),
   team_id: z.string().uuid().optional(),
-  role: z.nativeEnum(Role),
+  role: z.string().min(1),
   employment_type: z.nativeEnum(EmploymentType).optional(),
   required_days_per_week: z.coerce.number().int().min(1).max(7).optional(),
   default_weekly_off_day: z.coerce.number().int().min(0).max(6).optional(),
@@ -224,6 +225,13 @@ export async function POST(req: Request) {
     return failFor(ErrorCode.VALIDATION, "Missing or invalid employee fields.");
   }
   const d = parsed.data;
+
+  // `role` isn't a static enum anymore (roles are DB-backed, see @/lib/rbac),
+  // so validate the key against the live table instead of z.nativeEnum.
+  const roleRow = await prisma.role.findUnique({ where: { key: d.role } });
+  if (!roleRow) {
+    return failFor(ErrorCode.VALIDATION, `"${d.role}" is not a known role.`);
+  }
 
   // Photo is optional: only validate type/size when one was actually attached.
   const photoEntry = formData.get("photo");

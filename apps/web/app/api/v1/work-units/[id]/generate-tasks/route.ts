@@ -4,6 +4,7 @@ import { getSession } from "@/lib/auth";
 import { isFinanceRole, isLeadRole, rolesAtOrBelow } from "@/lib/rbac";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { WorkItemFrequency, WorkItemMode } from "@prisma/client";
+import { isMetricDepartment } from "@/lib/departments/type";
 import {
   generateTaskBreakdown,
   generateProjectOutcome,
@@ -103,7 +104,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   });
   const mode: WorkItemMode =
     label?.workItemMode ??
-    (workUnit.department.typeKey === "tech" ? WorkItemMode.atomic : WorkItemMode.metric);
+    (isMetricDepartment(workUnit.department.typeKey) ? WorkItemMode.metric : WorkItemMode.atomic);
 
   // For a non-finance project lead, assignees must be in the WorkUnit's own
   // department at the lead's hierarchy tier or below (or be the lead

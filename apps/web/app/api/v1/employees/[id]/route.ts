@@ -105,7 +105,7 @@ const patchSchema = z.object({
   // Role change is a privilege-tier change: Admin-only (narrower than the
   // Admin/HR gate on the rest of this route), and handled specially below —
   // it also updates the linked User.role and revokes their sessions.
-  role: z.nativeEnum(Role).optional(),
+  role: z.string().min(1).optional(),
   // 2026-08-07: previously permanently locked after creation — now
   // Admin/HR-editable like everything else on this route.
   full_name: z.string().min(1).optional(),
@@ -155,6 +155,12 @@ export async function PATCH(
     }
     if (session.employeeId === params.id) {
       return failFor(ErrorCode.FORBIDDEN, "You cannot change your own role.");
+    }
+    // `role` isn't a static enum anymore (roles are DB-backed, see
+    // @/lib/rbac), so validate the key against the live table.
+    const roleRow = await prisma.role.findUnique({ where: { key: d.role } });
+    if (!roleRow) {
+      return failFor(ErrorCode.VALIDATION, `"${d.role}" is not a known role.`);
     }
   }
 

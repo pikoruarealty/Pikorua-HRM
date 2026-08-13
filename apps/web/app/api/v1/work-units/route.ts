@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
-import { AuthzError, FINANCE_ROLES, LEAD_ROLES, isFinanceRole, isLeadRole } from "@/lib/rbac";
+import { AuthzError, FINANCE_ROLES, LEAD_ROLES, isFinanceRole, isLeadRole, type Role } from "@/lib/rbac";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { WorkUnitStatus } from "@prisma/client";
 
@@ -155,7 +155,7 @@ export async function GET(req: Request) {
   return ok(workUnits);
 }
 
-function requireCreateRole(session: { role: import("@prisma/client").Role } | null | undefined) {
+function requireCreateRole(session: { role: Role } | null | undefined) {
   if (!session) throw new AuthzError("UNAUTHENTICATED");
   const allowed = [...LEAD_ROLES, ...FINANCE_ROLES];
   if (!allowed.includes(session.role)) throw new AuthzError("FORBIDDEN");

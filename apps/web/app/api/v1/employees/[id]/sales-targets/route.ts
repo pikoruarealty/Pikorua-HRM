@@ -6,6 +6,7 @@ import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { isUuid } from "@/lib/api/params";
 import { leadsEmployee } from "@/lib/employees/managed-scope";
 import { audit, clientIp } from "@/lib/audit";
+import { isMetricDepartment } from "@/lib/departments/type";
 
 // PATCH /api/v1/employees/:id/sales-targets — per-employee overrides on top
 // of the org-wide SalesTargetConfig (lib/sales/targets.ts: resolveTargets —
@@ -45,7 +46,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     select: { id: true, departmentId: true, department: { select: { typeKey: true } } },
   });
   if (!existing) return failFor(ErrorCode.NOT_FOUND, "Employee not found.");
-  if (!existing.department || existing.department.typeKey === "tech") {
+  if (!isMetricDepartment(existing.department?.typeKey)) {
     return failFor(ErrorCode.VALIDATION, "Sales targets only apply to metric (sales/BD) departments.");
   }
 

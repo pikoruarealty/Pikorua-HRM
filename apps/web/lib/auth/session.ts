@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { SignJWT, jwtVerify } from "jose";
-import type { Role } from "@prisma/client";
+import type { Role } from "@/lib/rbac";
 import { prisma } from "@/lib/db/prisma";
 
 // SHARED (Phase 0). Session = a signed JWT stored in an httpOnly cookie.

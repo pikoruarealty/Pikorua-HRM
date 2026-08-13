@@ -2,10 +2,13 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { RefreshCw } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { DatePicker } from "@/components/ui/date-picker";
+import { cn } from "@/lib/utils";
 
 // Pillar 5 (2026-08-10) — the Sales Lead / Admin live view, companion to
 // TeamTaskProgressPanel on the Tech side. Data from
@@ -95,11 +98,13 @@ function MetricCell({
   );
 }
 
-export function SalesTeamProgressPanel() {
+export function SalesTeamProgressPanel({ canSync }: { canSync: boolean }) {
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [data, setData] = useState<SalesProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
+  const [syncNotice, setSyncNotice] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -117,13 +122,53 @@ export function SalesTeamProgressPanel() {
     load();
   }, [load]);
 
+  // Pulls the CRM's activity feed right now instead of waiting for the hourly
+  // job, then reloads this panel off the freshly-synced numbers.
+  async function syncNow() {
+    setSyncing(true);
+    setSyncNotice(null);
+    setError(null);
+    try {
+      const result = await getJson(
+        await fetch("/api/v1/sales/crm-sync", { method: "POST" }),
+      );
+      if (result.skipped === "not-configured") {
+        setSyncNotice("CRM is not configured on the server — nothing to sync.");
+      } else {
+        setSyncNotice(
+          `Synced ${result.rows} rows (${result.matched} matched, ${result.unmatched} unmatched).`,
+        );
+      }
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to sync CRM activity.");
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   const t = data?.totals;
 
   return (
     <Card>
       <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 space-y-0">
         <CardTitle>Sales team progress</CardTitle>
-        <DatePicker value={date} onChange={(v) => v && setDate(v)} className="h-9 w-auto" />
+        <div className="flex items-center gap-2">
+          <DatePicker value={date} onChange={(v) => v && setDate(v)} className="h-9 w-auto" />
+          {canSync && (
+            <Button
+              size="icon"
+              variant="ghost"
+              className="size-9"
+              onClick={syncNow}
+              disabled={syncing}
+              aria-label="Sync CRM activity now"
+              title="Fetch the latest CRM activity now"
+            >
+              <RefreshCw className={cn("size-4", syncing && "animate-spin")} />
+            </Button>
+          )}
+        </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         {error && (
@@ -131,6 +176,7 @@ export function SalesTeamProgressPanel() {
             {error}
           </p>
         )}
+        {syncNotice && <p className="text-sm text-muted-foreground">{syncNotice}</p>}
 
         {t && t.reps > 0 && (
           <div className="flex flex-wrap gap-4 rounded-lg border bg-muted/40 p-3 text-sm">

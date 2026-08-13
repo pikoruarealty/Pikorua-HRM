@@ -5,7 +5,7 @@ import { todayDateOnly, isImplausibleDuration } from "@/lib/attendance/time";
 import { findOpenSession, summariseSessions } from "@/lib/attendance/sessions";
 import { buildEodSummary, type EodSummary } from "@/lib/eod/summary";
 import { pushNotification } from "@/lib/notifications/push";
-import { Role } from "@prisma/client";
+import { Role } from "@/lib/rbac";
 import { z } from "zod";
 
 // Track A. POST /api/v1/attendance/clock-out — server-timestamped. Computes

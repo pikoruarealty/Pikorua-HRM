@@ -8,6 +8,7 @@ import {
   scoreEmployee,
 } from "@/lib/performance/monthly-score";
 import { getPerformanceConfig } from "@/lib/performance/config";
+import { isMetricDepartment } from "@/lib/departments/type";
 
 const logger = createLogger("recognition-cron");
 
@@ -112,9 +113,8 @@ export async function computeAndReplace(
     if (monthlyInputs) {
       const employeeIds = dept.employees.map((e) => e.id);
       const best = departmentBest(employeeIds, monthlyInputs);
-      const isMetricDepartment = dept.typeKey !== "tech";
       for (const emp of dept.employees) {
-        const result = scoreEmployee(emp.id, monthlyInputs, best, isMetricDepartment);
+        const result = scoreEmployee(emp.id, monthlyInputs, best, isMetricDepartment(dept.typeKey));
         scored.push({
           employeeId: emp.id,
           score: result.score,
