@@ -8,6 +8,7 @@ import { Progress } from "@/components/ui/progress";
 import { DatePicker } from "@/components/ui/date-picker";
 import { EmployeeAvatar } from "@/components/employees/employee-avatar";
 import { WorkItemStatusBadge } from "@/components/work/status-badge";
+import { formatTime } from "@/lib/format-date";
 
 // Lead/Admin "what is everyone doing right now" live view (companion to the
 // employee-facing planning-screen.tsx EOD card): every scoped employee's
@@ -34,6 +35,7 @@ type TaskProgressRow = {
   completedCount: number;
   inReviewCount: number;
   pointsEarnedToday: number;
+  isMetric: boolean;
   items: TaskProgressItem[];
 };
 
@@ -46,8 +48,7 @@ async function getJson(res: Response) {
 }
 
 function fmtTime(iso: string | null) {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  return formatTime(iso);
 }
 
 export function TeamTaskProgressPanel() {
@@ -119,7 +120,9 @@ export function TeamTaskProgressPanel() {
                       {r.inReviewCount > 0 && ` · ${r.inReviewCount} to review`}
                     </span>
                   </div>
-                  <span className="text-xs text-muted-foreground">+{r.pointsEarnedToday} pts today</span>
+                  {!r.isMetric && (
+                    <span className="text-xs text-muted-foreground">+{r.pointsEarnedToday} pts today</span>
+                  )}
                   {r.items.length > 0 && (
                     <button
                       type="button"

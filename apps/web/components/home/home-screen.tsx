@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   CheckSquare,
   Bell,
@@ -27,11 +28,24 @@ import { Button } from "@/components/ui/button";
 import { apiFetch } from "@/components/_lib/api";
 import { cn } from "@/lib/utils";
 import { AdminProgressPanel } from "@/components/home/admin-progress-panel";
+import { SalesTeamProgressPanel } from "@/components/sales/sales-team-progress-panel";
 import { EmployeeAvatar } from "@/components/employees/employee-avatar";
-import { formatDate } from "@/lib/format-date";
+import { formatDate, formatTime } from "@/lib/format-date";
 import { useAttendanceStatus } from "@/components/_lib/use-attendance-status";
+import { isMetricDepartment } from "@/lib/departments/type";
 
-type Me = { email: string; role: string; employeeId: string | null };
+type Me = {
+  email: string;
+  role: string;
+  employee: {
+    id: string;
+    fullName: string;
+    departmentId: string | null;
+    teamId: string | null;
+    role: string;
+    department: { typeKey: string } | null;
+  } | null;
+};
 type Notification = { id: string; readAt: string | null };
 type TodayEvents = {
   birthdays: { employeeId: string; fullName: string }[];
@@ -71,9 +85,15 @@ function humanizeRole(role: string) {
   return role.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-const QUICK_LINKS: { href: string; label: string; desc: string }[] = [
+const QUICK_LINKS: { href: string; label: string; desc: string; metricOnly?: boolean }[] = [
   { href: "/planning", label: "Daily Planning", desc: "Clock in, pick today's tasks, see your EOD." },
   { href: "/my-tasks", label: "My Tasks", desc: "Progress and complete your work items." },
+  {
+    href: "/sales",
+    label: "Sales Activity",
+    desc: "Calls, site visits, bookings & offline-call claims.",
+    metricOnly: true,
+  },
   { href: "/requests", label: "Requests", desc: "Leave & reimbursement requests." },
   { href: "/attendance", label: "Attendance", desc: "Your clock-in/out history." },
   { href: "/recognition", label: "Recognition", desc: "Leaderboard & Employee of the Month." },
@@ -142,12 +162,13 @@ export function HomeScreen({
     // its widget in the loading/zero state (every endpoint self-scopes by role).
     apiFetch<Me>("/auth/me").then((r) => {
       setMe(r.data);
-      if (r.data?.employeeId) {
-        apiFetch<{ balance: number }>(`/employees/${r.data.employeeId}/points`).then((p) => {
+      const employeeId = r.data?.employee?.id;
+      if (employeeId) {
+        apiFetch<{ balance: number }>(`/employees/${employeeId}/points`).then((p) => {
           if (p.data) setPoints(p.data.balance);
         });
         apiFetch<{ id: string }[]>(
-          `/daily-selections/today?employee_id=${r.data.employeeId}`,
+          `/daily-selections/today?employee_id=${employeeId}`,
         ).then((s) => setMySelectionsToday(s.data?.length ?? 0));
       }
     });
@@ -212,6 +233,11 @@ export function HomeScreen({
   }
   const visiblePicks = publishedPicks.filter((p) => !dismissed.includes(p.id));
 
+  // "Recognition points" is the same EmployeePointLedger balance that's
+  // structurally tech-only (see employee-work-panel.tsx) — sales/BD employees
+  // are scored via call/visit/booking attainment instead and would always
+  // read 0 here, which looks like nothing is being tracked.
+  const isMetric = isMetricDepartment(me?.employee?.department?.typeKey);
   const openTasks = tasks?.filter((t) => t.status !== "completed").length ?? null;
   // Biometric clock-in never goes through Planning, so device days can start
   // with zero tasks picked. Nudge once there's an open office session, tasks
@@ -239,7 +265,7 @@ export function HomeScreen({
       <div>
         <h1 className="text-2xl font-bold tracking-tight">
           {greeting()}
-          {me?.email ? `, ${me.email.split("@")[0]}` : ""}
+          {me ? `, ${me.employee?.fullName?.split(" ")[0] ?? me.email.split("@")[0]}` : ""}
         </h1>
         <p className="text-sm text-muted-foreground">
           {me ? `Signed in as ${me.email} · ${humanizeRole(role)}` : "Loading…"}
@@ -329,7 +355,7 @@ export function HomeScreen({
               href="/notifications"
             />
           )}
-          {!isAdmin && (
+          {!isAdmin && !isMetric && (
             <StatTile
               icon={<Award className="size-4" />}
               label="Recognition points"
@@ -373,10 +399,15 @@ export function HomeScreen({
         </section>
       )}
 
-      {/* Lead tiles — team-scoped oversight (no salary/finance data). */}
-      {isLead && !isFinance && (
+      {/* Approval/review oversight — Leads (team-scoped) and Admin/HR (whole
+          company, via the same self-scoping APIs) both need this: it was
+          previously shown only to Leads, so Admin/HR never saw self-logged
+          tasks (or anything else) waiting on their review. */}
+      {(isLead || isFinance) && (
         <section className="flex flex-col gap-3">
-          <h2 className="text-sm font-semibold text-muted-foreground">Your team</h2>
+          <h2 className="text-sm font-semibold text-muted-foreground">
+            {isLead ? "Your team" : "Approvals & reviews"}
+          </h2>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <StatTile
               icon={<Inbox className="size-4" />}
@@ -384,24 +415,28 @@ export function HomeScreen({
               value={pendingApprovals}
               href="/requests"
             />
-            <StatTile
-              icon={<CalendarClock className="size-4" />}
-              label="Planned today"
-              value={plannedToday}
-              href="/planning"
-            />
-            <StatTile
-              icon={<Users className="size-4" />}
-              label="Work units"
-              value={null}
-              hint="Manage projects & tasks"
-              href="/work"
-            />
+            {isLead && !isFinance && (
+              <StatTile
+                icon={<CalendarClock className="size-4" />}
+                label="Planned today"
+                value={plannedToday}
+                href="/planning"
+              />
+            )}
+            {isLead && (
+              <StatTile
+                icon={<Users className="size-4" />}
+                label="Work units"
+                value={null}
+                hint="Manage projects & tasks"
+                href="/work"
+              />
+            )}
             <StatTile
               icon={<ClipboardCheck className="size-4" />}
               label="Tasks awaiting your review"
               value={awaitingReview}
-              hint="Points are credited when you accept"
+              hint="Points are credited when you accept — includes self-logged tasks"
               href="/work/review"
             />
             <StatTile
@@ -415,11 +450,21 @@ export function HomeScreen({
         </section>
       )}
 
-      {/* Task progress — the changing, day-to-day view — comes next for admins. */}
+      {/* Task progress — the changing, day-to-day view — comes next for admins.
+          Two sections: tech (atomic task completion) and sales (calls/site
+          visits/bookings vs. target) — Admin oversees both departments, not
+          just tech, so neither can stand in for the other here. */}
       {isAdmin && (
         <section className="flex flex-col gap-3">
-          <h2 className="text-sm font-semibold text-muted-foreground">Task progress</h2>
+          <h2 className="text-sm font-semibold text-muted-foreground">Tech task progress</h2>
           <AdminProgressPanel />
+        </section>
+      )}
+
+      {isAdmin && (
+        <section className="flex flex-col gap-3">
+          <h2 className="text-sm font-semibold text-muted-foreground">Sales activity</h2>
+          <SalesTeamProgressPanel canSync={isAdmin} />
         </section>
       )}
 
@@ -592,7 +637,12 @@ export function HomeScreen({
       <div>
         <h2 className="mb-3 text-sm font-semibold text-muted-foreground">Quick links</h2>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {QUICK_LINKS.filter((l) => (hasEmployee || l.href === "/recognition") && !(isAdmin && l.href === "/my-tasks")).map((l) => (
+          {QUICK_LINKS.filter(
+            (l) =>
+              (hasEmployee || l.href === "/recognition") &&
+              !(isAdmin && l.href === "/my-tasks") &&
+              (!l.metricOnly || isMetric),
+          ).map((l) => (
             <Link key={l.href} href={l.href}>
               <Card className="h-full hover:-translate-y-0.5 hover:border-primary/50 hover:shadow-md active:translate-y-0">
                 <CardHeader>
@@ -609,20 +659,28 @@ export function HomeScreen({
 }
 
 function fmtClockTime(iso: string | null): string {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  return formatTime(iso);
+}
+
+// Date-string comparisons (not just the time-of-day) are also pinned to IST
+// here — a UTC "today" can already be IST-tomorrow (or still IST-yesterday)
+// near midnight, which would otherwise mislabel a meeting.
+const IST = "Asia/Kolkata";
+
+function istDateKey(d: Date): string {
+  return d.toLocaleDateString("en-CA", { timeZone: IST }); // en-CA -> yyyy-mm-dd, sortable/comparable
 }
 
 function formatMeetingWhen(iso: string): string {
   const d = new Date(iso);
   const today = new Date();
-  const isToday = d.toDateString() === today.toDateString();
-  const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  const isToday = istDateKey(d) === istDateKey(today);
+  const time = formatTime(d);
   if (isToday) return `Today, ${time}`;
   const tomorrow = new Date(today);
   tomorrow.setDate(tomorrow.getDate() + 1);
-  if (d.toDateString() === tomorrow.toDateString()) return `Tomorrow, ${time}`;
-  return `${d.toLocaleDateString(undefined, { day: "2-digit", month: "short" })}, ${time}`;
+  if (istDateKey(d) === istDateKey(tomorrow)) return `Tomorrow, ${time}`;
+  return `${d.toLocaleDateString(undefined, { day: "2-digit", month: "short", timeZone: IST })}, ${time}`;
 }
 
 function greeting() {
@@ -657,11 +715,14 @@ function fmtDuration(ms: number): string {
 function ClockCard() {
   const { attendance: rec, sessions, openSession, clockedIn, clockedOut, loading, refresh } =
     useAttendanceStatus();
+  const router = useRouter();
   const [now, setNow] = useState(() => Date.now());
   const [weeklyOff, setWeeklyOff] = useState<WeeklyOffStatus | null>(null);
   const [claiming, setClaiming] = useState(false);
   const [claimError, setClaimError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [clockBusy, setClockBusy] = useState(false);
+  const [clockError, setClockError] = useState<string | null>(null);
 
   useEffect(() => {
     apiFetch<WeeklyOffStatus>("/attendance/weekly-off").then((r) => {
@@ -692,6 +753,51 @@ function ClockCard() {
     setRefreshing(true);
     await refresh();
     setRefreshing(false);
+  }
+
+  // Both buttons used to just be <Link href="/planning"> — they looked
+  // actionable but did nothing except navigate, which read as broken (owner
+  // report, 2026-08-14). They now actually clock in/out from the card, with a
+  // confirm so a stray click can't silently punch you in/out, and land on
+  // /attendance afterwards (not /planning — there is nothing to plan here for
+  // someone with no active tasks, and the attendance page is where the result
+  // of the action is visible).
+  async function clockInWfh() {
+    if (!window.confirm("Clock in from home? Only confirm if you're not at the office — in-office attendance is captured automatically by the biometric device.")) {
+      return;
+    }
+    setClockError(null);
+    setClockBusy(true);
+    const res = await apiFetch("/attendance/clock-in", { method: "POST", body: JSON.stringify({}) });
+    setClockBusy(false);
+    if (res.error) {
+      // Most likely cause: they have active tasks and clock-in requires
+      // picking at least one first — that flow only exists on /planning, so
+      // point them there instead of leaving them stuck on a bare error.
+      setClockError(`${res.error.message} You may need to pick today's tasks on the Daily Planning page first.`);
+      return;
+    }
+    await refresh();
+    router.push("/attendance");
+  }
+
+  async function clockOutNow() {
+    if (!window.confirm("Clock out and generate your end-of-day summary?")) {
+      return;
+    }
+    setClockError(null);
+    setClockBusy(true);
+    const res = await apiFetch("/attendance/clock-out", {
+      method: "POST",
+      body: JSON.stringify({ endOfDay: true }),
+    });
+    setClockBusy(false);
+    if (res.error) {
+      setClockError(res.error.message);
+      return;
+    }
+    await refresh();
+    router.push("/attendance");
   }
 
   // Worked time = sum of sessions (open one running to `now`). The gaps
@@ -768,9 +874,9 @@ function ClockCard() {
               the biometric device — clock in here only if you&apos;re working from home.
             </p>
             <div className="flex flex-wrap gap-2">
-              <Link href="/planning" className="w-fit">
-                <Button>Clock In WFH</Button>
-              </Link>
+              <Button onClick={clockInWfh} disabled={clockBusy}>
+                {clockBusy ? "Clocking in…" : "Clock In WFH"}
+              </Button>
               {weeklyOff?.canClaimToday && (
                 <Button
                   variant="outline"
@@ -782,6 +888,7 @@ function ClockCard() {
               )}
             </div>
             {claimError && <p className="text-xs text-destructive">{claimError}</p>}
+            {clockError && <p className="text-xs text-destructive">{clockError}</p>}
             {weeklyOff?.usedThisWeek && !weeklyOff.offToday && (
               <p className="text-xs text-muted-foreground">
                 Weekly off already used this week (on {weeklyOff.move?.date ?? "another day"}).
@@ -792,8 +899,8 @@ function ClockCard() {
           <div className="flex flex-col gap-3">
             <p className="text-muted-foreground">
               {clockedOut
-                ? `Clocked out at ${new Date(rec!.clockOutRaw!).toLocaleTimeString()}. You can clock back in any time.`
-                : `Clocked in at ${new Date(openSession!.clockIn).toLocaleTimeString()}${
+                ? `Clocked out at ${formatTime(rec!.clockOutRaw!)}. You can clock back in any time.`
+                : `Clocked in at ${formatTime(openSession!.clockIn)}${
                     openSession!.workLocation === "wfh" ? " (from home)" : ""
                   }.`}
             </p>
@@ -809,9 +916,21 @@ function ClockCard() {
                 </div>
               </div>
             </div>
-            <Link href="/planning" className="w-fit">
-              <Button variant="outline">{clockedIn ? "Clock Out" : "Clock Back In (WFH)"}</Button>
-            </Link>
+            <Button
+              variant="outline"
+              className="w-fit"
+              disabled={clockBusy}
+              onClick={clockedIn ? clockOutNow : clockInWfh}
+            >
+              {clockBusy
+                ? clockedIn
+                  ? "Clocking out…"
+                  : "Clocking in…"
+                : clockedIn
+                  ? "Clock Out"
+                  : "Clock Back In (WFH)"}
+            </Button>
+            {clockError && <p className="text-xs text-destructive">{clockError}</p>}
           </div>
         )}
       </CardContent>

@@ -23,6 +23,8 @@ type QueueItem = {
   dueDate: string | null;
   taskPoints: number | null;
   submittedAt: string | null;
+  selfLogged: boolean;
+  freeText: boolean;
   assignee: { id: string; fullName: string; photoUrl: string | null };
   subUnitId: string;
   subUnitName: string;
@@ -75,10 +77,17 @@ function ReviewRow({ item, onReviewed }: { item: QueueItem; onReviewed: () => vo
           {item.description && (
             <p className="mt-1 whitespace-pre-wrap text-xs text-muted-foreground">{item.description}</p>
           )}
+          {item.freeText && (
+            <p className="mt-1 text-xs text-warning">
+              Free-text self-log — no catalog type. AI estimated {item.taskPoints ?? "—"} pts from
+              the description; accept it as-is or adjust it and say why.
+            </p>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <DueDateBadge dueDate={item.dueDate} />
-          <Badge variant="outline">{item.taskPoints} pts</Badge>
+          {item.selfLogged && <Badge variant="secondary">Self-logged</Badge>}
+          <Badge variant="outline">{item.taskPoints ?? "—"} pts</Badge>
         </div>
       </div>
       <div className="flex flex-wrap items-center gap-2">
@@ -89,6 +98,7 @@ function ReviewRow({ item, onReviewed }: { item: QueueItem; onReviewed: () => vo
           aria-label="Points to credit"
           value={points}
           onChange={(e) => setPoints(e.target.value)}
+          disabled={item.selfLogged && !item.freeText}
         />
         <Textarea
           className="min-w-[16rem] flex-1"
@@ -96,7 +106,7 @@ function ReviewRow({ item, onReviewed }: { item: QueueItem; onReviewed: () => vo
           aria-label="Review note"
           value={note}
           onChange={(e) => setNote(e.target.value)}
-          placeholder="Reason — required to send back, or to credit fewer points."
+          placeholder="Reason — required to send back, or to change the points."
         />
         <Button size="sm" onClick={() => submit("accept")} disabled={busy}>
           Accept &amp; credit

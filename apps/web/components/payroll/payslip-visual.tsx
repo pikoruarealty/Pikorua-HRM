@@ -1,5 +1,6 @@
 import Image from "next/image";
 import { COMPANY_INFO } from "@/lib/payroll/company-info";
+import { formatDate } from "@/lib/format-date";
 
 // On-page visual rendering of a payslip — mirrors the layout of
 // lib/payroll/payslip-pdf.tsx (letterhead → employee info → attendance
@@ -140,9 +141,7 @@ export function PayslipVisual({ payslip }: { payslip: PayslipVisualInput }) {
           <VisualField
             label="Date of joining"
             value={
-              payslip.employee.dateOfJoining
-                ? new Date(payslip.employee.dateOfJoining).toLocaleDateString("en-IN")
-                : "—"
+              payslip.employee.dateOfJoining ? formatDate(payslip.employee.dateOfJoining) : "—"
             }
           />
         </div>
@@ -178,7 +177,7 @@ export function PayslipVisual({ payslip }: { payslip: PayslipVisualInput }) {
 
         <p className="mt-4 border-t border-neutral-200 pt-3 text-center text-[11px] text-neutral-500">
           This is a computer-generated payslip and does not require a signature. Generated on{" "}
-          {new Date(payslip.generatedAt).toLocaleDateString("en-IN")} via Pikorua HRM.
+          {formatDate(payslip.generatedAt)} via Pikorua HRM.
         </p>
       </div>
     </div>

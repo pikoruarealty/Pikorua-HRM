@@ -18,11 +18,14 @@ import { createLogger } from "@/lib/log";
 import { audit } from "@/lib/audit";
 import { dateOnly, isImplausibleDuration } from "@/lib/attendance/time";
 import { sessionBounds, summariseSessions, type SessionSpan } from "@/lib/attendance/sessions";
+import { buildEodSummary } from "@/lib/eod/summary";
+import { notifyEodToManagement } from "@/lib/eod/notify";
+import { pushNotification } from "@/lib/notifications/push";
 
 const logger = createLogger("teamoffice");
 
 export type ReconcileOutcome =
-  | { status: "reconciled"; employeeId: string; sessionsCreated: number }
+  | { status: "reconciled"; employeeId: string; sessionsCreated: number; eodDate: Date | null }
   | { status: "skipped_wfh"; deviceUid: string }
   | { status: "skipped_already_approved"; deviceUid: string }
   | { status: "unmapped"; deviceUid: string }
@@ -92,7 +95,7 @@ export async function reconcileEmployeeDay(deviceUid: string, date: Date): Promi
     return { status: "unmapped", deviceUid };
   }
 
-  return prisma.$transaction(async (tx) => {
+  const outcome = await prisma.$transaction(async (tx): Promise<ReconcileOutcome> => {
     const existing = await tx.attendanceRecord.findUnique({
       where: { employeeId_date: { employeeId: employee.id, date: day } },
     });
@@ -132,6 +135,28 @@ export async function reconcileEmployeeDay(deviceUid: string, date: Date): Promi
         }
       : { flaggedForReview: false, flagReason: null };
 
+    // A biometric punch is already the trusted source (unlike a self-reported
+    // manual/WFH clock-in), so it auto-approves rather than sitting `pending`
+    // until an Admin/HR reviews it one record at a time — otherwise payroll's
+    // approved-only counting (lib/attendance/summary.ts) silently drops
+    // biometric days nobody got around to clicking "approve" on. A day flagged
+    // for review is the exception: its computed totalHours may be wrong from a
+    // punch mispairing, so it stays pending until Admin/HR fixes it via Edit.
+    const approvalFields = implausible
+      ? { approvalStatus: AttendanceApprovalStatus.pending, approvedById: null, approvedAt: null }
+      : { approvalStatus: AttendanceApprovalStatus.approved, approvedById: null, approvedAt: new Date() };
+
+    // Manual clock-out treats "clock out" as EOD (buildEodSummary + notify
+    // management) unless the employee explicitly said they're just stepping
+    // out. A device punch carries no such flag, so the best equivalent signal
+    // is "this reconciliation just closed the day's last open session" — i.e.
+    // the day had no clock-out before this run (existing?.clockOutRaw was
+    // null) and now does (lastOut !== null). A later re-open (another punch
+    // pair arriving) clears clockOutRaw's "closed" state via sessionBounds
+    // returning null again, so a genuine second close later the same day
+    // fires its own EOD, same as clocking out twice manually would.
+    const justClosed = !implausible && !existing?.clockOutRaw && lastOut !== null;
+
     const record = existing
       ? await tx.attendanceRecord.update({
           where: { id: existing.id },
@@ -148,6 +173,7 @@ export async function reconcileEmployeeDay(deviceUid: string, date: Date): Promi
             // looked like a solo reversed punch). If the ambiguity is still
             // there, tonight's cleanup run will re-flag it.
             ...reviewFields,
+            ...approvalFields,
           },
         })
       : await tx.attendanceRecord.create({
@@ -161,6 +187,7 @@ export async function reconcileEmployeeDay(deviceUid: string, date: Date): Promi
             source: AttendanceSource.device_sync,
             workLocation: WorkLocation.office,
             ...(implausible ? reviewFields : {}),
+            ...approvalFields,
           },
         });
 
@@ -205,6 +232,42 @@ export async function reconcileEmployeeDay(deviceUid: string, date: Date): Promi
       },
     });
 
-    return { status: "reconciled", employeeId: employee.id, sessionsCreated: spans.length };
+    return {
+      status: "reconciled",
+      employeeId: employee.id,
+      sessionsCreated: spans.length,
+      eodDate: justClosed ? day : null,
+    };
   });
+
+  if (outcome.status === "reconciled" && outcome.eodDate) {
+    await notifyBiometricEod(outcome.employeeId, outcome.eodDate).catch((err) => {
+      logger.error("biometric EOD notification failed", {
+        employeeId: outcome.employeeId,
+        date: outcome.eodDate,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }
+
+  return outcome;
+}
+
+/** Fires the same EOD wrap-up POST /attendance/clock-out sends, for a day
+ *  reconcileEmployeeDay just found freshly closed via biometric punch. Runs
+ *  outside the reconciliation transaction and is best-effort — a notification
+ *  hiccup must never roll back or retry the attendance write it's reporting on. */
+async function notifyBiometricEod(employeeId: string, date: Date): Promise<void> {
+  const eod = await buildEodSummary(employeeId, date);
+  const user = await prisma.user.findUnique({ where: { employeeId } });
+  if (user) {
+    await pushNotification(
+      user.id,
+      "eod_summary",
+      `EOD: completed ${eod.completedCount}/${eod.plannedCount} planned task(s)` +
+        (eod.inReviewCount > 0 ? `, ${eod.inReviewCount} awaiting review` : "") +
+        (eod.pointsEarnedToday > 0 ? `, +${eod.pointsEarnedToday} pts today.` : "."),
+    ).catch(() => {});
+  }
+  await notifyEodToManagement(employeeId, user?.id, eod).catch(() => {});
 }

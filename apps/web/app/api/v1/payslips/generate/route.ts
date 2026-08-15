@@ -5,7 +5,6 @@ import { FINANCE_ROLES } from "@/lib/rbac";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { audit, clientIp } from "@/lib/audit";
 import { computePayslipPreview } from "@/lib/payroll/payslip-preview";
-import { pushNotification } from "@/lib/notifications/push";
 
 // Track A. POST /api/v1/payslips/generate — Admin/HR only. The money math +
 // cross-track calls live in lib/payroll/payslip-preview.ts (shared with the
@@ -121,16 +120,11 @@ export async function POST(req: Request) {
     ip: clientIp(req),
   });
 
-  const recipientUser = await prisma.user.findUnique({ where: { employeeId } });
-  if (recipientUser) {
-    const monthLabel = new Date(year, month - 1).toLocaleString("en-US", { month: "long" });
-    await pushNotification(
-      recipientUser.id,
-      "payslip_generated",
-      `Your payslip for ${monthLabel} ${year} is ready.`,
-      "Payslip generated",
-    ).catch(() => {});
-  }
+  // No employee notification here — a freshly generated payslip is still a
+  // draft Admin/HR can recompute/delete before it's right; notifying at this
+  // point would tell the employee "your payslip is ready" for a number that
+  // might still change. The notification fires on finalize instead, once the
+  // payslip is read-only and actually final.
 
   return ok({ ...payslip, notes: preview.notes }, 201);
 }

@@ -42,6 +42,8 @@ export async function GET() {
       dueDate: wi.dueDate,
       taskPoints: wi.taskPoints,
       submittedAt: wi.submittedAt,
+      selfLogged: wi.selfLogged,
+      freeText: wi.selfLogged && !wi.adhocTypeId,
       assignee: {
         id: wi.assignee.id,
         fullName: wi.assignee.fullName,

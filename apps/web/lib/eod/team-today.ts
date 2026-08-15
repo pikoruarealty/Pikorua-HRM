@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db/prisma";
 import { WorkItemStatus } from "@prisma/client";
 import type { EodItem } from "@/lib/eod/summary";
+import { isMetricDepartment } from "@/lib/departments/type";
 
 // Batched (3-query, not N+1) equivalent of buildEodSummary for many employees
 // at once — backs GET /attendance/task-progress, the Lead/Admin "what is
@@ -18,6 +19,7 @@ export type TeamTodayRow = {
   /** Planned tasks handed in but not yet accepted by a Lead (Pillar 2). */
   inReviewCount: number;
   pointsEarnedToday: number;
+  isMetric: boolean;
   items: EodItem[];
 };
 
@@ -32,10 +34,10 @@ export async function buildTeamTodaySummary(
   const dayEnd = new Date(dayStart);
   dayEnd.setUTCDate(dayEnd.getUTCDate() + 1);
 
-  const [employees, records, selections, ledgerToday] = await Promise.all([
+  const [employees, records, selections, ledgerToday, selfLoggedToday] = await Promise.all([
     prisma.employee.findMany({
       where: { id: { in: employeeIds } },
-      select: { id: true, fullName: true, photoUrl: true },
+      select: { id: true, fullName: true, photoUrl: true, department: { select: { typeKey: true } } },
       orderBy: { fullName: "asc" },
     }),
     prisma.attendanceRecord.findMany({
@@ -49,6 +51,13 @@ export async function buildTeamTodaySummary(
     prisma.employeePointLedger.findMany({
       where: { employeeId: { in: employeeIds }, creditedAt: { gte: dayStart, lt: dayEnd } },
       select: { employeeId: true, workItemId: true, points: true },
+    }),
+    // Self-logged tasks have no DailyTaskSelection row, so without this a Lead
+    // watching this live view has no way to see one exists until it's been
+    // accepted — see the identical fix in buildEodSummary.
+    prisma.workItem.findMany({
+      where: { assignedTo: { in: employeeIds }, selfLogged: true, dueDate: dayStart, deletedAt: null },
+      include: { subUnit: { include: { workUnit: true } } },
     }),
   ]);
 
@@ -82,6 +91,14 @@ export async function buildTeamTodaySummary(
       list.push(w);
       unplannedByEmployee.set(empId, list);
     }
+  }
+
+  const selfLoggedByEmployee = new Map<string, typeof selfLoggedToday>();
+  for (const w of selfLoggedToday) {
+    if (!w.assignedTo) continue;
+    const list = selfLoggedByEmployee.get(w.assignedTo) ?? [];
+    list.push(w);
+    selfLoggedByEmployee.set(w.assignedTo, list);
   }
 
   const recordByEmployee = new Map(records.map((r) => [r.employeeId, r]));
@@ -140,6 +157,24 @@ export async function buildTeamTodaySummary(
         completedAt: w.completedAt,
       });
     }
+    const coveredItemIds = new Set(items.map((i) => i.workItemId));
+    for (const w of selfLoggedByEmployee.get(e.id) ?? []) {
+      if (coveredItemIds.has(w.id)) continue;
+      items.push({
+        workItemId: w.id,
+        title: w.title,
+        mode: w.mode,
+        status: w.status,
+        taskPoints: w.taskPoints ?? null,
+        targetValue: w.targetValue == null ? null : Number(w.targetValue),
+        currentValue: w.currentValue == null ? null : Number(w.currentValue),
+        completedToday: creditedTodayByItem.has(w.id),
+        projectName: w.subUnit.workUnit.name,
+        subUnitName: w.subUnit.name,
+        assignedAt: w.createdAt,
+        completedAt: w.completedAt,
+      });
+    }
 
     const completedCount = items.filter((i) => i.status === WorkItemStatus.completed).length;
     const inReviewCount = items.filter((i) => i.status === WorkItemStatus.in_review).length;
@@ -151,10 +186,13 @@ export async function buildTeamTodaySummary(
       photoUrl: e.photoUrl ? `/api/v1/employees/${e.id}/photo` : null,
       clockIn: record?.clockInRaw ?? null,
       clockOut: record?.clockOutRaw ?? null,
-      plannedCount: empSelections.length,
+      // Selected-at-clock-in tasks plus today's self-logged ones — see the
+      // identical rationale in buildEodSummary.
+      plannedCount: items.length,
       completedCount,
       inReviewCount,
       pointsEarnedToday,
+      isMetric: isMetricDepartment(e.department?.typeKey),
       items,
     };
   });

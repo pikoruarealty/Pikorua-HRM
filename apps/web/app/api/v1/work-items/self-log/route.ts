@@ -5,7 +5,8 @@ import { getSession } from "@/lib/auth";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { audit, clientIp } from "@/lib/audit";
 import { isClockedInNow } from "@/lib/attendance/status";
-import { createSelfLoggedTask } from "@/lib/work/adhoc";
+import { createSelfLoggedTask, createFreeTextSelfLoggedTask, hasOpenFreeTextSelfLog } from "@/lib/work/adhoc";
+import { estimateSelfLoggedTaskPoints, GroqError } from "@/lib/ai/task-generation";
 
 // POST /api/v1/work-items/self-log (2026-08-10) — an employee logs work nobody
 // assigned them. Owner request: "for the tech employees if no tasks assigned,
@@ -19,17 +20,24 @@ import { createSelfLoggedTask } from "@/lib/work/adhoc";
 // GET is the employee's own self-logged list, so the UI can show what is
 // pending review without loading the whole work tree.
 
+// typeKey omitted = free-text mode: "did something that doesn't fit the
+// catalog" (2026-08-14, owner request). There is no priced type to lean on,
+// so the Lead has to actually read what happened before crediting anything —
+// the description is the whole basis for that judgement, hence the higher
+// minimum length than the catalog path's optional one.
 const createSchema = z
   .object({
     // The catalog key, not an id — keys are stable and readable ("bug_fix"),
     // which keeps the client honest and the audit metadata legible.
-    typeKey: z.string().trim().min(1),
+    typeKey: z.string().trim().min(1).optional(),
     title: z.string().trim().min(3).max(200),
-    // Optional, but it is what the Lead reads when answering yes/no, so the UI
-    // asks for it. Empty string means "not given", not an empty description.
     description: z.string().trim().max(2000).optional(),
   })
-  .strict();
+  .strict()
+  .refine((v) => v.typeKey || (v.description && v.description.length >= 20), {
+    message: "description: describe what you did in at least 20 characters when not picking a type.",
+    path: ["description"],
+  });
 
 export async function POST(req: Request) {
   const session = await getSession();
@@ -78,21 +86,56 @@ export async function POST(req: Request) {
     return fail(ErrorCode.VALIDATION, "You must be clocked in to log a task.", 422);
   }
 
-  const type = await prisma.adhocTaskType.findUnique({ where: { key: parsed.data.typeKey } });
-  if (!type || !type.active) {
-    return failFor(ErrorCode.VALIDATION, "typeKey does not match an active ad-hoc task type.");
-  }
+  let created: { id: string } | null;
+  let auditMetadata: { typeKey: string | null; title: string; points?: number; aiEstimated?: boolean };
 
-  const created = await createSelfLoggedTask({
-    employeeId: employee.id,
-    departmentId: employee.departmentId,
-    adhocTypeId: type.id,
-    // Server-side, from the catalog — the client never sends a point value, so
-    // a crafted request cannot inflate its own score.
-    points: type.points,
-    title: parsed.data.title,
-    description: parsed.data.description?.trim() || null,
-  });
+  if (parsed.data.typeKey) {
+    const type = await prisma.adhocTaskType.findUnique({ where: { key: parsed.data.typeKey } });
+    if (!type || !type.active) {
+      return failFor(ErrorCode.VALIDATION, "typeKey does not match an active ad-hoc task type.");
+    }
+    created = await createSelfLoggedTask({
+      employeeId: employee.id,
+      departmentId: employee.departmentId,
+      adhocTypeId: type.id,
+      // Server-side, from the catalog — the client never sends a point value, so
+      // a crafted request cannot inflate its own score.
+      points: type.points,
+      title: parsed.data.title,
+      description: parsed.data.description?.trim() || null,
+    });
+    auditMetadata = { typeKey: type.key, points: type.points, title: parsed.data.title };
+  } else {
+    // Free-text: one open claim at a time (2026-08-14, owner request — see
+    // hasOpenFreeTextSelfLog for why only this path is rate-limited).
+    if (await hasOpenFreeTextSelfLog(employee.id)) {
+      return failFor(
+        ErrorCode.VALIDATION,
+        "You already have a free-text task awaiting completion or review. Finish that one before logging another.",
+      );
+    }
+    const description = parsed.data.description!.trim();
+    let points: number;
+    try {
+      points = await estimateSelfLoggedTaskPoints({ title: parsed.data.title, description });
+    } catch (err) {
+      if (err instanceof GroqError) {
+        return failFor(
+          ErrorCode.VALIDATION,
+          "Could not size this task automatically right now. Try again in a moment.",
+        );
+      }
+      throw err;
+    }
+    created = await createFreeTextSelfLoggedTask({
+      employeeId: employee.id,
+      departmentId: employee.departmentId,
+      title: parsed.data.title,
+      description,
+      points,
+    });
+    auditMetadata = { typeKey: null, title: parsed.data.title, points, aiEstimated: true };
+  }
   if (!created) {
     return failFor(
       ErrorCode.VALIDATION,
@@ -108,7 +151,7 @@ export async function POST(req: Request) {
     actorRole: session.role,
     entityType: "work_item",
     entityId: created.id,
-    metadata: { typeKey: type.key, points: type.points, title: parsed.data.title },
+    metadata: auditMetadata,
     ip: clientIp(req),
   });
 

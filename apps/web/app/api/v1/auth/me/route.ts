@@ -19,6 +19,7 @@ export async function GET() {
           departmentId: true,
           teamId: true,
           role: true,
+          department: { select: { typeKey: true } },
         },
       },
     },

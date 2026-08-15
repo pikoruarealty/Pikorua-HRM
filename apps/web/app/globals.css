@@ -111,24 +111,39 @@ input:-webkit-autofill:focus {
   }
 }
 
-/* Slim, unobtrusive scrollbar (Android-style overlay hairline) — used on the
-   sidebar nav and other internally-scrolling panels instead of the browser's
-   default wide scrollbar. */
+/* Slim, unobtrusive scrollbar (Android-style overlay hairline) everywhere in
+   the app, instead of the browser/OS default wide scrollbar — themed off
+   --muted-foreground so it tracks light/dark mode automatically. */
+@layer base {
+  html {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.35) transparent;
+  }
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--muted-foreground) / 0.35);
+    border-radius: 9999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--muted-foreground) / 0.6);
+  }
+}
+
+/* The sidebar sits on a dark surface even in light mode, so it keeps its own
+   (darker-surface-appropriate) thumb color via .scrollbar-thin instead of
+   the main-content --muted-foreground default above. */
 @layer utilities {
   .scrollbar-thin {
-    scrollbar-width: thin;
     scrollbar-color: hsl(var(--sidebar-muted) / 0.35) transparent;
-  }
-  .scrollbar-thin::-webkit-scrollbar {
-    width: 5px;
-    height: 5px;
-  }
-  .scrollbar-thin::-webkit-scrollbar-track {
-    background: transparent;
   }
   .scrollbar-thin::-webkit-scrollbar-thumb {
     background-color: hsl(var(--sidebar-muted) / 0.35);
-    border-radius: 9999px;
   }
   .scrollbar-thin::-webkit-scrollbar-thumb:hover {
     background-color: hsl(var(--sidebar-muted) / 0.6);

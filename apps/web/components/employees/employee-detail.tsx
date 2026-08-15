@@ -425,6 +425,7 @@ export function EmployeeDetail({
   const teamsInDepartment = teams.filter((t) => t.departmentId === departmentId);
   const employeeTeam = teams.find((t) => t.id === employee.teamId);
   const effectiveOffDay = employee.defaultWeeklyOffDay ?? employeeTeam?.defaultWeeklyOffDay ?? 0;
+  const isMetric = isMetricDepartment(departments.find((d) => d.id === employee.departmentId)?.typeKey);
 
   return (
     <div className="flex flex-col gap-6">
@@ -508,7 +509,7 @@ export function EmployeeDetail({
         </CardContent>
       </Card>
 
-      {employee && isMetricDepartment(departments.find((d) => d.id === employee.departmentId)?.typeKey) && (
+      {employee && isMetric && (
           <Card>
             <CardHeader>
               <CardTitle>Sales targets (override)</CardTitle>
@@ -803,9 +804,9 @@ export function EmployeeDetail({
 
       {canViewAttendance && <EmployeeAttendancePanel employeeId={employeeId} />}
 
-      {canViewAttendance && <EmployeeWorkPanel employeeId={employeeId} />}
+      {canViewAttendance && <EmployeeWorkPanel employeeId={employeeId} isMetric={isMetric} />}
 
-      {canViewAttendance && <EmployeeTaskActivityPanel employeeId={employeeId} />}
+      {canViewAttendance && <EmployeeTaskActivityPanel employeeId={employeeId} isMetric={isMetric} />}
 
       {/* Monthly Lead review (Pillar 3): same audience as the API allows —
           self, the owning Lead, Admin/HR. Read-only here; reviews are written

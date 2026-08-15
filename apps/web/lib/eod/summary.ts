@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db/prisma";
 import { WorkItemMode, WorkItemStatus } from "@prisma/client";
+import { isMetricDepartment } from "@/lib/departments/type";
 
 // Track A ↔ Track B integration (PRD §5.4). Derives an End-of-Day report for
 // an employee on a given date from data that already exists — no new table.
@@ -36,6 +37,10 @@ export type EodSummary = {
   /** Planned tasks handed in but not yet accepted by a Lead (Pillar 2). */
   inReviewCount: number;
   pointsEarnedToday: number;
+  /** Sales/BD employees never credit EmployeePointLedger (metric-mode WorkItems
+   *  score via attainment-%, not points) — callers use this to hide the point
+   *  figure rather than showing a permanently-0 one. */
+  isMetric: boolean;
   items: EodItem[];
 };
 
@@ -53,7 +58,7 @@ export async function buildEodSummary(
   const dayEnd = new Date(dayStart);
   dayEnd.setUTCDate(dayEnd.getUTCDate() + 1);
 
-  const [selections, ledgerToday] = await Promise.all([
+  const [selections, ledgerToday, employee] = await Promise.all([
     prisma.dailyTaskSelection.findMany({
       where: { employeeId, date: dayStart },
       include: { workItem: { include: { subUnit: { include: { workUnit: true } } } } },
@@ -66,7 +71,12 @@ export async function buildEodSummary(
       },
       select: { workItemId: true, points: true },
     }),
+    prisma.employee.findUnique({
+      where: { id: employeeId },
+      select: { department: { select: { typeKey: true } } },
+    }),
   ]);
+  const isMetric = isMetricDepartment(employee?.department?.typeKey);
 
   const creditedTodayByItem = new Map<string, number>();
   for (const row of ledgerToday) {
@@ -125,6 +135,42 @@ export async function buildEodSummary(
     }
   }
 
+  // Self-logged tasks are never picked at clock-in, so they have no
+  // DailyTaskSelection row — without this they'd stay invisible in "today's
+  // plan" all the way through `pending`/`in_review`, only surfacing (via the
+  // unplanned-credited block above) on the day a Lead happens to accept them,
+  // which could be days later. Pull in today's self-logged items by
+  // `dueDate` (self-log always sets it to the day logged) regardless of
+  // status, so the employee's own EOD reflects "I logged and am waiting on
+  // this" the same day.
+  const coveredItemIds = new Set(items.map((i) => i.workItemId));
+  const selfLoggedToday = await prisma.workItem.findMany({
+    where: {
+      assignedTo: employeeId,
+      selfLogged: true,
+      dueDate: dayStart,
+      deletedAt: null,
+      id: { notIn: [...coveredItemIds] },
+    },
+    include: { subUnit: { include: { workUnit: true } } },
+  });
+  for (const w of selfLoggedToday) {
+    items.push({
+      workItemId: w.id,
+      title: w.title,
+      mode: w.mode,
+      status: w.status,
+      taskPoints: w.taskPoints ?? null,
+      targetValue: w.targetValue == null ? null : Number(w.targetValue),
+      currentValue: w.currentValue == null ? null : Number(w.currentValue),
+      completedToday: creditedTodayByItem.has(w.id),
+      projectName: w.subUnit.workUnit.name,
+      subUnitName: w.subUnit.name,
+      assignedAt: w.createdAt,
+      completedAt: w.completedAt,
+    });
+  }
+
   const completedCount = items.filter(
     (i) => i.status === WorkItemStatus.completed,
   ).length;
@@ -142,10 +188,13 @@ export async function buildEodSummary(
 
   return {
     date: dayStart.toISOString().slice(0, 10),
-    plannedCount: selections.length,
+    // Selected-at-clock-in tasks plus today's self-logged ones — both are
+    // "today's work", just chosen a different way.
+    plannedCount: items.length,
     completedCount,
     inReviewCount,
     pointsEarnedToday,
+    isMetric,
     items,
   };
 }

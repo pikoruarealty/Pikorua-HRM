@@ -10,6 +10,9 @@ import { useAttendanceStatus } from "@/components/_lib/use-attendance-status";
 import { DueDateBadge } from "@/components/work/due-date";
 import { WorkItemStatusBadge } from "@/components/work/status-badge";
 import { SelfLogForm } from "@/components/work/self-log-form";
+import { isMetricDepartment } from "@/lib/departments/type";
+
+type Me = { employee: { department: { typeKey: string } | null } | null };
 
 type WorkItem = {
   id: string;
@@ -84,7 +87,11 @@ function WorkItemRow({
           <span className="font-medium">{wi.title}</span>{" "}
           <span className="text-muted-foreground">({wi.mode})</span>
           <div className="text-muted-foreground">
-            {wi.mode === "atomic" ? `${wi.taskPoints} pts` : `${wi.currentValue}/${wi.targetValue}`}
+            {wi.mode === "atomic"
+              ? wi.taskPoints != null
+                ? `${wi.taskPoints} pts`
+                : "points set by lead on review"
+              : `${wi.currentValue}/${wi.targetValue}`}
           </div>
           {wi.description && (
             <p className="mt-1 whitespace-pre-wrap text-xs text-muted-foreground">{wi.description}</p>
@@ -130,6 +137,7 @@ export function MyTasksScreen() {
   const [items, setItems] = useState<WorkItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [isMetric, setIsMetric] = useState(false);
   const { clockedIn, clockedOut, loading: attendanceLoading } = useAttendanceStatus();
   // Progress is logged only while actually clocked in. Clocking out no longer
   // ends the day — they can clock straight back in and carry on.
@@ -143,6 +151,9 @@ export function MyTasksScreen() {
 
   useEffect(() => {
     refresh();
+    apiFetch<Me>("/auth/me").then((res) => {
+      if (res.data) setIsMetric(isMetricDepartment(res.data.employee?.department?.typeKey));
+    });
   }, []);
 
   async function complete(id: string) {
@@ -196,8 +207,21 @@ export function MyTasksScreen() {
       )}
 
       {/* Placed above the list on purpose: the employee this is for is the one
-          looking at an empty Active card and wondering what to do. */}
-      <SelfLogForm disabled={!canModify || attendanceLoading} onLogged={refresh} />
+          looking at an empty Active card and wondering what to do. Sales/BD
+          employees don't get this card — the ad-hoc catalog is tech-only, and
+          their equivalent ("did work outside the dialer") is offline-call
+          claims on the Sales Activity screen. */}
+      {isMetric ? (
+        <p className="rounded border bg-muted/30 p-3 text-sm text-muted-foreground">
+          Did calls, site visits, or bookings outside the system? Log them as an{" "}
+          <Link href="/sales" className="underline">
+            offline-call claim
+          </Link>{" "}
+          for your lead to verify.
+        </p>
+      ) : (
+        <SelfLogForm disabled={!canModify || attendanceLoading} onLogged={refresh} />
+      )}
 
       <Card>
         <CardHeader>

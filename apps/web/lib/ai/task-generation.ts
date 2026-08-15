@@ -190,6 +190,50 @@ export async function generateTaskBreakdown(
   return { subUnits };
 }
 
+const selfLoggedEstimateSchema = z.object({ taskPoints: z.number().positive() });
+
+export type EstimateSelfLoggedPointsInput = {
+  title: string;
+  description: string;
+};
+
+/**
+ * Point-sizing for a free-text self-logged task (2026-08-14, owner request:
+ * "set the points using groq only... understand it in the same way the
+ * current auto generated tasks are given points, and cant wait for lead to
+ * approve everytime"). Same story-point scale and same trust model as
+ * `generateTaskBreakdown`'s taskPoints: the AI proposes a size, and the
+ * existing tiered-review threshold (lib/work/review.ts) — not a blanket
+ * "always review self-logged work" rule — decides whether a Lead has to sign
+ * off before it's credited. A low, conservative estimate for a thin
+ * description is the fairness backstop here, the same way it always was for
+ * assigned work: nobody hand-verifies a 2-point task either.
+ */
+export async function estimateSelfLoggedTaskPoints(
+  input: EstimateSelfLoggedPointsInput,
+): Promise<number> {
+  const system = [
+    `You are a senior engineering/ops lead sizing a task an employee logged themselves — work nobody assigned them.`,
+    `Estimate its effort the same way you would size a planned task: a "taskPoints" integer, story-point style, 1-13 (1 = trivial, a few minutes; 13 = a substantial multi-day effort).`,
+    `Be conservative and skeptical — most ad-hoc work is small (1-5). A vague, generic, or unconvincing description should score low regardless of what it claims; only give a high score when the description names concrete, specific work.`,
+    `Respond with a single JSON object ONLY (no prose, no markdown): { "taskPoints": number }`,
+  ].join("\n\n");
+  const user = [`Title: ${input.title}`, `Description: ${input.description}`].join("\n");
+
+  const raw = await groqChat({ system, user, json: true, temperature: 0.2 });
+  let parsedJson: unknown;
+  try {
+    parsedJson = JSON.parse(raw);
+  } catch {
+    throw new GroqError("Groq returned a non-JSON response.");
+  }
+  const result = selfLoggedEstimateSchema.safeParse(parsedJson);
+  if (!result.success) {
+    throw new GroqError("Groq returned an unusable point estimate.");
+  }
+  return Math.min(13, Math.max(1, Math.round(result.data.taskPoints)));
+}
+
 const MAX_OUTCOME_CHARS = 1500;
 const MAX_EXPLANATION_CHARS = 1200;
 

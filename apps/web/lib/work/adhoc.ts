@@ -222,3 +222,70 @@ export async function createSelfLoggedTask(args: {
   });
   return created;
 }
+
+/**
+ * How many free-text self-logged tasks this employee currently has open
+ * (not yet credited or rejected back to wip-and-abandoned). Caps concurrent
+ * free-text claims at one (2026-08-14, owner request: "make sure the pointing
+ * and metric system is fair... employee cant just steal points by logging
+ * tasks"). Catalog self-logs (`createSelfLoggedTask`) aren't capped here — a
+ * fixed, Admin-priced type can't be gamed by volume the way an unpriced
+ * free-text claim can, and they're already bounded in aggregate by
+ * `performance_config.self_logged_cap_percent`.
+ */
+export async function hasOpenFreeTextSelfLog(employeeId: string): Promise<boolean> {
+  const count = await prisma.workItem.count({
+    where: {
+      assignedTo: employeeId,
+      selfLogged: true,
+      adhocTypeId: null,
+      deletedAt: null,
+      status: { in: [WorkItemStatus.pending, WorkItemStatus.wip, WorkItemStatus.in_review] },
+    },
+  });
+  return count > 0;
+}
+
+/**
+ * Create one *free-text* self-logged task — for work that doesn't fit any
+ * catalog type. Unlike the catalog path (fixed price, Admin-set), this one is
+ * priced by Groq at creation time (see `estimateSelfLoggedTaskPoints`) using
+ * the same story-point scale the AI task-breakdown feature already uses for
+ * assigned work — `points` here is that estimate, computed by the caller so
+ * this function stays a pure DB write. Because it's a real number (not null),
+ * completing the task goes through the ordinary tiered-review threshold
+ * (lib/work/review.ts) exactly like an assigned task: small estimates credit
+ * immediately, larger ones still go to the Lead.
+ */
+export async function createFreeTextSelfLoggedTask(args: {
+  employeeId: string;
+  departmentId: string;
+  title: string;
+  description: string;
+  points: number;
+}): Promise<{ id: string } | null> {
+  const subUnitId = await ensureAdhocContainer(args.departmentId);
+  if (!subUnitId) return null;
+
+  const created = await prisma.workItem.create({
+    data: {
+      subUnitId,
+      assignedTo: args.employeeId,
+      title: args.title,
+      description: args.description,
+      mode: WorkItemMode.atomic,
+      taskPoints: args.points,
+      status: WorkItemStatus.pending,
+      selfLogged: true,
+      adhocTypeId: null,
+      dueDate: new Date(new Date().toISOString().slice(0, 10)),
+    },
+    select: { id: true },
+  });
+  logger.info("free-text self-logged task created", {
+    employeeId: args.employeeId,
+    workItemId: created.id,
+    points: args.points,
+  });
+  return created;
+}

@@ -67,12 +67,23 @@ export function formatQueryDate(d: Date): string {
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}_${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-/** Parse the vendor's response PunchDate format: "dd/MM/yyyy HH:mm:ss". */
+/** Parse the vendor's response PunchDate format: "dd/MM/yyyy HH:mm:ss". The
+ *  device sits in the office in India, so these digits are always IST
+ *  wall-clock — building the Date via `new Date(y, m, d, h, min, s)` (which
+ *  interprets the fields in the SERVER PROCESS's local timezone) only gives
+ *  the right instant if that process happens to be running with TZ set to
+ *  Asia/Kolkata. Nothing in this repo sets TZ, and most hosts default to
+ *  UTC, so that constructor silently shifted every punch by the server's
+ *  UTC-vs-IST offset (2026-08-14: root cause of biometric clock-ins showing
+ *  a frozen/wrong "clocked in" state — the shifted instant lands the record
+ *  under the wrong calendar day relative to the employee's actual IST
+ *  browser). Building an explicit +05:30 ISO string makes the resulting
+ *  instant correct regardless of the server's own timezone. */
 export function parsePunchDate(s: string): Date {
   const m = /^(\d{2})\/(\d{2})\/(\d{4})[ _](\d{2}):(\d{2}):(\d{2})$/.exec(s.trim());
   if (!m) throw new TeamOfficeApiError(`Unrecognised PunchDate format: "${s}"`);
   const [, dd, mm, yyyy, hh, min, ss] = m;
-  return new Date(Number(yyyy), Number(mm) - 1, Number(dd), Number(hh), Number(min), Number(ss));
+  return new Date(`${yyyy}-${mm}-${dd}T${hh}:${min}:${ss}+05:30`);
 }
 
 async function get(path: string, params: Record<string, string>): Promise<unknown> {

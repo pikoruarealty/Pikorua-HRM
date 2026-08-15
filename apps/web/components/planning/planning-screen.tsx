@@ -8,6 +8,7 @@ import { apiFetch } from "@/components/_lib/api";
 import { useAttendanceStatus } from "@/components/_lib/use-attendance-status";
 import { DueDateBadge } from "@/components/work/due-date";
 import { WorkItemStatusBadge, statusLabel } from "@/components/work/status-badge";
+import { formatTime } from "@/lib/format-date";
 
 type WorkItem = { id: string; title: string; status: string; dueDate?: string | null };
 type Selection = { id: string; workItemId: string; workItem: WorkItem };
@@ -24,6 +25,7 @@ type Eod = {
   completedCount: number;
   inReviewCount: number;
   pointsEarnedToday: number;
+  isMetric: boolean;
   items: EodItem[];
 };
 
@@ -194,7 +196,7 @@ export function PlanningScreen({ isAdmin = false }: { isAdmin?: boolean }) {
           {clockedIn && (
             <>
               <p className="text-sm text-muted-foreground">
-                Clocked in at {new Date(openSession!.clockIn).toLocaleTimeString()}
+                Clocked in at {formatTime(openSession!.clockIn)}
                 {sessions.length > 1 ? ` (session ${sessions.length} today)` : ""}. Add more tasks
                 below, step out for a break, or clock out to wrap up the day.
               </p>
@@ -231,7 +233,7 @@ export function PlanningScreen({ isAdmin = false }: { isAdmin?: boolean }) {
 
           {clockedOut && attendance?.clockOutRaw && (
             <p className="text-xs text-muted-foreground">
-              Last clocked out at {new Date(attendance.clockOutRaw).toLocaleTimeString()}
+              Last clocked out at {formatTime(attendance.clockOutRaw)}
               {sessions.length > 1 ? ` · ${sessions.length} sessions today` : ""}.
             </p>
           )}
@@ -270,10 +272,15 @@ export function PlanningScreen({ isAdmin = false }: { isAdmin?: boolean }) {
                   {" "}
                   · awaiting review <strong>{eod.inReviewCount}</strong>
                 </>
-              )}{" "}
-              · earned <strong>{eod.pointsEarnedToday}</strong> pts today
+              )}
+              {!eod.isMetric && (
+                <>
+                  {" "}
+                  · earned <strong>{eod.pointsEarnedToday}</strong> pts today
+                </>
+              )}
             </p>
-            {eod.inReviewCount > 0 && (
+            {!eod.isMetric && eod.inReviewCount > 0 && (
               <p className="text-xs text-muted-foreground">
                 Points for tasks awaiting review are credited once your lead accepts them.
               </p>

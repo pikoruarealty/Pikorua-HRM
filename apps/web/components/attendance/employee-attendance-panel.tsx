@@ -11,7 +11,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { formatDate } from "@/lib/format-date";
+import { formatDate, formatTime } from "@/lib/format-date";
 
 type AttendanceRecord = {
   id: string;
@@ -48,8 +48,7 @@ async function getJson(res: Response) {
 }
 
 function fmtTime(iso: string | null) {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleTimeString(undefined, { timeStyle: "short" });
+  return formatTime(iso);
 }
 
 export function EmployeeAttendancePanel({ employeeId }: { employeeId: string }) {

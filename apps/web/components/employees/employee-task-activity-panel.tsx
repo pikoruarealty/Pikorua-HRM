@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/table";
 import { apiFetch } from "@/components/_lib/api";
 import { formatDate } from "@/lib/format-date";
+import { cn } from "@/lib/utils";
 
 // Task activity history for one employee — which tasks they worked on, which
 // project/sub-unit each belongs to, when assigned, when completed — over a
@@ -57,7 +58,17 @@ const PERIOD_LABELS: Record<Period, string> = {
 
 const fmtDate = formatDate;
 
-export function EmployeeTaskActivityPanel({ employeeId }: { employeeId: string }) {
+// `pointsEarnedInPeriod` (summary + per-task) only ever moves for atomic-mode
+// tasks — sales/BD employees work in metric-mode WorkItems, which never credit
+// EmployeePointLedger (see employee-work-panel.tsx). `isMetric` hides those
+// two figures for them instead of showing a permanent, misleading 0.
+export function EmployeeTaskActivityPanel({
+  employeeId,
+  isMetric,
+}: {
+  employeeId: string;
+  isMetric: boolean;
+}) {
   const [period, setPeriod] = useState<Period>("weekly");
   const [activity, setActivity] = useState<Activity | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -108,7 +119,7 @@ export function EmployeeTaskActivityPanel({ employeeId }: { employeeId: string }
           <p className="text-sm text-muted-foreground">Loading…</p>
         ) : activity ? (
           <>
-            <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <dl className={cn("grid grid-cols-2 gap-3", !isMetric && "sm:grid-cols-4")}>
               <div className="rounded-lg border p-3">
                 <dt className="text-xs text-muted-foreground">Tasks touched</dt>
                 <dd className="text-2xl font-bold tabular-nums">{s!.tasksTouched}</dd>
@@ -117,10 +128,12 @@ export function EmployeeTaskActivityPanel({ employeeId }: { employeeId: string }
                 <dt className="text-xs text-muted-foreground">Completed</dt>
                 <dd className="text-2xl font-bold tabular-nums">{s!.tasksCompletedInPeriod}</dd>
               </div>
-              <div className="rounded-lg border p-3">
-                <dt className="text-xs text-muted-foreground">Points earned</dt>
-                <dd className="text-2xl font-bold tabular-nums">{s!.pointsEarnedInPeriod}</dd>
-              </div>
+              {!isMetric && (
+                <div className="rounded-lg border p-3">
+                  <dt className="text-xs text-muted-foreground">Points earned</dt>
+                  <dd className="text-2xl font-bold tabular-nums">{s!.pointsEarnedInPeriod}</dd>
+                </div>
+              )}
               <div className="rounded-lg border p-3">
                 <dt className="text-xs text-muted-foreground">Active days</dt>
                 <dd className="text-2xl font-bold tabular-nums">{s!.daysActiveInPeriod}</dd>
@@ -138,7 +151,7 @@ export function EmployeeTaskActivityPanel({ employeeId }: { employeeId: string }
                     <TableHead>Project</TableHead>
                     <TableHead>Task</TableHead>
                     <TableHead>Status</TableHead>
-                    <TableHead>Points</TableHead>
+                    {!isMetric && <TableHead>Points</TableHead>}
                     <TableHead>Assigned</TableHead>
                     <TableHead>Completed</TableHead>
                   </TableRow>
@@ -154,7 +167,9 @@ export function EmployeeTaskActivityPanel({ employeeId }: { employeeId: string }
                       <TableCell>
                         <Badge variant="outline">{t.status}</Badge>
                       </TableCell>
-                      <TableCell>{t.pointsEarnedInPeriod > 0 ? `+${t.pointsEarnedInPeriod}` : "—"}</TableCell>
+                      {!isMetric && (
+                        <TableCell>{t.pointsEarnedInPeriod > 0 ? `+${t.pointsEarnedInPeriod}` : "—"}</TableCell>
+                      )}
                       <TableCell className="text-muted-foreground">{fmtDate(t.assignedAt)}</TableCell>
                       <TableCell className="text-muted-foreground">{fmtDate(t.completedAt)}</TableCell>
                     </TableRow>

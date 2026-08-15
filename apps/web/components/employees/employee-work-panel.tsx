@@ -33,7 +33,15 @@ type HistoryRow = {
 // Documents + points + metric growth history for one employee, shown on the
 // employee detail page. Each sub-card degrades gracefully if the viewer's role
 // can't see that data (the underlying route 403s → sub-card shows nothing).
-export function EmployeeWorkPanel({ employeeId }: { employeeId: string }) {
+//
+// "Task points" (EmployeePointLedger) only exists for atomic/self-logged tech
+// tasks — sales/BD employees work exclusively in metric-mode WorkItems, which
+// are scored via call/visit/booking attainment % instead (lib/performance/
+// monthly-score.ts), never through this ledger. Showing the points card to a
+// metric-department employee would always read 0 and look like nothing is
+// being tracked, when the "Metric growth history" card below is the real
+// record — so it's hidden for them rather than shown empty.
+export function EmployeeWorkPanel({ employeeId, isMetric }: { employeeId: string; isMetric: boolean }) {
   const [docs, setDocs] = useState<Doc[]>([]);
   const [points, setPoints] = useState<Points | null>(null);
   const [history, setHistory] = useState<HistoryRow[]>([]);
@@ -126,7 +134,7 @@ export function EmployeeWorkPanel({ employeeId }: { employeeId: string }) {
         </CardContent>
       </Card>
 
-      {points && (
+      {points && !isMetric && (
         <Card>
           <CardHeader>
             <CardTitle>Task points · balance {points.balance}</CardTitle>

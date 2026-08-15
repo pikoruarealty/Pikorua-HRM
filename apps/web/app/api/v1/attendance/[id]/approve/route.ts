@@ -63,6 +63,22 @@ export async function PATCH(
     );
   }
 
+  // An open session (no clock-out yet) means the employee is still actively
+  // clocked in right now — approving here would otherwise fall through to
+  // the default-clock-out fallback below and bake in a fabricated clock-out
+  // hours in the future for a day that hasn't finished (2026-08-14: an
+  // employee approved 10 minutes after WFH clock-in got a clock-out time
+  // synthesized straight from the shift default). Approval has to wait until
+  // the employee actually clocks out.
+  const hasOpenSession = existing.sessions.some((s) => s.clockOut === null);
+  if (hasOpenSession) {
+    return fail(
+      ErrorCode.VALIDATION,
+      "Cannot approve: the employee is still clocked in for this day. Wait until they clock out before approving.",
+      422,
+    );
+  }
+
   const clockOutApproved =
     existing.clockOutApproved ??
     existing.clockOutRaw ??

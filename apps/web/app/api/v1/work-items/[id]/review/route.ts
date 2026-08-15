@@ -64,18 +64,31 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     );
   }
   const { action, points, note } = parsed.data;
-  // Self-logged work (2026-08-10) is deliberately not negotiable at review: the
-  // employee picked a type from the Admin-set catalog and the type's points are
-  // the whole answer. The Lead's question here is "did this happen, yes or no"
-  // — a question a non-technical Lead can answer. Letting them re-price it
-  // would smuggle difficulty-judgement back in through the review screen, which
-  // is exactly what the catalog exists to avoid. Decline it instead.
-  if (workItem.selfLogged && points !== undefined) {
+  // Catalog self-logged work (2026-08-10) is deliberately not negotiable at
+  // review: the employee picked a type from the Admin-set catalog and the
+  // type's points are the whole answer. The Lead's question here is "did this
+  // happen, yes or no" — a question a non-technical Lead can answer. Letting
+  // them re-price it would smuggle difficulty-judgement back in through the
+  // review screen, which is exactly what the catalog exists to avoid.
+  // (The review-queue UI always sends `points`, pre-filled from taskPoints, so
+  // this only rejects an actual deviation — not every accept.)
+  if (
+    workItem.selfLogged &&
+    workItem.adhocTypeId &&
+    points !== undefined &&
+    points !== workItem.taskPoints
+  ) {
     return failFor(
       ErrorCode.VALIDATION,
       "A self-logged task is worth its type's points — accept it or send it back, but don't re-price it.",
     );
   }
+  // Free-text self-logged work (2026-08-14) is priced by Groq at creation
+  // time (see estimateSelfLoggedTaskPoints), same as any other task — it only
+  // reaches this route at all when that estimate is above the review
+  // threshold, and from there it behaves like an ordinary review: accept the
+  // AI's number as-is, or override it with a note like the ceiling check
+  // below already requires for any other task.
   const nominal = workItem.taskPoints ?? 0;
   const awarded = points ?? nominal;
 

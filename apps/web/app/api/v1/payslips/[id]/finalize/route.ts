@@ -4,6 +4,7 @@ import { getSession } from "@/lib/auth";
 import { FINANCE_ROLES } from "@/lib/rbac";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { audit, clientIp } from "@/lib/audit";
+import { pushNotification } from "@/lib/notifications/push";
 
 // Track A. PATCH /api/v1/payslips/:id/finalize — Admin/HR. draft -> finalized.
 // Once finalized, a payslip is read-only (no edit endpoint exists at all —
@@ -46,6 +47,19 @@ export async function PATCH(
     },
     ip: clientIp(_req),
   });
+
+  const recipientUser = await prisma.user.findUnique({ where: { employeeId: existing.employeeId } });
+  if (recipientUser) {
+    const monthLabel = new Date(existing.periodYear, existing.periodMonth - 1).toLocaleString("en-US", {
+      month: "long",
+    });
+    await pushNotification(
+      recipientUser.id,
+      "payslip_generated",
+      `Your payslip for ${monthLabel} ${existing.periodYear} is ready.`,
+      "Payslip finalized",
+    ).catch(() => {});
+  }
 
   return ok(updated);
 }

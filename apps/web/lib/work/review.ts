@@ -57,16 +57,25 @@ export function maxAwardablePoints(nominalPoints: number | null | undefined): nu
 /**
  * The same question for a whole WorkItem rather than a bare number.
  *
- * A **self-logged** task always needs review, whatever it is worth: the tiered
- * threshold exists to spare a Lead from rubber-stamping small *assigned* work,
- * where someone already decided the task was real. Nobody made that decision
- * for a task an employee invented, so the Lead's yes/no is the only check there
- * is — and skipping it for a 1-point item would leave a free points tap open.
+ * A **catalog** self-logged task (picked from the Admin-priced type list)
+ * always needs review, whatever it is worth: the tiered threshold exists to
+ * spare a Lead from rubber-stamping small *assigned* work, where someone
+ * already decided the task was real. Nobody made that decision for a task an
+ * employee invented, so the Lead's yes/no is the only check there is — and
+ * skipping it for a 1-point item would leave a free points tap open.
+ *
+ * A **free-text** self-logged task (2026-08-14, owner request) is priced by
+ * Groq the same way an AI-generated assigned task is, and is meant to behave
+ * the same way at completion too — small estimates credit immediately, only
+ * large ones go to a Lead. The trust moved from "a human picked the price" to
+ * "the AI estimated it, conservatively, from what was written down", so it
+ * gets the ordinary threshold instead of an unconditional review gate.
  */
 export function requiresReviewForItem(item: {
   taskPoints: number | null;
   selfLogged?: boolean | null;
+  adhocTypeId?: string | null;
 }): boolean {
-  if (item.selfLogged) return true;
+  if (item.selfLogged && item.adhocTypeId) return true;
   return requiresReview(item.taskPoints);
 }

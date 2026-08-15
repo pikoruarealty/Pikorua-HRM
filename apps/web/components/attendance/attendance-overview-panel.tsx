@@ -16,6 +16,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { EmployeeAvatar } from "@/components/employees/employee-avatar";
+import { formatTime } from "@/lib/format-date";
 
 // Admin/HR "glance" panel (2026-07-15): whole-company attendance for one day
 // — present / half-day / on-leave / absent / late counts + per-employee rows.
@@ -77,8 +78,7 @@ async function getJson(res: Response) {
 }
 
 function fmtTime(iso: string | null) {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  return formatTime(iso);
 }
 
 export function AttendanceOverviewPanel() {
