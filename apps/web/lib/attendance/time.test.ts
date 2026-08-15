@@ -8,6 +8,7 @@ import {
   isLateWaivedByMakeup,
   isSuspectedReversedPunch,
   isValidHHMM,
+  istMinutesOfDay,
   MAX_PLAUSIBLE_SHIFT_HOURS,
   todayDateOnly,
 } from "./time";
@@ -27,9 +28,14 @@ describe("isValidHHMM", () => {
   });
 });
 
+// Builds an instant at IST wall-clock h:m on 2026-07-15, via an explicit
+// +05:30 offset (like parsePunchDate/istDateAt) — deterministic regardless of
+// the test runner's own timezone, unlike `new Date(y, m, d, h, min)` which
+// bakes in whatever TZ the runner happens to be in.
+const istAt = (h: number, m = 0) => new Date(`2026-07-15T${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:00+05:30`);
+
 describe("isLateArrival", () => {
-  // isLateArrival compares in server-local time — build local-time dates.
-  const at = (h: number, m: number) => new Date(2026, 6, 15, h, m);
+  const at = istAt;
 
   test("after expected start is late", () => {
     expect(isLateArrival(at(9, 1), "09:00")).toBe(true);
@@ -119,7 +125,7 @@ describe("todayDateOnly", () => {
 });
 
 describe("isSuspectedReversedPunch", () => {
-  const at = (h: number, m = 0) => new Date(2026, 6, 15, h, m);
+  const at = istAt;
 
   test("not flagged when it isn't the day's only session", () => {
     expect(isSuspectedReversedPunch(at(18, 0), false, "11:00")).toBe(false);
@@ -143,29 +149,22 @@ describe("isSuspectedReversedPunch", () => {
 
 describe("getDefaultClockOut", () => {
   test("defaults to 19:00 when expected start/end are the 11:00-19:00 company default", () => {
-    const date = new Date(2026, 6, 15, 11, 0);
-    const out = getDefaultClockOut(date, "11:00", "19:00");
-    expect(out.getHours()).toBe(19);
-    expect(out.getMinutes()).toBe(0);
-    expect(out.getDate()).toBe(15);
+    const out = getDefaultClockOut(istAt(11, 0), "11:00", "19:00");
+    expect(istMinutesOfDay(out)).toBe(19 * 60);
   });
 
   test("uses the team's configured expectedEndTime when different (e.g. 09:00 -> 18:00)", () => {
-    const date = new Date(2026, 6, 15, 9, 15);
-    const out = getDefaultClockOut(date, "09:00", "18:00");
-    expect(out.getHours()).toBe(18);
-    expect(out.getMinutes()).toBe(0);
+    const out = getDefaultClockOut(istAt(9, 15), "09:00", "18:00");
+    expect(istMinutesOfDay(out)).toBe(18 * 60);
   });
 
   test("omitted expectedStartTime/expectedEndTime fall back to the 11:00-19:00 company default", () => {
-    const date = new Date(2026, 6, 15, 11, 0);
-    const out = getDefaultClockOut(date);
-    expect(out.getHours()).toBe(19);
-    expect(out.getMinutes()).toBe(0);
+    const out = getDefaultClockOut(istAt(11, 0));
+    expect(istMinutesOfDay(out)).toBe(19 * 60);
   });
 
   test("handles clockIn after standard end time by adding one shift-length (derived, not hardcoded)", () => {
-    const lateNightIn = new Date(2026, 6, 15, 21, 30);
+    const lateNightIn = istAt(21, 30);
     const out = getDefaultClockOut(lateNightIn, "11:00", "19:00");
     expect(out.getTime()).toBeGreaterThan(lateNightIn.getTime());
     // shift length = 19:00 - 11:00 = 8h, not a hardcoded 9h assumption.
@@ -173,20 +172,20 @@ describe("getDefaultClockOut", () => {
   });
 
   test("a shorter configured shift (e.g. 09:00-17:00, 8h) still derives its own length", () => {
-    const lateNightIn = new Date(2026, 6, 15, 22, 0);
+    const lateNightIn = istAt(22, 0);
     const out = getDefaultClockOut(lateNightIn, "09:00", "17:00");
     expect(out.getTime() - lateNightIn.getTime()).toBe(8 * 3600 * 1000);
   });
 
   test("misconfigured end<=start falls back to an 8h default shift length", () => {
-    const lateNightIn = new Date(2026, 6, 15, 22, 0);
+    const lateNightIn = istAt(22, 0);
     const out = getDefaultClockOut(lateNightIn, "11:00", "10:00");
     expect(out.getTime() - lateNightIn.getTime()).toBe(8 * 3600 * 1000);
   });
 });
 
 describe("isLateWaivedByMakeup", () => {
-  const at = (h: number, m = 0) => new Date(2026, 6, 15, h, m);
+  const at = istAt;
 
   test("exact make-up (30 min late in, 30 min late out) is waived", () => {
     // Shift 11:00-19:00; arrives 11:30 (30 min late), leaves 19:30 — exactly compensated.

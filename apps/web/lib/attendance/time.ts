@@ -1,9 +1,55 @@
 // Track A. Small time-math helpers shared by the Teams (expected_start_time
 // validation) and Attendance (hours/half-day/late computation) routes.
 //
-// Assumption: clock timestamps and a team's expected_start_time are compared
-// in server-local time (no multi-timezone support yet) — revisit if the app
-// ever needs to span multiple office timezones.
+// The office and every employee are in India, so a team's "HH:MM"
+// expected_start_time/expected_end_time is always IST wall-clock — but the
+// clock instants they're compared against are absolute (@db.Timestamptz)
+// Dates, and `.getHours()`/`.getMinutes()`/`.setHours()` read/write the
+// SERVER PROCESS's local timezone, not IST. That's harmless on this dev
+// machine (TZ=Asia/Kolkata), which is exactly how the identical bug in
+// parsePunchDate (teamoffice/client.ts) went unnoticed until it hit a server
+// running UTC (2026-08-14/15) — late-arrival, make-up-waiver, reversed-punch,
+// and default-clock-out all did the same server-local read/write here and are
+// equally exposed. Route every wall-clock read through istMinutesOfDay and
+// every wall-clock write through istDateAt so these are correct regardless of
+// the server's own timezone.
+const IST_TZ = "Asia/Kolkata";
+
+const istPartsFormatter = new Intl.DateTimeFormat("en-US", {
+  timeZone: IST_TZ,
+  hour12: false,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
+function istParts(d: Date): { year: number; month: number; day: number; hour: number; minute: number } {
+  const parts = Object.fromEntries(istPartsFormatter.formatToParts(d).map((p) => [p.type, p.value]));
+  // Intl renders midnight as "24" under hour12:false in some engines — normalise to 0.
+  const hour = Number(parts.hour) % 24;
+  return { year: Number(parts.year), month: Number(parts.month), day: Number(parts.day), hour, minute: Number(parts.minute) };
+}
+
+/** This instant's IST wall-clock time, as minutes since IST midnight. */
+export function istMinutesOfDay(d: Date): number {
+  const { hour, minute } = istParts(d);
+  return hour * 60 + minute;
+}
+
+/** The instant that is `minutesOfDay` IST wall-clock time, on the same IST
+ *  calendar day as `base`. Mirrors parsePunchDate's explicit-offset approach
+ *  so the result is correct no matter the server's own timezone. */
+export function istDateAt(base: Date, minutesOfDay: number): Date {
+  const { year, month, day } = istParts(base);
+  const hh = String(Math.floor(minutesOfDay / 60)).padStart(2, "0");
+  const mm = String(minutesOfDay % 60).padStart(2, "0");
+  const yyyy = String(year).padStart(4, "0");
+  const mo = String(month).padStart(2, "0");
+  const dd = String(day).padStart(2, "0");
+  return new Date(`${yyyy}-${mo}-${dd}T${hh}:${mm}:00+05:30`);
+}
 
 export const HHMM_REGEX = /^([01]\d|2[0-3]):[0-5]\d$/;
 
@@ -27,7 +73,7 @@ export function isLateArrival(
   graceMinutes = 0,
 ): boolean {
   if (!expectedStartTime) return false;
-  const arrivalMinutes = clockIn.getHours() * 60 + clockIn.getMinutes();
+  const arrivalMinutes = istMinutesOfDay(clockIn);
   return arrivalMinutes > parseHHMM(expectedStartTime) + graceMinutes;
 }
 
@@ -51,12 +97,12 @@ export function isLateWaivedByMakeup(
 ): boolean {
   if (!clockOut || !expectedStartTime || !expectedEndTime) return false;
   const cutoff = parseHHMM(expectedStartTime) + graceMinutes;
-  const arrivalMinutes = clockIn.getHours() * 60 + clockIn.getMinutes();
+  const arrivalMinutes = istMinutesOfDay(clockIn);
   const lateMinutes = arrivalMinutes - cutoff;
   if (lateMinutes <= 0) return false; // not actually late
 
   const requiredDepartureMinutes = parseHHMM(expectedEndTime) + lateMinutes;
-  const departureMinutes = clockOut.getHours() * 60 + clockOut.getMinutes();
+  const departureMinutes = istMinutesOfDay(clockOut);
   return departureMinutes >= requiredDepartureMinutes;
 }
 
@@ -113,8 +159,7 @@ export function getDefaultClockOut(
   // of a hardcoded 8/9h guess. Guards against a misconfigured end<=start.
   const shiftMinutes = endMinutes > startMinutes ? endMinutes - startMinutes : 8 * 60;
 
-  const defaultOut = new Date(base);
-  defaultOut.setHours(Math.floor(endMinutes / 60), endMinutes % 60, 0, 0);
+  const defaultOut = istDateAt(base, endMinutes);
 
   // If clockIn is on the same day and happened after the default end time,
   // set default clock-out to one shift-length after clockIn.
@@ -161,9 +206,13 @@ const REVERSED_PUNCH_GRACE_MINUTES = 4 * 60;
  * clock-in whose only punch was actually the evening clock-out, misread as
  * an "in" for lack of any other punch to pair against.
  *
- * This can never be certain from timestamps alone, so it is deliberately a
- * heuristic flag for a human to resolve (via PATCH .../edit), not an
- * auto-correction — guessing wrong here would silently fabricate pay.
+ * This can never be certain from timestamps alone — see the EOD cleanup
+ * cron's use of it (owner decision, 2026-08-15): a flagged punch this far
+ * past start is auto-reinterpreted as the day's clock-out with no clock-in,
+ * not left purely for manual review, since in practice a punch this late
+ * with no pair is a missed morning clock-in far more often than a genuine
+ * 15+-hour shift. It still notifies Admin/HR and stays visible via
+ * flaggedForReview so a wrong guess is easy to catch and fix.
  */
 export function isSuspectedReversedPunch(
   clockIn: Date,
@@ -172,7 +221,7 @@ export function isSuspectedReversedPunch(
 ): boolean {
   if (!isOnlySessionOfDay) return false;
   const cutoff = parseHHMM(expectedStartTime ?? "11:00") + REVERSED_PUNCH_GRACE_MINUTES;
-  const clockInMinutes = clockIn.getHours() * 60 + clockIn.getMinutes();
+  const clockInMinutes = istMinutesOfDay(clockIn);
   return clockInMinutes > cutoff;
 }
 
