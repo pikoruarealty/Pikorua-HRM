@@ -52,10 +52,18 @@ describe("cappedSelfLoggedPoints", () => {
 });
 
 describe("requiresReviewForItem", () => {
-  it("always reviews self-logged work, however small", () => {
+  it("always reviews catalog self-logged work, however small", () => {
     // 1 point is far below the threshold, but nobody except the employee has
-    // said this task exists — the Lead's yes/no is the only check there is.
-    expect(requiresReviewForItem({ taskPoints: 1, selfLogged: true })).toBe(true);
+    // said this task exists — a human picked the catalog price, not an
+    // estimate, so the Lead's yes/no is the only check there is.
+    expect(requiresReviewForItem({ taskPoints: 1, selfLogged: true, adhocTypeId: "bug_fix" })).toBe(true);
+  });
+
+  it("leaves free-text self-logged work on the ordinary threshold", () => {
+    // Free-text is AI-priced the same way assigned work is (2026-08-14) —
+    // small estimates credit immediately, only large ones go to a Lead.
+    expect(requiresReviewForItem({ taskPoints: 1, selfLogged: true, adhocTypeId: null })).toBe(false);
+    expect(requiresReviewForItem({ taskPoints: 8, selfLogged: true, adhocTypeId: null })).toBe(true);
   });
 
   it("leaves assigned work on the ordinary threshold", () => {
