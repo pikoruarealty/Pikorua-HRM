@@ -9,7 +9,10 @@
 //   GROQ_MODEL    — optional; defaults to a current Groq-hosted model below.
 
 const GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions";
-const DEFAULT_MODEL = "llama-3.3-70b-versatile";
+// llama-3.3-70b-versatile was decommissioned by Groq 2026-08-16; this is
+// their recommended replacement (openai/gpt-oss-120b — see
+// console.groq.com/docs/deprecations). GROQ_MODEL still overrides this.
+const DEFAULT_MODEL = "openai/gpt-oss-120b";
 const DEFAULT_TIMEOUT_MS = 30_000;
 
 /** Thrown on any Groq call failure (missing key, HTTP error, empty/invalid body). */
