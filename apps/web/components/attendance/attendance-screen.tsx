@@ -226,14 +226,14 @@ function AttendanceTable({
                 <p className="mb-1.5 text-xs font-medium text-muted-foreground">
                   {formatDate(dateKey)}
                 </p>
-                <Table>
+                <Table className="table-fixed">
                   <TableHeader>
                     <TableRow>
-                      {canSeeAll && <TableHead>Employee</TableHead>}
-                      <TableHead>Clock in</TableHead>
-                      <TableHead>Clock out</TableHead>
-                      <TableHead>Hours</TableHead>
-                      <TableHead>Status</TableHead>
+                      {canSeeAll && <TableHead className="w-40">Employee</TableHead>}
+                      <TableHead className="w-44">Clock in</TableHead>
+                      <TableHead className="w-44">Clock out</TableHead>
+                      <TableHead className="w-36">Hours</TableHead>
+                      <TableHead className="w-44">Status</TableHead>
                       {canReview && <TableHead />}
                     </TableRow>
                   </TableHeader>
