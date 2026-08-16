@@ -14,10 +14,13 @@ export async function getEffectivePayrollConfig(
   const periodStart = new Date(Date.UTC(year, month - 1, 1));
   return prisma.payrollConfig.findFirst({
     where: { effectiveFrom: { lte: periodStart } },
-    orderBy: { effectiveFrom: "desc" },
+    // createdAt breaks ties between same-day edits — see lib/leave/config.ts.
+    orderBy: [{ effectiveFrom: "desc" }, { createdAt: "desc" }],
   });
 }
 
 export async function getLatestPayrollConfig(): Promise<PayrollConfig | null> {
-  return prisma.payrollConfig.findFirst({ orderBy: { effectiveFrom: "desc" } });
+  return prisma.payrollConfig.findFirst({
+    orderBy: [{ effectiveFrom: "desc" }, { createdAt: "desc" }],
+  });
 }

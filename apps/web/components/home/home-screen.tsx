@@ -831,12 +831,12 @@ function ClockCard() {
           <Badge variant={ticking ? "default" : "outline"}>
             {loading
               ? "…"
-              : weeklyOff?.offToday
-                ? "weekly off"
-                : clockedOut
-                  ? "clocked out"
-                  : clockedIn
-                    ? "clocked in"
+              : clockedOut
+                ? "clocked out"
+                : clockedIn
+                  ? "clocked in"
+                  : weeklyOff?.offToday
+                    ? "weekly off"
                     : "not clocked in"}
           </Badge>
         </CardTitle>
@@ -854,7 +854,7 @@ function ClockCard() {
       <CardContent className="flex flex-col gap-3 text-sm">
         {loading ? (
           <p className="text-muted-foreground">Loading…</p>
-        ) : weeklyOff?.offToday ? (
+        ) : weeklyOff?.offToday && !clockedIn && !clockedOut ? (
           <>
             <p className="text-muted-foreground">
               {weeklyOff.move

@@ -31,7 +31,8 @@ export type SalesTargetConfigResolved = SalesTargets & { autoAssignDailyCalls: b
 export async function getSalesTargetConfig(asOf: Date = new Date()): Promise<SalesTargetConfigResolved> {
   const row = await prisma.salesTargetConfig.findFirst({
     where: { effectiveFrom: { lte: asOf } },
-    orderBy: { effectiveFrom: "desc" },
+    // createdAt breaks ties between same-day edits — see lib/leave/config.ts.
+    orderBy: [{ effectiveFrom: "desc" }, { createdAt: "desc" }],
   });
   if (!row) return { ...FALLBACK_TARGETS, autoAssignDailyCalls: true };
   return {

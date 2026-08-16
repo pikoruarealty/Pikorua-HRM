@@ -108,7 +108,14 @@ function AttendanceTable({
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<"" | "pending" | "approved">("pending");
+  // Defaults to "pending" for reviewers only (Admin/HR/Lead land on the queue
+  // that needs their action). An employee viewing their own history has no
+  // filter UI at all, so this must stay "" for them — it used to default to
+  // "pending" unconditionally, which silently hid every approved day from a
+  // plain employee's own "My attendance" table (2026-08-16 bug report: showed
+  // "No attendance records" despite days existing, because most of an
+  // employee's own records are already approved).
+  const [statusFilter, setStatusFilter] = useState<"" | "pending" | "approved">(canReview ? "pending" : "");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [removingId, setRemovingId] = useState<string | null>(null);
@@ -118,7 +125,7 @@ function AttendanceTable({
     setLoading(true);
     setPage(0);
     try {
-      const qs = statusFilter ? `?approval_status=${statusFilter}` : "";
+      const qs = canReview && statusFilter ? `?approval_status=${statusFilter}` : "";
       const data = await getJson(await fetch(`/api/v1/attendance${qs}`));
       setRecords(data);
     } catch (e) {

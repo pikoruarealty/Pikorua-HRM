@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { DatePicker } from "@/components/ui/date-picker";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatDate } from "@/lib/format-date";
 
@@ -287,11 +288,7 @@ function PerformanceConfigCard({ canEdit }: { canEdit: boolean }) {
         {canEdit && (
           <form onSubmit={onSubmit} className="flex flex-wrap items-end gap-4 border-t pt-4">
             <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={scoringEnabled}
-                onChange={(e) => setScoringEnabled(e.target.checked)}
-              />
+              <Switch checked={scoringEnabled} onCheckedChange={setScoringEnabled} />
               Publish monthly composite scores
             </label>
             <div className="flex flex-col gap-2">

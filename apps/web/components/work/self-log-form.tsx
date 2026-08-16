@@ -28,9 +28,7 @@ type AdhocType = { id: string; key: string; label: string; points: number };
 // the description at logging time, the same way it sizes AI-generated
 // assigned tasks, so the description has to carry enough detail for a good
 // estimate. Small estimates auto-credit on completion; larger ones still go
-// to the lead, same tiered threshold as any other task. Only one free-text
-// task can be open at a time (server-enforced) so this can't be used to flood
-// the review queue with vague claims.
+// to the lead, same tiered threshold as any other task.
 const FREE_TEXT_MIN_DESCRIPTION = 20;
 
 export function SelfLogForm({ disabled, onLogged }: { disabled: boolean; onLogged: () => void }) {

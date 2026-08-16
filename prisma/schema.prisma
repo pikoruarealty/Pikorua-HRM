@@ -622,6 +622,13 @@ model SalesTargetConfig {
   // task at clock-in — it is the same task every day.
   autoAssignDailyCalls   Boolean  @default(true) @map("auto_assign_daily_calls")
   effectiveFrom          DateTime @map("effective_from") @db.Date
+  // Tiebreaker for two edits sharing one effective_from date (the form
+  // defaults to today, so a same-day re-edit is the common case, not an
+  // edge case). Without this, "latest wins" resolution
+  // (`orderBy: effectiveFrom desc`) had no secondary key and could return
+  // either row (2026-08-16 bug — same defect fixed across all four
+  // versioned config tables at once, see PerformanceConfig).
+  createdAt              DateTime @default(now()) @map("created_at")
 
   @@map("sales_target_config")
 }
@@ -640,6 +647,11 @@ model PerformanceConfig {
   // becoming the cheapest route to a high output score.
   selfLoggedCapPercent Int      @default(30) @map("self_logged_cap_percent")
   effectiveFrom        DateTime @map("effective_from") @db.Date
+  // Tiebreaker for same-day edits — see SalesTargetConfig.createdAt. This is
+  // the exact bug reported 2026-08-16: toggling scoring off and saving again
+  // same-day (effective_from unchanged) could still resolve to the older,
+  // enabled row.
+  createdAt            DateTime @default(now()) @map("created_at")
 
   @@map("performance_config")
 }
@@ -833,6 +845,8 @@ model PayrollConfig {
   // so past payslips reproduce the grace that was in force.
   lateGraceMinutes     Int      @default(0) @map("late_grace_minutes")
   effectiveFrom        DateTime @map("effective_from") @db.Date
+  // Tiebreaker for same-day edits — see SalesTargetConfig.createdAt.
+  createdAt            DateTime @default(now()) @map("created_at")
 
   @@map("payroll_config")
 }
@@ -850,6 +864,8 @@ model LeaveConfig {
   internPaidLeavesPerMonth   Int      @default(0) @map("intern_paid_leaves_per_month")
   internPaidLeavesPerYear    Int      @default(0) @map("intern_paid_leaves_per_year")
   effectiveFrom              DateTime @map("effective_from") @db.Date
+  // Tiebreaker for same-day edits — see SalesTargetConfig.createdAt.
+  createdAt                  DateTime @default(now()) @map("created_at")
 
   @@map("leave_config")
 }

@@ -288,8 +288,14 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 }
 
 // DELETE /api/v1/work-items/:id — soft delete, management only (not the
-// assignee). Leaf level — no cascade. The points ledger keeps its row
-// untouched for audit even after the WorkItem itself is soft-deleted.
+// assignee), EXCEPT for a self-logged task the assignee themselves logged
+// that is still `pending` (2026-08-16, owner request) — they claimed it
+// unprompted and it hasn't gone to their lead for review yet, so it's still
+// theirs to retract. Once it moves to `in_review`/`completed` it has entered
+// the review workflow and only management can remove it, same as any other
+// task. Assigned (non-self-logged) work stays management-only regardless of
+// status. Leaf level — no cascade. The points ledger keeps its row untouched
+// for audit even after the WorkItem itself is soft-deleted.
 export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
   const session = await getSession();
   if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
@@ -302,7 +308,11 @@ export async function DELETE(_req: Request, { params }: { params: { id: string }
 
   const role = session.role;
   const isProjectLead = session.employeeId === workItem.subUnit.workUnit.projectLeadId;
-  if (!isFinanceRole(role) && !isProjectLead) {
+  const isOwnPendingSelfLog =
+    session.employeeId === workItem.assignedTo &&
+    workItem.selfLogged &&
+    workItem.status === WorkItemStatus.pending;
+  if (!isFinanceRole(role) && !isProjectLead && !isOwnPendingSelfLog) {
     return failFor(ErrorCode.FORBIDDEN);
   }
 

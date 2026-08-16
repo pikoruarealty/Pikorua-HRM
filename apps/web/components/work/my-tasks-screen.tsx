@@ -25,6 +25,7 @@ type WorkItem = {
   targetValue?: string | null;
   currentValue?: string | null;
   reviewNote?: string | null;
+  selfLogged?: boolean;
 };
 
 function ExplainBlock({ workItemId }: { workItemId: string }) {
@@ -69,6 +70,7 @@ function WorkItemRow({
   wi,
   onComplete,
   onUpdateProgress,
+  onDelete,
   draft,
   onDraftChange,
   disabled,
@@ -76,6 +78,7 @@ function WorkItemRow({
   wi: WorkItem;
   onComplete: (id: string) => void;
   onUpdateProgress: (id: string) => void;
+  onDelete: (id: string) => void;
   draft: string;
   onDraftChange: (v: string) => void;
   disabled: boolean;
@@ -126,6 +129,20 @@ function WorkItemRow({
                 </Button>
               </>
             ))}
+          {/* Self-retract: only a task the employee logged themselves, and only
+              before it's gone to their lead for review — once it's submitted
+              it's out of their hands, same as any other work item. */}
+          {wi.selfLogged && wi.status === "pending" && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="text-destructive"
+              onClick={() => onDelete(wi.id)}
+              disabled={disabled}
+            >
+              Delete
+            </Button>
+          )}
         </div>
       </div>
       <ExplainBlock workItemId={wi.id} />
@@ -169,6 +186,13 @@ export function MyTasksScreen() {
       method: "PATCH",
       body: JSON.stringify({ currentValue: Number(drafts[id]) }),
     });
+    if (res.error) setError(`${res.error.code}: ${res.error.message}`);
+    refresh();
+  }
+
+  async function deleteItem(id: string) {
+    setError(null);
+    const res = await apiFetch(`/work-items/${id}`, { method: "DELETE" });
     if (res.error) setError(`${res.error.code}: ${res.error.message}`);
     refresh();
   }
@@ -235,6 +259,7 @@ export function MyTasksScreen() {
               wi={wi}
               onComplete={complete}
               onUpdateProgress={updateProgress}
+              onDelete={deleteItem}
               draft={drafts[wi.id] ?? ""}
               onDraftChange={(v) => setDrafts((d) => ({ ...d, [wi.id]: v }))}
               disabled={!canModify || attendanceLoading}

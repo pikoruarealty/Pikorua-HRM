@@ -12,10 +12,16 @@ export async function getEffectiveLeaveConfig(month: number, year: number): Prom
   const periodStart = new Date(Date.UTC(year, month - 1, 1));
   return prisma.leaveConfig.findFirst({
     where: { effectiveFrom: { lte: periodStart } },
-    orderBy: { effectiveFrom: "desc" },
+    // createdAt breaks ties between same-day edits — effectiveFrom alone is
+    // not unique (the edit form defaults to today), so without it "most
+    // recent" could resolve to whichever same-day row Postgres happened to
+    // scan first (2026-08-16 bug, fixed across all versioned config tables).
+    orderBy: [{ effectiveFrom: "desc" }, { createdAt: "desc" }],
   });
 }
 
 export async function getLatestLeaveConfig(): Promise<LeaveConfig | null> {
-  return prisma.leaveConfig.findFirst({ orderBy: { effectiveFrom: "desc" } });
+  return prisma.leaveConfig.findFirst({
+    orderBy: [{ effectiveFrom: "desc" }, { createdAt: "desc" }],
+  });
 }

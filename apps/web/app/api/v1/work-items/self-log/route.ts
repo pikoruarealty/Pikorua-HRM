@@ -5,7 +5,7 @@ import { getSession } from "@/lib/auth";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { audit, clientIp } from "@/lib/audit";
 import { isClockedInNow } from "@/lib/attendance/status";
-import { createSelfLoggedTask, createFreeTextSelfLoggedTask, hasOpenFreeTextSelfLog } from "@/lib/work/adhoc";
+import { createSelfLoggedTask, createFreeTextSelfLoggedTask } from "@/lib/work/adhoc";
 import { estimateSelfLoggedTaskPoints, GroqError } from "@/lib/ai/task-generation";
 
 // POST /api/v1/work-items/self-log (2026-08-10) — an employee logs work nobody
@@ -106,14 +106,11 @@ export async function POST(req: Request) {
     });
     auditMetadata = { typeKey: type.key, points: type.points, title: parsed.data.title };
   } else {
-    // Free-text: one open claim at a time (2026-08-14, owner request — see
-    // hasOpenFreeTextSelfLog for why only this path is rate-limited).
-    if (await hasOpenFreeTextSelfLog(employee.id)) {
-      return failFor(
-        ErrorCode.VALIDATION,
-        "You already have a free-text task awaiting completion or review. Finish that one before logging another.",
-      );
-    }
+    // Free-text: no longer capped at one open claim at a time (2026-08-16,
+    // owner request — the cap blocked a second log the moment the first was
+    // logged, even before it had been submitted for review, which felt like a
+    // bug more than a guardrail). Aggregate self-logged points are still
+    // bounded by performance_config.self_logged_cap_percent.
     const description = parsed.data.description!.trim();
     let points: number;
     try {
