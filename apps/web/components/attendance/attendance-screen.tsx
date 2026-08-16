@@ -268,22 +268,16 @@ function AttendanceTable({
                               )}
                             </TableCell>
                             <TableCell>
-                              {r.totalHours ?? "—"}
-                              {r.isHalfDay && (
-                                <Badge variant="secondary" className="ml-2">Half-day</Badge>
-                              )}
-                              {r.isCompensation && (
-                                <Badge variant="outline" className="ml-2">Compensation</Badge>
-                              )}
-                              {r.lateExempt && (
-                                <Badge
-                                  variant="outline"
-                                  className="ml-2"
-                                  title={r.lateExemptReason ?? undefined}
-                                >
-                                  Late exempt
-                                </Badge>
-                              )}
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span>{r.totalHours ?? "—"}</span>
+                                {r.isHalfDay && <Badge variant="secondary">Half-day</Badge>}
+                                {r.isCompensation && <Badge variant="outline">Compensation</Badge>}
+                                {r.lateExempt && (
+                                  <Badge variant="outline" title={r.lateExemptReason ?? undefined}>
+                                    Late exempt
+                                  </Badge>
+                                )}
+                              </div>
                             </TableCell>
                             <TableCell>
                               <div className="flex items-center gap-1.5">
