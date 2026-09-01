@@ -10,15 +10,16 @@ import { notifyFinanceUsers } from "@/lib/notifications/push";
 import { saveUploadedFile } from "@/lib/storage/local";
 import { RequestType, RequestStatus } from "@prisma/client";
 
-// Who may file their own request, in hierarchy order: Employee -> approved by
-// Lead's superiors (HR/Admin); Lead -> approved by HR/Admin; HR -> approved by
-// Admin (self-approval blocked in approve/reject). Admin has no one above it,
-// so Admin is intentionally not included here (would create an unapprovable
-// pending request). Sourced from the live EMPLOYEE_ROLES/LEAD_ROLES arrays
-// (@/lib/rbac) so a new custom employee/lead-tier role automatically inherits
-// the ability to submit its own leave/reimbursement requests.
+// Owner request, 2026-09-01: no role should ever be forbidden from filing its
+// own request. Previously Admin was excluded ("no one above it to approve"),
+// but an Admin's own pending request can still be actioned by another Admin/HR
+// account (approve/reject already blocks pure self-approval, not all-Admin
+// approval) — so exclusion bought nothing but a confusing 403. Sourced from
+// the live EMPLOYEE_ROLES/LEAD_ROLES arrays (@/lib/rbac) plus HR/Admin, so a
+// new custom role automatically inherits the ability to submit its own
+// leave/reimbursement requests.
 function canSubmitRoles(): readonly string[] {
-  return [...EMPLOYEE_ROLES, ...LEAD_ROLES, Role.hr];
+  return [...EMPLOYEE_ROLES, ...LEAD_ROLES, Role.hr, Role.admin];
 }
 
 // Track B. GET/POST /api/v1/requests — Milestone 1.3 (leave) + 2.4 (reimbursement).

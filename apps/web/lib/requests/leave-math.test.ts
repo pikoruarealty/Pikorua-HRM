@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { countDaysClippedToPeriod, periodBounds } from "./leave-math";
+import { countDaysClippedToPeriod, periodBounds, splitLeaveRangeByOverrides } from "./leave-math";
 
 // Mirrors the live-verified 2.4b cases from progress.md: within-month (3d),
 // a Jul 30 – Aug 2 span → July 2 / Aug 2, non-overlapping month → 0.
@@ -46,5 +46,43 @@ describe("countDaysClippedToPeriod", () => {
 
   test("no overlap returns 0, never negative", () => {
     expect(countDaysClippedToPeriod(d("2026-01-01"), d("2026-01-05"), 7, 2026)).toBe(0);
+  });
+});
+
+describe("splitLeaveRangeByOverrides", () => {
+  test("no overrides: whole range stays a single segment of baseType", () => {
+    const segs = splitLeaveRangeByOverrides(d("2026-07-10"), d("2026-07-14"), "leave_paid", new Map());
+    expect(segs).toHaveLength(1);
+    expect(segs[0].type).toBe("leave_paid");
+    expect(segs[0].dateFrom.toISOString().slice(0, 10)).toBe("2026-07-10");
+    expect(segs[0].dateTo.toISOString().slice(0, 10)).toBe("2026-07-14");
+  });
+
+  test("middle days overridden unpaid splits into paid/unpaid/paid", () => {
+    const overrides = new Map([
+      ["2026-07-12", "leave_unpaid" as const],
+      ["2026-07-13", "leave_unpaid" as const],
+    ]);
+    const segs = splitLeaveRangeByOverrides(d("2026-07-10"), d("2026-07-14"), "leave_paid", overrides);
+    expect(segs.map((s) => [s.dateFrom.toISOString().slice(0, 10), s.dateTo.toISOString().slice(0, 10), s.type])).toEqual([
+      ["2026-07-10", "2026-07-11", "leave_paid"],
+      ["2026-07-12", "2026-07-13", "leave_unpaid"],
+      ["2026-07-14", "2026-07-14", "leave_paid"],
+    ]);
+  });
+
+  test("every day overridden to the same type as baseType collapses to one segment", () => {
+    const overrides = new Map([
+      ["2026-07-10", "leave_paid" as const],
+      ["2026-07-11", "leave_paid" as const],
+    ]);
+    const segs = splitLeaveRangeByOverrides(d("2026-07-10"), d("2026-07-11"), "leave_paid", overrides);
+    expect(segs).toHaveLength(1);
+  });
+
+  test("single-day range with an override produces one overridden segment", () => {
+    const overrides = new Map([["2026-07-10", "leave_unpaid" as const]]);
+    const segs = splitLeaveRangeByOverrides(d("2026-07-10"), d("2026-07-10"), "leave_paid", overrides);
+    expect(segs).toEqual([{ dateFrom: d("2026-07-10"), dateTo: d("2026-07-10"), type: "leave_unpaid" }]);
   });
 });

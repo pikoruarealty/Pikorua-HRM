@@ -4,7 +4,6 @@ import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { todayDateOnly, isImplausibleDuration } from "@/lib/attendance/time";
 import { findOpenSession, summariseSessions } from "@/lib/attendance/sessions";
 import { buildEodSummary } from "@/lib/eod/summary";
-import { notifyEodToManagement } from "@/lib/eod/notify";
 import { pushNotification } from "@/lib/notifications/push";
 import { z } from "zod";
 
@@ -128,11 +127,6 @@ export async function POST(req: Request) {
         (eod.pointsEarnedToday > 0 ? `, +${eod.pointsEarnedToday} pts today.` : "."),
     ).catch(() => {});
   }
-
-  // Management gets the report: all Admin + HR, plus the clocker's team lead —
-  // minus the clocker themselves. (A lead's own team-lead is themselves, so a
-  // lead's EOD reaches only Admin + HR; an employee's reaches Admin + HR + lead.)
-  await notifyEodToManagement(employeeId, session.userId, eod).catch(() => {});
 
   return ok({ record, eod, endOfDay: true });
 }

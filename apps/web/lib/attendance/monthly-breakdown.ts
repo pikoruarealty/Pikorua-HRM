@@ -366,7 +366,14 @@ export async function getMonthlyAttendanceBreakdown(
         approvalStatus: AttendanceApprovalStatus.approved,
         date: { gte: periodStart, lt: periodEnd },
       },
-      select: { date: true, clockInApproved: true, isHalfDay: true, isCompensation: true, totalHours: true },
+      select: {
+        date: true,
+        clockInApproved: true,
+        clockInRaw: true,
+        isHalfDay: true,
+        isCompensation: true,
+        totalHours: true,
+      },
     }),
     prisma.request.findMany({
       where: {
@@ -388,7 +395,12 @@ export async function getMonthlyAttendanceBreakdown(
   const attendanceByDate = new Map<string, DayAttendance>();
   for (const r of records) {
     attendanceByDate.set(dateKey(r.date), {
-      hasClockIn: !!r.clockInApproved,
+      // A device-synced day is never hand-approved (clockInApproved stays
+      // null forever — see lib/integrations/teamoffice/reconcile.ts), so it
+      // was silently landing in "absent" here even though approvalStatus is
+      // already `approved`. Fall back to clockInRaw, same as
+      // attendance/overview's live dashboard read already does.
+      hasClockIn: !!(r.clockInApproved ?? r.clockInRaw),
       isHalfDay: r.isHalfDay,
       isCompensation: r.isCompensation,
       totalHours: r.totalHours === null ? null : Number(r.totalHours),
@@ -420,7 +432,10 @@ export async function getCompensationDaysInRange(
       where: {
         employeeId,
         approvalStatus: AttendanceApprovalStatus.approved,
-        clockInApproved: { not: null },
+        // OR, not just clockInApproved: a device-synced day never sets that
+        // field (see the hasClockIn fallback above) and was being dropped
+        // from compensation-day counting entirely as a result.
+        OR: [{ clockInApproved: { not: null } }, { clockInRaw: { not: null } }],
         date: { gte: start, lte: end },
       },
       select: { date: true, isCompensation: true },
@@ -503,6 +518,7 @@ export async function getMonthlyAttendanceBreakdownForAllEmployees(
         employeeId: true,
         date: true,
         clockInApproved: true,
+        clockInRaw: true,
         isHalfDay: true,
         isCompensation: true,
         totalHours: true,
@@ -547,7 +563,9 @@ export async function getMonthlyAttendanceBreakdownForAllEmployees(
       attendanceByEmployee.set(r.employeeId, m);
     }
     m.set(dateKey(r.date), {
-      hasClockIn: !!r.clockInApproved,
+      // See the single-employee query above: device-synced days never set
+      // clockInApproved, so this must fall back to clockInRaw too.
+      hasClockIn: !!(r.clockInApproved ?? r.clockInRaw),
       isHalfDay: r.isHalfDay,
       isCompensation: r.isCompensation,
       totalHours: r.totalHours === null ? null : Number(r.totalHours),

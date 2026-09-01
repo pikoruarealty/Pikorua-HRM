@@ -91,6 +91,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/payslips", label: "Payslips", icon: ReceiptText },
       { href: "/payroll/config", label: "Payroll Config", icon: Settings2, show: (c) => c.isFinance },
+      { href: "/leave-config", label: "Leave Config", icon: CalendarClock, show: (c) => c.isFinance },
       { href: "/requests", label: "Requests", icon: FileText },
     ],
   },

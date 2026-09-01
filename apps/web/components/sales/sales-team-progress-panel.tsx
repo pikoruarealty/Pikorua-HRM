@@ -28,6 +28,7 @@ type SalesRow = {
   fullName: string;
   teamName: string | null;
   offToday: boolean;
+  restingToday: boolean;
   calls: { crm: number; offline: number; total: number; target: number; pct: number | null };
   siteVisits: { total: number; monthTarget: number; pacedTarget: number | null; pct: number | null };
   bookings: { total: number; monthTarget: number; pacedTarget: number | null; pct: number | null };
@@ -155,7 +156,7 @@ export function SalesTeamProgressPanel({ canSync }: { canSync: boolean }) {
         <CardTitle>Sales team progress</CardTitle>
         <div className="flex items-center gap-2">
           <DatePicker value={date} onChange={(v) => v && setDate(v)} className="h-9 w-auto" />
-          {canSync && (
+          {canSync ? (
             <Button
               size="icon"
               variant="ghost"
@@ -166,6 +167,18 @@ export function SalesTeamProgressPanel({ canSync }: { canSync: boolean }) {
               title="Fetch the latest CRM activity now"
             >
               <RefreshCw className={cn("size-4", syncing && "animate-spin")} />
+            </Button>
+          ) : (
+            <Button
+              size="icon"
+              variant="ghost"
+              className="size-9"
+              onClick={load}
+              disabled={loading}
+              aria-label="Refresh sales activity"
+              title="Refresh sales activity"
+            >
+              <RefreshCw className={cn("size-4", loading && "animate-spin")} />
             </Button>
           )}
         </div>
@@ -231,7 +244,7 @@ export function SalesTeamProgressPanel({ canSync }: { canSync: boolean }) {
                 <MetricCell
                   label="Calls today"
                   value={r.calls.total}
-                  target={r.offToday ? "off" : String(r.calls.target)}
+                  target={r.restingToday ? "off" : String(r.calls.target)}
                   pct={r.calls.pct}
                   hint={
                     r.calls.offline > 0

@@ -54,7 +54,13 @@ export async function getAttendanceSummary(
       lateTrackingUnavailable = true;
       continue;
     }
-    if (!r.clockInApproved || !isLateArrival(r.clockInApproved, expectedStartTime, lateGraceMinutes)) {
+    // A device-synced day auto-approves without ever setting
+    // clockInApproved (see lib/integrations/teamoffice/reconcile.ts) — fall
+    // back to clockInRaw, same as attendance/overview's dashboard read and
+    // monthly-breakdown's hasClockIn, so a biometric-only late arrival isn't
+    // silently skipped from the deduction.
+    const effectiveClockIn = r.clockInApproved ?? r.clockInRaw;
+    if (!effectiveClockIn || !isLateArrival(effectiveClockIn, expectedStartTime, lateGraceMinutes)) {
       continue;
     }
     // Admin/HR's explicit override (e.g. late through no fault of the
@@ -62,9 +68,7 @@ export async function getAttendanceSummary(
     // automatic make-up waiver.
     if (r.lateExempt) continue;
     const effectiveClockOut = r.clockOutApproved ?? r.clockOutRaw;
-    if (
-      isLateWaivedByMakeup(r.clockInApproved, effectiveClockOut, expectedStartTime, expectedEndTime, lateGraceMinutes)
-    ) {
+    if (isLateWaivedByMakeup(effectiveClockIn, effectiveClockOut, expectedStartTime, expectedEndTime, lateGraceMinutes)) {
       continue;
     }
     lateCount += 1;

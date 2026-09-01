@@ -44,3 +44,40 @@ export function countDaysClippedToYear(dateFrom: Date, dateTo: Date, year: numbe
   const days = Math.floor((end.getTime() - start.getTime()) / MS_PER_DAY) + 1;
   return days > 0 ? days : 0;
 }
+
+export type LeaveDayType = "leave_paid" | "leave_unpaid";
+export type LeaveSegment = { dateFrom: Date; dateTo: Date; type: LeaveDayType };
+
+/** Behind partial leave approval (owner request, 2026-09-01): a leave
+ *  request covers [dateFrom, dateTo] as a single `type`, but Admin/HR may
+ *  want to approve some days paid and others unpaid within that same range
+ *  (e.g. an employee only has 2 paid-leave days left of a 5-day request).
+ *  `overrides` maps individual dates (within range) to a different type than
+ *  the request's own `baseType`; everything not listed keeps `baseType`.
+ *  Returns the coalesced run-length segments in date order — a single
+ *  segment covering the whole range when there are no (effective)
+ *  overrides, so the common case needs no special-casing by the caller. */
+export function splitLeaveRangeByOverrides(
+  dateFrom: Date,
+  dateTo: Date,
+  baseType: LeaveDayType,
+  overrides: Map<string, LeaveDayType>,
+): LeaveSegment[] {
+  const segments: LeaveSegment[] = [];
+  const totalDays = Math.floor((dateTo.getTime() - dateFrom.getTime()) / MS_PER_DAY) + 1;
+
+  for (let i = 0; i < totalDays; i++) {
+    const date = new Date(dateFrom.getTime() + i * MS_PER_DAY);
+    const key = date.toISOString().slice(0, 10);
+    const type = overrides.get(key) ?? baseType;
+
+    const last = segments[segments.length - 1];
+    if (last && last.type === type) {
+      last.dateTo = date;
+    } else {
+      segments.push({ dateFrom: date, dateTo: date, type });
+    }
+  }
+
+  return segments;
+}

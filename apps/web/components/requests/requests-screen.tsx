@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DatePicker } from "@/components/ui/date-picker";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { apiFetch } from "@/components/_lib/api";
@@ -57,17 +58,6 @@ type LeaveBalance = {
   year: { allowance: number; used: number; compensated: number; remaining: number };
 };
 
-type LeaveConfig = {
-  id: string;
-  paidLeavesPerMonth: number;
-  paidLeavesPerYear: number;
-  partTimePaidLeavesPerMonth?: number | null;
-  partTimePaidLeavesPerYear?: number | null;
-  internPaidLeavesPerMonth?: number | null;
-  internPaidLeavesPerYear?: number | null;
-  effectiveFrom: string;
-};
-
 function fmtDate(d?: string | null) {
   if (!d) return "";
   return new Date(d).toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" });
@@ -104,18 +94,9 @@ export function RequestsScreen() {
   const [filterStatus, setFilterStatus] = useState("all");
   const [filterEmployee, setFilterEmployee] = useState("all");
 
-  // Leave balance (self) + admin leave-allowance config
+  // Leave balance (self). Admin/HR edit the allowance itself on the
+  // dedicated /leave-config screen, not here.
   const [balance, setBalance] = useState<LeaveBalance | null>(null);
-  const [leaveConfig, setLeaveConfig] = useState<LeaveConfig | null>(null);
-  const [cfgMonth, setCfgMonth] = useState("");
-  const [cfgYear, setCfgYear] = useState("");
-  const [cfgPartTimeMonth, setCfgPartTimeMonth] = useState("");
-  const [cfgPartTimeYear, setCfgPartTimeYear] = useState("");
-  const [cfgInternMonth, setCfgInternMonth] = useState("");
-  const [cfgInternYear, setCfgInternYear] = useState("");
-  const [cfgEffective, setCfgEffective] = useState(() => new Date().toISOString().slice(0, 10));
-  const [cfgSubmitting, setCfgSubmitting] = useState(false);
-  const [cfgError, setCfgError] = useState<string | null>(null);
 
   async function refresh() {
     const res = await apiFetch<RequestRow[]>("/requests");
@@ -136,48 +117,19 @@ export function RequestsScreen() {
             if (b.data) setBalance(b.data);
           });
         }
-        if (finance) {
-          apiFetch<LeaveConfig>("/leave-config").then((c) => {
-            if (c.data) {
-              setLeaveConfig(c.data);
-              setCfgMonth(String(c.data.paidLeavesPerMonth));
-              setCfgYear(String(c.data.paidLeavesPerYear));
-              setCfgPartTimeMonth(String(c.data.partTimePaidLeavesPerMonth ?? c.data.paidLeavesPerMonth));
-              setCfgPartTimeYear(String(c.data.partTimePaidLeavesPerYear ?? c.data.paidLeavesPerYear));
-              setCfgInternMonth(String(c.data.internPaidLeavesPerMonth ?? c.data.paidLeavesPerMonth));
-              setCfgInternYear(String(c.data.internPaidLeavesPerYear ?? c.data.paidLeavesPerYear));
-            }
-          });
-        }
       }
     });
   }, []);
 
-  async function saveLeaveConfig(e: React.FormEvent) {
-    e.preventDefault();
-    setCfgSubmitting(true);
-    setCfgError(null);
-    const res = await apiFetch<LeaveConfig>("/leave-config", {
-      method: "PUT",
-      body: JSON.stringify({
-        paid_leaves_per_month: Number(cfgMonth),
-        paid_leaves_per_year: Number(cfgYear),
-        part_time_paid_leaves_per_month: Number(cfgPartTimeMonth),
-        part_time_paid_leaves_per_year: Number(cfgPartTimeYear),
-        intern_paid_leaves_per_month: Number(cfgInternMonth),
-        intern_paid_leaves_per_year: Number(cfgInternYear),
-        effective_from: cfgEffective,
-      }),
-    });
-    setCfgSubmitting(false);
-    if (res.error) {
-      setCfgError(`${res.error.code}: ${res.error.message}`);
-      return;
-    }
-    if (res.data) setLeaveConfig(res.data);
-  }
-
   const isLeave = type === "leave_paid" || type === "leave_unpaid";
+  // Only offer paid leave once there's actual balance left to spend — before
+  // the balance loads, don't hide it on a false "0 remaining" flash.
+  const hasPaidLeaveBalance = !balance || balance.month.remaining > 0 || balance.year.remaining > 0;
+  useEffect(() => {
+    if (type === "leave_paid" && balance && !hasPaidLeaveBalance) {
+      setType("leave_unpaid");
+    }
+  }, [balance, hasPaidLeaveBalance, type]);
   const canFilterByEmployee = canApprove; // only finance ever sees more than one person's rows
 
   // Distinct employees present in the current result set, for the employee filter.
@@ -232,11 +184,53 @@ export function RequestsScreen() {
     refresh();
   }
 
-  async function decide(id: string, action: "approve" | "reject") {
+  async function decide(id: string, action: "approve" | "reject", body?: Record<string, unknown>) {
     setActionError(null);
-    const res = await apiFetch(`/requests/${id}/${action}`, { method: "PATCH" });
+    const res = await apiFetch(`/requests/${id}/${action}`, {
+      method: "PATCH",
+      body: body ? JSON.stringify(body) : undefined,
+    });
     if (res.error) setActionError(`${res.error.code}: ${res.error.message}`);
     refresh();
+  }
+
+  // Partial leave approval (owner request, 2026-09-01): let Admin/HR flip
+  // individual days of a multi-day leave request to the other paid/unpaid
+  // type before confirming, instead of only all-or-nothing approval.
+  const [splittingId, setSplittingId] = useState<string | null>(null);
+  const [dayTypes, setDayTypes] = useState<Record<string, "leave_paid" | "leave_unpaid">>({});
+
+  function datesInRange(from: string, to: string): string[] {
+    const dates: string[] = [];
+    const start = new Date(`${from.slice(0, 10)}T00:00:00.000Z`);
+    const end = new Date(`${to.slice(0, 10)}T00:00:00.000Z`);
+    for (let d = start; d <= end; d = new Date(d.getTime() + 86400000)) {
+      dates.push(d.toISOString().slice(0, 10));
+    }
+    return dates;
+  }
+
+  function openSplit(r: RequestRow) {
+    if (!r.dateFrom || !r.dateTo) return;
+    const dates = datesInRange(r.dateFrom, r.dateTo);
+    const base = r.type as "leave_paid" | "leave_unpaid";
+    setDayTypes(Object.fromEntries(dates.map((d) => [d, base])));
+    setSplittingId(r.id);
+  }
+
+  function toggleDayType(date: string) {
+    setDayTypes((prev) => ({
+      ...prev,
+      [date]: prev[date] === "leave_paid" ? "leave_unpaid" : "leave_paid",
+    }));
+  }
+
+  async function confirmSplitApprove(r: RequestRow) {
+    const overrides = Object.entries(dayTypes)
+      .filter(([, t]) => t !== r.type)
+      .map(([date, type]) => ({ date, type }));
+    await decide(r.id, "approve", overrides.length > 0 ? { day_overrides: overrides } : undefined);
+    setSplittingId(null);
   }
 
   async function override(id: string, status: "pending" | "approved" | "rejected") {
@@ -293,7 +287,9 @@ export function RequestsScreen() {
     refresh();
   }
 
-  const canSubmit = myUserRole !== "admin"; // Admin has no one above to approve its own request
+  // No role is forbidden from filing its own request (2026-09-01) — Admin's
+  // own pending request can still be actioned by another Admin/HR account.
+  const canSubmit = true;
 
   return (
     <div className="flex flex-col gap-6">
@@ -334,140 +330,13 @@ export function RequestsScreen() {
 
       {canApprove && (
         <Card>
-          <CardHeader>
-            <CardTitle>Paid-leave allowance {isAdmin ? "(admin config)" : ""}</CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-4">
-            {leaveConfig ? (
-              <div className="flex flex-col gap-1 text-sm text-muted-foreground">
-                <p>
-                  <span className="font-medium text-foreground">Full-time:</span> {leaveConfig.paidLeavesPerMonth}{" "}
-                  paid leave(s)/month, {leaveConfig.paidLeavesPerYear} paid leave(s)/year.
-                </p>
-                <p>
-                  <span className="font-medium text-foreground">Part-time:</span>{" "}
-                  {leaveConfig.partTimePaidLeavesPerMonth ?? leaveConfig.paidLeavesPerMonth} paid leave(s)/month,{" "}
-                  {leaveConfig.partTimePaidLeavesPerYear ?? leaveConfig.paidLeavesPerYear} paid leave(s)/year.
-                </p>
-                <p>
-                  <span className="font-medium text-foreground">Intern:</span>{" "}
-                  {leaveConfig.internPaidLeavesPerMonth ?? leaveConfig.paidLeavesPerMonth} paid leave(s)/month,{" "}
-                  {leaveConfig.internPaidLeavesPerYear ?? leaveConfig.paidLeavesPerYear} paid leave(s)/year.
-                </p>
-                <p className="text-xs">Effective {fmtDate(leaveConfig.effectiveFrom)}.</p>
-              </div>
-            ) : (
-              <p className="text-sm text-muted-foreground">No leave allowance configured yet.</p>
-            )}
-            {isAdmin && (
-              <form onSubmit={saveLeaveConfig} className="flex flex-col gap-4 rounded-lg border bg-muted/20 p-4">
-                <div className="grid gap-4 sm:grid-cols-3">
-                  {/* Full-time */}
-                  <div className="flex flex-col gap-2 rounded border bg-background/50 p-3">
-                    <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                      Full-time
-                    </span>
-                    <div className="flex gap-2">
-                      <div className="flex flex-1 flex-col gap-1">
-                        <Label className="text-[11px]">Per Month</Label>
-                        <Input
-                          type="number"
-                          min="0"
-                          max="31"
-                          value={cfgMonth}
-                          onChange={(e) => setCfgMonth(e.target.value)}
-                          required
-                        />
-                      </div>
-                      <div className="flex flex-1 flex-col gap-1">
-                        <Label className="text-[11px]">Per Year</Label>
-                        <Input
-                          type="number"
-                          min="0"
-                          max="366"
-                          value={cfgYear}
-                          onChange={(e) => setCfgYear(e.target.value)}
-                          required
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Part-time */}
-                  <div className="flex flex-col gap-2 rounded border bg-background/50 p-3">
-                    <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                      Part-time
-                    </span>
-                    <div className="flex gap-2">
-                      <div className="flex flex-1 flex-col gap-1">
-                        <Label className="text-[11px]">Per Month</Label>
-                        <Input
-                          type="number"
-                          min="0"
-                          max="31"
-                          value={cfgPartTimeMonth}
-                          onChange={(e) => setCfgPartTimeMonth(e.target.value)}
-                          required
-                        />
-                      </div>
-                      <div className="flex flex-1 flex-col gap-1">
-                        <Label className="text-[11px]">Per Year</Label>
-                        <Input
-                          type="number"
-                          min="0"
-                          max="366"
-                          value={cfgPartTimeYear}
-                          onChange={(e) => setCfgPartTimeYear(e.target.value)}
-                          required
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Intern */}
-                  <div className="flex flex-col gap-2 rounded border bg-background/50 p-3">
-                    <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                      Intern
-                    </span>
-                    <div className="flex gap-2">
-                      <div className="flex flex-1 flex-col gap-1">
-                        <Label className="text-[11px]">Per Month</Label>
-                        <Input
-                          type="number"
-                          min="0"
-                          max="31"
-                          value={cfgInternMonth}
-                          onChange={(e) => setCfgInternMonth(e.target.value)}
-                          required
-                        />
-                      </div>
-                      <div className="flex flex-1 flex-col gap-1">
-                        <Label className="text-[11px]">Per Year</Label>
-                        <Input
-                          type="number"
-                          min="0"
-                          max="366"
-                          value={cfgInternYear}
-                          onChange={(e) => setCfgInternYear(e.target.value)}
-                          required
-                        />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap items-end gap-4">
-                  <div className="flex flex-col gap-1.5">
-                    <Label className="text-xs">Effective from</Label>
-                    <DatePicker value={cfgEffective} onChange={setCfgEffective} className="w-40" />
-                  </div>
-                  <Button type="submit" size="sm" disabled={cfgSubmitting}>
-                    {cfgSubmitting ? "Saving…" : "Save Leave Config"}
-                  </Button>
-                </div>
-                {cfgError && <p className="text-sm text-destructive">{cfgError}</p>}
-              </form>
-            )}
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 py-4">
+            <p className="text-sm text-muted-foreground">
+              The paid-leave allowance (full-time/part-time/intern) is managed on its own screen.
+            </p>
+            <Link href="/leave-config" className={buttonVariants({ size: "sm", variant: "outline" })}>
+              Open leave config
+            </Link>
           </CardContent>
         </Card>
       )}
@@ -486,7 +355,7 @@ export function RequestsScreen() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="leave_paid">Paid leave</SelectItem>
+                    {hasPaidLeaveBalance && <SelectItem value="leave_paid">Paid leave</SelectItem>}
                     <SelectItem value="leave_unpaid">Unpaid leave</SelectItem>
                     <SelectItem value="reimbursement">Reimbursement</SelectItem>
                   </SelectContent>
@@ -683,6 +552,42 @@ export function RequestsScreen() {
                   </div>
                 )}
 
+                {splittingId === r.id && r.dateFrom && r.dateTo && (
+                  <div className="flex flex-col gap-2 rounded-md border bg-muted/30 p-3">
+                    <p className="text-xs text-muted-foreground">
+                      Click a day to toggle it between paid and unpaid before approving. Unpaid days are
+                      deducted from pay; paid days are not.
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {datesInRange(r.dateFrom, r.dateTo).map((date) => {
+                        const dType = dayTypes[date] ?? r.type;
+                        return (
+                          <button
+                            type="button"
+                            key={date}
+                            onClick={() => toggleDayType(date)}
+                            className={`rounded-md border px-2 py-1 text-xs ${
+                              dType === "leave_paid"
+                                ? "border-emerald-600 bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+                                : "border-amber-600 bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
+                            }`}
+                          >
+                            {fmtDate(date)} · {dType === "leave_paid" ? "Paid" : "Unpaid"}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="flex gap-2">
+                      <Button size="sm" onClick={() => confirmSplitApprove(r)}>
+                        Confirm approval
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => setSplittingId(null)}>
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
                 <div className="flex flex-wrap items-center gap-2">
                   {r.type === "reimbursement" && r.hasAttachment && (
                     <a
@@ -705,9 +610,18 @@ export function RequestsScreen() {
                         </Button>
                       </>
                     )}
-                    {r.status === "pending" && canApprove && (
+                    {r.status === "pending" && canApprove && splittingId !== r.id && (
                       <>
-                        <Button size="sm" variant="outline" onClick={() => decide(r.id, "approve")}>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            const isLeaveRow = r.type === "leave_paid" || r.type === "leave_unpaid";
+                            const isMultiDay = r.dateFrom && r.dateTo && r.dateFrom.slice(0, 10) !== r.dateTo.slice(0, 10);
+                            if (isLeaveRow && isMultiDay) openSplit(r);
+                            else decide(r.id, "approve");
+                          }}
+                        >
                           Approve
                         </Button>
                         <Button size="sm" variant="destructive" onClick={() => decide(r.id, "reject")}>

@@ -32,6 +32,10 @@ export type SalesRepProgress = {
   /** True when today is this rep's weekly off — the UI greys the row rather
    *  than showing them as missing their daily target. */
   offToday: boolean;
+  /** True when today is the rep's weekly off AND they have not clocked in.
+   *  Calls are still their daily task once clocked in, so a rep who comes in
+   *  on their off day gets a normal call target/progress, not "off". */
+  restingToday: boolean;
   calls: {
     crm: number;
     offline: number;
@@ -110,8 +114,18 @@ export async function buildSalesTeamProgress(
     };
   }
 
-  const [config, todaySync, monthSync, claims, pending, holidays, moves, breakdowns, unmatched] =
-    await Promise.all([
+  const [
+    config,
+    todaySync,
+    monthSync,
+    claims,
+    pending,
+    holidays,
+    moves,
+    breakdowns,
+    unmatched,
+    clockedInToday,
+  ] = await Promise.all([
       getSalesTargetConfig(date),
       prisma.salesActivitySync.findMany({
         where: { employeeId: { in: repIds }, date },
@@ -148,8 +162,17 @@ export async function buildSalesTeamProgress(
       prisma.salesActivitySync.count({
         where: { employeeId: null, date: { gte: monthStart, lt: monthEnd } },
       }),
+      // Real-time, same-day clock-in check (raw punch, not the approved one
+      // — approval is async and shouldn't gate today's UI). Calls are a
+      // rep's daily task, so clocking in on a weekly off still means a
+      // normal call target, not "off".
+      prisma.attendanceRecord.findMany({
+        where: { employeeId: { in: repIds }, date, clockInRaw: { not: null } },
+        select: { employeeId: true },
+      }),
     ]);
 
+  const clockedInTodaySet = new Set(clockedInToday.map((a) => a.employeeId));
   const holidayDates = new Set(holidays.map((h) => h.date.toISOString().slice(0, 10)));
 
   const movesByEmployee = new Map<string, { weekStart: Date; date: Date }[]>();
@@ -189,11 +212,16 @@ export async function buildSalesTeamProgress(
       movedOffDateByWeek,
     );
 
+    // Calls are the rep's daily task — once clocked in, an off day is a
+    // normal working day for call-target purposes, same as compensationDays
+    // on the attendance/payroll side treats it as worked.
+    const restingToday = offToday && !clockedInTodaySet.has(rep.id);
+
     const crm = crmToday.get(rep.id) ?? 0;
     const offline = offlineToday.get(rep.id) ?? 0;
     const callTotal = crm + offline;
-    // On a rep's day off there is no call target to miss.
-    const callTarget = offToday ? 0 : targets.dailyCallTarget;
+    // Only a rep genuinely resting has no call target to miss.
+    const callTarget = restingToday ? 0 : targets.dailyCallTarget;
 
     const totals = monthTotals.get(rep.id) ?? { siteVisits: 0, bookings: 0 };
     const visitPaced = proRatedTarget(
@@ -212,6 +240,7 @@ export async function buildSalesTeamProgress(
       fullName: rep.fullName,
       teamName: rep.team?.name ?? null,
       offToday,
+      restingToday,
       calls: {
         crm,
         offline,

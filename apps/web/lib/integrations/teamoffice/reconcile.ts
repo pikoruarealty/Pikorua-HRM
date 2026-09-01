@@ -19,7 +19,6 @@ import { audit } from "@/lib/audit";
 import { dateOnly, isImplausibleDuration } from "@/lib/attendance/time";
 import { sessionBounds, summariseSessions, type SessionSpan } from "@/lib/attendance/sessions";
 import { buildEodSummary } from "@/lib/eod/summary";
-import { notifyEodToManagement } from "@/lib/eod/notify";
 import { pushNotification } from "@/lib/notifications/push";
 
 const logger = createLogger("teamoffice");
@@ -269,5 +268,4 @@ async function notifyBiometricEod(employeeId: string, date: Date): Promise<void>
         (eod.pointsEarnedToday > 0 ? `, +${eod.pointsEarnedToday} pts today.` : "."),
     ).catch(() => {});
   }
-  await notifyEodToManagement(employeeId, user?.id, eod).catch(() => {});
 }

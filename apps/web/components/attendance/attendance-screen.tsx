@@ -233,8 +233,8 @@ function AttendanceTable({
                       <TableHead className="w-44">Clock in</TableHead>
                       <TableHead className="w-44">Clock out</TableHead>
                       <TableHead className="w-36">Hours</TableHead>
-                      <TableHead className="w-44">Status</TableHead>
-                      {canReview && <TableHead />}
+                      <TableHead className="w-56">Status</TableHead>
+                      {canReview && <TableHead className="w-56">Actions</TableHead>}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -280,7 +280,7 @@ function AttendanceTable({
                               </div>
                             </TableCell>
                             <TableCell>
-                              <div className="flex items-center gap-1.5">
+                              <div className="flex flex-wrap items-center gap-1.5">
                                 <Badge variant={r.approvalStatus === "approved" ? "default" : "outline"}>
                                   {r.approvalStatus}
                                 </Badge>
@@ -302,7 +302,7 @@ function AttendanceTable({
                             </TableCell>
                             {canReview && (
                               <TableCell>
-                                <div className="flex gap-2">
+                                <div className="flex flex-wrap gap-2">
                                   <Button
                                     variant="outline"
                                     size="sm"
