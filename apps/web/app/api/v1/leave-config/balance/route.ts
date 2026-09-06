@@ -3,6 +3,7 @@ import { getSession } from "@/lib/auth";
 import { FINANCE_ROLES } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { getLeaveBalance } from "@/lib/leave/balance";
+import { getCompensationCreditSummary } from "@/lib/attendance/compensation-credits";
 
 // Owner request, 2026-08-07. GET /api/v1/leave-config/balance?employee_id=&month=&year=
 // — an employee sees their own balance; Admin/HR can query anyone. Defaults
@@ -33,13 +34,10 @@ export async function GET(req: Request) {
   });
   if (!employee) return failFor(ErrorCode.NOT_FOUND, "Employee not found.");
 
-  const balance = await getLeaveBalance(
-    requestedEmployeeId,
-    month,
-    year,
-    employee.dateOfJoining,
-    employee.employmentType,
-  );
+  const [balance, compensationCredits] = await Promise.all([
+    getLeaveBalance(requestedEmployeeId, month, year, employee.dateOfJoining, employee.employmentType),
+    getCompensationCreditSummary(requestedEmployeeId),
+  ]);
   return ok({
     employeeId: employee.id,
     fullName: employee.fullName,
@@ -48,5 +46,6 @@ export async function GET(req: Request) {
     periodMonth: month,
     periodYear: year,
     ...balance,
+    compensationCredits,
   });
 }

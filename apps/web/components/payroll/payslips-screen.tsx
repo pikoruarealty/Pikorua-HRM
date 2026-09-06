@@ -37,7 +37,12 @@ type PayslipPreview = {
   reimbursementTotal: number;
   employeeOfMonthRef: boolean;
   netPay: number;
-  notes: { late_tracking_unavailable?: string; employee_of_month_unavailable?: string };
+  compensationCreditsRedeemed: number;
+  notes: {
+    late_tracking_unavailable?: string;
+    employee_of_month_unavailable?: string;
+    compensation_credits_redeemed?: string;
+  };
 };
 
 type Payslip = {
@@ -414,6 +419,9 @@ function GenerateForm({ onGenerated }: { onGenerated: () => void }) {
                   </dl>
                   {preview.notes.late_tracking_unavailable && (
                     <p className="text-xs text-muted-foreground">{preview.notes.late_tracking_unavailable}</p>
+                  )}
+                  {preview.notes.compensation_credits_redeemed && (
+                    <p className="text-xs text-muted-foreground">{preview.notes.compensation_credits_redeemed}</p>
                   )}
                 </>
               ) : (

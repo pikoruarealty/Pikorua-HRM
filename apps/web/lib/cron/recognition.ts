@@ -52,10 +52,18 @@ function periodEnd(periodType: RecognitionPeriodType, periodStart: Date): Date {
   return new Date(Date.UTC(periodStart.getUTCFullYear(), periodStart.getUTCMonth() + 1, 1));
 }
 
+export type ComputeAndReplaceResult = {
+  rowsWritten: number;
+  // Set only when the period was intentionally left unscored (the monthly
+  // grace-period gate) — lets callers (the recompute API route) tell an
+  // admin WHY nothing happened instead of silently no-op-ing.
+  skippedReason?: string;
+};
+
 export async function computeAndReplace(
   periodType: RecognitionPeriodType,
   periodStart: Date,
-): Promise<number> {
+): Promise<ComputeAndReplaceResult> {
   const end = periodEnd(periodType, periodStart);
 
   // Grace period (2026-08-11): until an Admin flips performance_config
@@ -74,7 +82,11 @@ export async function computeAndReplace(
       logger.info("monthly recognition skipped — scoring is disabled for this period", {
         periodStart: periodStart.toISOString().slice(0, 10),
       });
-      return 0;
+      return {
+        rowsWritten: 0,
+        skippedReason:
+          "Monthly scoring is disabled for this period. Enable it in Settings → Scoring config before recomputing.",
+      };
     }
   }
 
@@ -121,7 +133,15 @@ export async function computeAndReplace(
           components: result as unknown as Prisma.InputJsonValue,
         });
       }
-    } else if (dept.typeKey === "tech") {
+    } else if (!isMetricDepartment(dept.typeKey)) {
+      // Ledger-based (point) scoring is the default for any non-metric
+      // department — matches the monthly path's isMetricDepartment() check
+      // just above. The old `dept.typeKey === "tech"` literal check silently
+      // zeroed out every non-sales/bd department whose typeKey wasn't
+      // spelled exactly "tech" (e.g. an Admin-created "AI Tech" department),
+      // routing it into the metric branch below instead — where it has no
+      // metric WorkItems and always scores 0, no matter how many self-logged
+      // tasks got approved. Bug reported 2026-09-06.
       const ledgerSums = await prisma.employeePointLedger.groupBy({
         by: ["employeeId"],
         where: {
@@ -189,7 +209,7 @@ export async function computeAndReplace(
     prisma.recognitionSnapshot.createMany({ data: rows }),
   ]);
 
-  return rows.length;
+  return { rowsWritten: rows.length };
 }
 
 /**
@@ -200,18 +220,25 @@ export async function runRecognitionSnapshot(opts?: {
   periodType?: RecognitionPeriodType;
   periodStart?: Date;
   now?: Date;
-}): Promise<{ periodType: RecognitionPeriodType; periodStart: string; rowsWritten: number }[]> {
+}): Promise<
+  { periodType: RecognitionPeriodType; periodStart: string; rowsWritten: number; skippedReason?: string }[]
+> {
   const now = opts?.now ?? new Date();
   const types: RecognitionPeriodType[] = opts?.periodType
     ? [opts.periodType]
     : [RecognitionPeriodType.weekly, RecognitionPeriodType.monthly];
 
-  const results: { periodType: RecognitionPeriodType; periodStart: string; rowsWritten: number }[] = [];
+  const results: {
+    periodType: RecognitionPeriodType;
+    periodStart: string;
+    rowsWritten: number;
+    skippedReason?: string;
+  }[] = [];
   for (const periodType of types) {
     const periodStart =
       opts?.periodStart ??
       (periodType === RecognitionPeriodType.weekly ? startOfWeekUTC(now) : startOfMonthUTC(now));
-    const rowsWritten = await computeAndReplace(periodType, periodStart);
+    const { rowsWritten, skippedReason } = await computeAndReplace(periodType, periodStart);
     if (rowsWritten > 0) {
       const label = periodType === RecognitionPeriodType.weekly ? "This week's" : "This month's";
       await notifyAllActiveUsers(
@@ -220,7 +247,12 @@ export async function runRecognitionSnapshot(opts?: {
         "Recognition update",
       );
     }
-    results.push({ periodType, periodStart: periodStart.toISOString().slice(0, 10), rowsWritten });
+    results.push({
+      periodType,
+      periodStart: periodStart.toISOString().slice(0, 10),
+      rowsWritten,
+      ...(skippedReason ? { skippedReason } : {}),
+    });
   }
   return results;
 }

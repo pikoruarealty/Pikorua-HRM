@@ -1,12 +1,19 @@
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
-import { FINANCE_ROLES, requireRole, AuthzError } from "@/lib/rbac";
+import { FINANCE_ROLES, Role, requireRole, AuthzError } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { pushNotification } from "@/lib/notifications/push";
 import { RequestStatus, RequestType } from "@prisma/client";
 import { audit, clientIp } from "@/lib/audit";
-import { splitLeaveRangeByOverrides, type LeaveDayType } from "@/lib/requests/leave-math";
+import {
+  splitLeaveRangeByOverrides,
+  allocateLeaveDaysAgainstCaps,
+  isPaidLeaveType,
+  type LeaveDayType,
+} from "@/lib/requests/leave-math";
+import { getApprovedPaidLeaveDaysByMonthsInRange, getApprovedPaidLeaveDaysForYear } from "@/lib/requests/leave";
+import { getEffectivePaidLeaveCaps } from "@/lib/leave/balance";
 
 // Track B. PATCH /api/v1/requests/:id/approve — Milestone 1.3.
 // Golden rule: Admin/HR only, always — Team Leads get 403 even for their own team.
@@ -23,6 +30,14 @@ import { splitLeaveRangeByOverrides, type LeaveDayType } from "@/lib/requests/le
 // reads `type` + `dateFrom`/`dateTo` per row, see
 // lib/attendance/monthly-breakdown.ts) pays/deducts each day correctly with
 // no extra plumbing.
+// Monthly/annual cap auto-overflow (2026-09-06, owner request): approving a
+// leave_casual/leave_sick request with no day_overrides now automatically
+// converts only the days beyond the employee's monthly/yearly paid-leave cap
+// to leave_unpaid (see allocateLeaveDaysAgainstCaps) — this is on by default,
+// not opt-in. Admin (not HR) can bypass this entirely for one approval via
+// override_monthly_cap + a reason, e.g. a genuine one-off exception; that
+// path is audited distinctly (admin_override: true) and does NOT touch the
+// day_overrides / manual-split path above, which still wins whenever supplied.
 const approveSchema = z
   .object({
     day_overrides: z
@@ -33,10 +48,16 @@ const approveSchema = z
         }),
       )
       .optional(),
+    override_monthly_cap: z.boolean().optional(),
+    reason: z.string().min(3, "A reason is required to override the monthly cap.").optional(),
+  })
+  .refine((v) => !v.override_monthly_cap || (v.reason && v.reason.length >= 3), {
+    message: "A reason is required to override the monthly cap.",
+    path: ["reason"],
   })
   .optional();
 
-const LEAVE_TYPES: RequestType[] = [RequestType.leave_paid, RequestType.leave_unpaid];
+const LEAVE_TYPES: RequestType[] = [RequestType.leave_casual, RequestType.leave_sick, RequestType.leave_unpaid];
 
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
   const session = await getSession();
@@ -61,6 +82,12 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     return failFor(ErrorCode.VALIDATION, parsedBody.error.issues[0]?.message ?? "Invalid approval body.");
   }
   const dayOverrides = parsedBody.data?.day_overrides ?? [];
+  const overrideMonthlyCap = parsedBody.data?.override_monthly_cap ?? false;
+  const overrideReason = parsedBody.data?.reason;
+
+  if (overrideMonthlyCap && session!.role !== Role.admin) {
+    return failFor(ErrorCode.FORBIDDEN, "Only Admin can override the monthly leave cap.");
+  }
 
   const request = await prisma.request.findUnique({ where: { id: params.id } });
   if (!request) return failFor(ErrorCode.NOT_FOUND);
@@ -83,7 +110,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     }
     for (const o of dayOverrides) {
       if (!LEAVE_TYPES.includes(o.type)) {
-        return failFor(ErrorCode.VALIDATION, "day_overrides type must be leave_paid or leave_unpaid.");
+        return failFor(ErrorCode.VALIDATION, "day_overrides type must be leave_casual, leave_sick, or leave_unpaid.");
       }
       const d = new Date(`${o.date}T00:00:00.000Z`);
       if (d < request.dateFrom || d > request.dateTo) {
@@ -95,16 +122,50 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   const now = new Date();
   let updated;
   const createdIds: string[] = [];
+  let autoCapped = false;
 
-  if (dayOverrides.length === 0) {
+  // Auto-overflow: only kicks in for a paid-leave request approved WITHOUT a
+  // manual day_overrides split, and only when Admin hasn't explicitly
+  // overridden the cap for this approval.
+  let autoOverrideMap: Map<string, LeaveDayType> | null = null;
+  if (
+    dayOverrides.length === 0 &&
+    !overrideMonthlyCap &&
+    isPaidLeaveType(request.type) &&
+    request.dateFrom &&
+    request.dateTo
+  ) {
+    const dateFrom = request.dateFrom;
+    const dateTo = request.dateTo;
+    const [{ monthlyCap, yearlyCap }, approvedByMonth, approvedThisYear] = await Promise.all([
+      getEffectivePaidLeaveCaps(request.employeeId, dateFrom.getUTCMonth() + 1, dateFrom.getUTCFullYear()),
+      getApprovedPaidLeaveDaysByMonthsInRange(request.employeeId, dateFrom, dateTo),
+      getApprovedPaidLeaveDaysForYear(request.employeeId, dateFrom.getUTCFullYear()),
+    ]);
+    const overrides = allocateLeaveDaysAgainstCaps(
+      dateFrom,
+      dateTo,
+      approvedByMonth,
+      approvedThisYear,
+      monthlyCap,
+      yearlyCap,
+    );
+    if (overrides.size > 0) {
+      autoOverrideMap = overrides;
+      autoCapped = true;
+    }
+  }
+
+  if (dayOverrides.length === 0 && !autoOverrideMap) {
     updated = await prisma.request.update({
       where: { id: params.id },
       data: { status: RequestStatus.approved, approverId: session!.userId, approvedAt: now },
     });
   } else {
-    const overrideMap = new Map<string, LeaveDayType>(
-      dayOverrides.map((o) => [o.date, o.type as LeaveDayType]),
-    );
+    const overrideMap =
+      dayOverrides.length > 0
+        ? new Map<string, LeaveDayType>(dayOverrides.map((o) => [o.date, o.type as LeaveDayType]))
+        : autoOverrideMap!;
     const segments = splitLeaveRangeByOverrides(
       request.dateFrom!,
       request.dateTo!,
@@ -144,9 +205,11 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
   if (requester) {
     const message =
-      dayOverrides.length === 0
-        ? `Your ${request.type} request has been approved.`
-        : `Your ${request.type} request has been approved with some days changed to a different leave type — check Requests for the split.`;
+      dayOverrides.length > 0
+        ? `Your ${request.type} request has been approved with some days changed to a different leave type — check Requests for the split.`
+        : autoCapped
+          ? `Your ${request.type} request has been approved — some days exceeded your monthly/yearly paid-leave limit and were marked unpaid.`
+          : `Your ${request.type} request has been approved.`;
     await pushNotification(requester.id, `${request.type}_approved`, message);
   }
 
@@ -161,6 +224,8 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       employee_id: request.employeeId,
       ...(request.amount != null ? { amount: Number(request.amount) } : {}),
       ...(dayOverrides.length > 0 ? { day_overrides: dayOverrides, split_request_ids: createdIds } : {}),
+      ...(autoCapped ? { auto_capped: true, split_request_ids: createdIds } : {}),
+      ...(overrideMonthlyCap ? { admin_override: true, override_monthly_cap: true, reason: overrideReason } : {}),
     },
     ip: clientIp(req),
   });

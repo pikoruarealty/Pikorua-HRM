@@ -22,6 +22,10 @@ type LeaderboardRow = {
   // Monthly composite breakdown (Pillar 6). Null on weekly snapshots and on
   // monthly rows computed before Pillar 6 — those show a bare score.
   components: ScoreComponents | null;
+  // Whether an Admin has published THIS department's board for this period
+  // (2026-09-06) — gates visibility for non-Admin/HR viewers server-side;
+  // always true for rows a non-privileged viewer ever receives.
+  isPublished: boolean;
 };
 type RecognitionResponse = {
   periodType: "weekly" | "monthly";
@@ -36,6 +40,7 @@ export function RecognitionScreen() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [recomputing, setRecomputing] = useState(false);
   const [publishingId, setPublishingId] = useState<string | null>(null);
+  const [publishingDeptId, setPublishingDeptId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
@@ -64,7 +69,9 @@ export function RecognitionScreen() {
   async function recompute() {
     setRecomputing(true);
     setActionError(null);
-    const res = await apiFetch("/recognition/recompute", {
+    const res = await apiFetch<{
+      results: { periodType: string; rowsWritten: number; skippedReason?: string }[];
+    }>("/recognition/recompute", {
       method: "POST",
       body: JSON.stringify({ periodType }),
     });
@@ -73,14 +80,18 @@ export function RecognitionScreen() {
       setActionError(`${res.error.code}: ${res.error.message}`);
       return;
     }
+    const skipped = res.data?.results.find((r) => r.skippedReason);
+    if (skipped?.skippedReason) {
+      setActionError(skipped.skippedReason);
+    }
     lookup(periodType);
   }
 
-  async function publish(row: LeaderboardRow) {
+  async function pickWinner(row: LeaderboardRow) {
     if (!result?.periodStart) return;
     if (
       !confirm(
-        `Publish ${row.employeeName} as ${periodType === "weekly" ? "Employee of the Week" : "Employee of the Month"} for ${row.departmentName}?`,
+        `Pick ${row.employeeName} as ${periodType === "weekly" ? "Employee of the Week" : "Employee of the Month"} for ${row.departmentName}?`,
       )
     ) {
       return;
@@ -97,6 +108,27 @@ export function RecognitionScreen() {
       }),
     });
     setPublishingId(null);
+    if (res.error) {
+      setActionError(`${res.error.code}: ${res.error.message}`);
+      return;
+    }
+    lookup(periodType);
+  }
+
+  // Single department-wide visibility toggle (2026-09-06 redesign) — replaces
+  // the old "one Publish button per employee" pattern. This does not pick a
+  // winner; it just decides whether the department's employees can see this
+  // period's board at all (Admin/HR always can). Winner-picking stays a
+  // separate action (pickWinner, above).
+  async function toggleDepartmentPublish(departmentId: string, published: boolean) {
+    if (!result?.periodStart) return;
+    setPublishingDeptId(departmentId);
+    setActionError(null);
+    const res = await apiFetch("/recognition/leaderboard-publish", {
+      method: "POST",
+      body: JSON.stringify({ periodType, periodStart: result.periodStart, departmentId, published }),
+    });
+    setPublishingDeptId(null);
     if (res.error) {
       setActionError(`${res.error.code}: ${res.error.message}`);
       return;
@@ -158,60 +190,106 @@ export function RecognitionScreen() {
               {result.leaderboard.length === 0 && (
                 <p className="text-sm text-muted-foreground">No snapshot yet.</p>
               )}
-              {result.leaderboard.map((r) => {
-                const rowId = `${r.departmentId}-${r.employeeId}`;
-                const expanded = expandedId === rowId;
-                return (
-                  <div key={rowId} className="rounded border text-sm">
-                    <div className="flex items-center justify-between p-3">
-                      <span>
-                        <strong>#{r.rank}</strong> {r.employeeName}{" "}
-                        <span className="text-muted-foreground">· {r.departmentName}</span>
-                      </span>
-                      <div className="flex items-center gap-2">
-                        {r.components ? (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="h-auto px-2 py-1 font-normal text-muted-foreground"
-                            aria-expanded={expanded}
-                            onClick={() => setExpandedId(expanded ? null : rowId)}
-                          >
-                            score {r.score} / 100
-                            <ChevronDown
-                              className={`ml-1 h-3.5 w-3.5 transition-transform ${expanded ? "rotate-180" : ""}`}
-                            />
-                          </Button>
-                        ) : (
-                          <span className="text-muted-foreground">score {r.score}</span>
-                        )}
-                        {r.isEmployeeOfMonth && (
-                          <Badge>
-                            {periodType === "weekly"
-                              ? "Employee of the Week"
-                              : "Employee of the Month"}
-                          </Badge>
-                        )}
-                        {isAdmin && !r.isEmployeeOfMonth && (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => publish(r)}
-                            disabled={publishingId === r.employeeId}
-                          >
-                            {publishingId === r.employeeId ? "Publishing…" : "Publish"}
-                          </Button>
-                        )}
-                      </div>
+              {(() => {
+                const groups: {
+                  departmentId: string;
+                  departmentName: string;
+                  isPublished: boolean;
+                  rows: LeaderboardRow[];
+                }[] = [];
+                for (const r of result.leaderboard) {
+                  let group = groups.find((g) => g.departmentId === r.departmentId);
+                  if (!group) {
+                    group = {
+                      departmentId: r.departmentId,
+                      departmentName: r.departmentName,
+                      isPublished: r.isPublished,
+                      rows: [],
+                    };
+                    groups.push(group);
+                  }
+                  group.rows.push(r);
+                }
+
+                return groups.map((group) => (
+                  <div key={group.departmentId} className="flex flex-col gap-2">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-sm font-semibold">{group.departmentName}</h3>
+                      {isAdmin ? (
+                        <Button
+                          size="sm"
+                          variant={group.isPublished ? "outline" : "default"}
+                          onClick={() => toggleDepartmentPublish(group.departmentId, !group.isPublished)}
+                          disabled={publishingDeptId === group.departmentId}
+                        >
+                          {publishingDeptId === group.departmentId
+                            ? "Saving…"
+                            : group.isPublished
+                              ? "Unpublish leaderboard"
+                              : "Publish leaderboard"}
+                        </Button>
+                      ) : (
+                        group.isPublished && <Badge variant="outline">Published</Badge>
+                      )}
                     </div>
-                    {expanded && r.components && (
-                      <div className="border-t bg-muted/30 p-3">
-                        <ScoreBreakdown data={r.components} />
-                      </div>
-                    )}
+                    <div className="flex flex-col gap-2">
+                      {group.rows.map((r) => {
+                        const rowId = `${r.departmentId}-${r.employeeId}`;
+                        const expanded = expandedId === rowId;
+                        return (
+                          <div key={rowId} className="rounded border text-sm">
+                            <div className="flex items-center justify-between p-3">
+                              <span>
+                                <strong>#{r.rank}</strong> {r.employeeName}
+                              </span>
+                              <div className="flex items-center gap-2">
+                                {r.components ? (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-auto px-2 py-1 font-normal text-muted-foreground"
+                                    aria-expanded={expanded}
+                                    onClick={() => setExpandedId(expanded ? null : rowId)}
+                                  >
+                                    score {r.score} / 100
+                                    <ChevronDown
+                                      className={`ml-1 h-3.5 w-3.5 transition-transform ${expanded ? "rotate-180" : ""}`}
+                                    />
+                                  </Button>
+                                ) : (
+                                  <span className="text-muted-foreground">score {r.score}</span>
+                                )}
+                                {r.isEmployeeOfMonth && (
+                                  <Badge>
+                                    {periodType === "weekly"
+                                      ? "Employee of the Week"
+                                      : "Employee of the Month"}
+                                  </Badge>
+                                )}
+                                {isAdmin && !r.isEmployeeOfMonth && (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => pickWinner(r)}
+                                    disabled={publishingId === r.employeeId}
+                                  >
+                                    {publishingId === r.employeeId ? "Picking…" : "Pick winner"}
+                                  </Button>
+                                )}
+                              </div>
+                            </div>
+                            {expanded && r.components && (
+                              <div className="border-t bg-muted/30 p-3">
+                                <ScoreBreakdown data={r.components} />
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
-                );
-              })}
+                ));
+              })()}
             </div>
           )}
         </CardContent>

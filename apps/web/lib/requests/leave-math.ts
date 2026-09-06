@@ -45,7 +45,16 @@ export function countDaysClippedToYear(dateFrom: Date, dateTo: Date, year: numbe
   return days > 0 ? days : 0;
 }
 
-export type LeaveDayType = "leave_paid" | "leave_unpaid";
+// Leave-type overhaul (2026-09-06, owner request): leave_paid retired in
+// favor of leave_casual/leave_sick, sharing one combined balance pool
+// (12/year, max 2/month — LeaveConfig's numeric caps are unchanged, only the
+// type names split). leave_unpaid is unchanged.
+export const PAID_LEAVE_TYPES = ["leave_casual", "leave_sick"] as const;
+export type PaidLeaveType = (typeof PAID_LEAVE_TYPES)[number];
+export type LeaveDayType = PaidLeaveType | "leave_unpaid";
+export function isPaidLeaveType(type: string): type is PaidLeaveType {
+  return (PAID_LEAVE_TYPES as readonly string[]).includes(type);
+}
 export type LeaveSegment = { dateFrom: Date; dateTo: Date; type: LeaveDayType };
 
 /** Behind partial leave approval (owner request, 2026-09-01): a leave
@@ -80,4 +89,52 @@ export function splitLeaveRangeByOverrides(
   }
 
   return segments;
+}
+
+/** Monthly/annual paid-leave cap auto-overflow (2026-09-06, owner request):
+ *  "if the leave has exceeded [2/month], then only it becomes unpaid,
+ *  otherwise keep it paid." Given a leave_casual/leave_sick request range and
+ *  the employee's already-approved paid-leave usage, returns per-day
+ *  overrides converting ONLY the days beyond whichever cap binds first
+ *  (monthly or annual) to leave_unpaid — days within both caps are left
+ *  unlisted (caller's splitLeaveRangeByOverrides keeps them as baseType).
+ *  Feeds directly into splitLeaveRangeByOverrides as if it were a manual
+ *  day_overrides map, so approve/route.ts's existing split/materialize
+ *  pipeline needs no changes to consume this.
+ *
+ *  approvedPaidByMonthKey ("YYYY-MM" -> already-approved paid days that
+ *  month) lets a request spanning a month boundary reset its monthly count
+ *  correctly per calendar month. approvedPaidThisYear is a single running
+ *  total for the year of dateFrom — a request spanning a calendar-year
+ *  boundary will track the annual cap slightly imprecisely (known,
+ *  acceptable simplification: this only matters for a leave request that
+ *  literally straddles Dec 31 / Jan 1). */
+export function allocateLeaveDaysAgainstCaps(
+  dateFrom: Date,
+  dateTo: Date,
+  approvedPaidByMonthKey: Map<string, number>,
+  approvedPaidThisYear: number,
+  monthlyCap: number,
+  yearlyCap: number,
+): Map<string, LeaveDayType> {
+  const overrides = new Map<string, LeaveDayType>();
+  const totalDays = Math.floor((dateTo.getTime() - dateFrom.getTime()) / MS_PER_DAY) + 1;
+  const monthUsage = new Map(approvedPaidByMonthKey);
+  let yearUsage = approvedPaidThisYear;
+
+  for (let i = 0; i < totalDays; i++) {
+    const date = new Date(dateFrom.getTime() + i * MS_PER_DAY);
+    const key = date.toISOString().slice(0, 10);
+    const monthKey = key.slice(0, 7);
+    const usedThisMonth = monthUsage.get(monthKey) ?? 0;
+
+    if (usedThisMonth < monthlyCap && yearUsage < yearlyCap) {
+      monthUsage.set(monthKey, usedThisMonth + 1);
+      yearUsage++;
+    } else {
+      overrides.set(key, "leave_unpaid");
+    }
+  }
+
+  return overrides;
 }

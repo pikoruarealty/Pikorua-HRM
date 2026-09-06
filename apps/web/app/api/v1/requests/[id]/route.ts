@@ -14,7 +14,7 @@ import { RequestType, RequestStatus } from "@prisma/client";
 // delete their OWN request only while it's still `pending` — once it's been
 // decided (approved/rejected) only the admin override/hard-delete paths apply.
 
-const LEAVE_TYPES: RequestType[] = [RequestType.leave_paid, RequestType.leave_unpaid];
+const LEAVE_TYPES: RequestType[] = [RequestType.leave_casual, RequestType.leave_sick, RequestType.leave_unpaid];
 
 const EMPLOYEE_SUMMARY = {
   select: {

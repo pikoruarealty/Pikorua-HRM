@@ -5,6 +5,7 @@ import { FINANCE_ROLES } from "@/lib/rbac";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { computeHours, isImplausibleDuration, MAX_PLAUSIBLE_SHIFT_HOURS } from "@/lib/attendance/time";
 import { AttendanceApprovalStatus, AttendanceSource } from "@prisma/client";
+import { syncCompensationCreditForRecord } from "@/lib/attendance/compensation-credits";
 import { audit, clientIp } from "@/lib/audit";
 
 // Manual override (2026-07-15, widened to Admin/HR 2026-08-07). POST
@@ -95,6 +96,10 @@ export async function POST(req: Request) {
     : await prisma.attendanceRecord.create({
         data: { employeeId: d.employee_id, date, ...data },
       });
+
+  // Written pre-approved — re-derive whether this day earns a compensation
+  // credit (off-day clock-in), same as the automated approve flow.
+  await syncCompensationCreditForRecord(record.id);
 
   await audit({
     action: existing ? "attendance.manual_override" : "attendance.manual_create",

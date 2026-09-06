@@ -5,6 +5,7 @@ import { FINANCE_ROLES } from "@/lib/rbac";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { computeHours, getDefaultClockOut } from "@/lib/attendance/time";
 import { summariseSessions } from "@/lib/attendance/sessions";
+import { syncCompensationCreditForRecord } from "@/lib/attendance/compensation-credits";
 import { audit, clientIp } from "@/lib/audit";
 
 // Track A. PATCH /api/v1/attendance/:id/approve — Admin/HR. If not
@@ -112,6 +113,10 @@ export async function PATCH(
       approvedAt: new Date(),
     },
   });
+
+  // Now approved: re-derive whether this day earns a compensation credit
+  // (off-day clock-in or a manual isCompensation flag set before approval).
+  await syncCompensationCreditForRecord(updated.id);
 
   await audit({
     action: "attendance.approve",

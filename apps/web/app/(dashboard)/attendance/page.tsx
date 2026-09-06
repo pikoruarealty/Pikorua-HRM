@@ -1,5 +1,5 @@
 import { getSession } from "@/lib/auth";
-import { FINANCE_ROLES, isLeadRole } from "@/lib/rbac";
+import { FINANCE_ROLES, Role, isLeadRole } from "@/lib/rbac";
 import { AttendanceScreen } from "@/components/attendance/attendance-screen";
 
 export default async function AttendancePage() {
@@ -11,6 +11,7 @@ export default async function AttendancePage() {
     <AttendanceScreen
       canReview={isFinance}
       canSeeAll={isFinance || isLead}
+      isAdmin={session!.role === Role.admin}
       employeeId={session!.employeeId}
     />
   );

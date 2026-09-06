@@ -5,6 +5,7 @@ import { FINANCE_ROLES } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { computeHours, isImplausibleDuration, MAX_PLAUSIBLE_SHIFT_HOURS } from "@/lib/attendance/time";
 import { AttendanceApprovalStatus, AttendanceSource } from "@prisma/client";
+import { syncCompensationCreditForRecord } from "@/lib/attendance/compensation-credits";
 import { audit, clientIp } from "@/lib/audit";
 
 // Manual override (2026-08-07, widened to Admin/HR same day). POST
@@ -128,6 +129,9 @@ export async function POST(req: Request) {
         : await prisma.attendanceRecord.create({ data: { employeeId: r.employee_id, date, ...data } });
       if (existing) updated++;
       else created++;
+      // Written pre-approved — re-derive whether this day earns a
+      // compensation credit (off-day clock-in), per row.
+      await syncCompensationCreditForRecord(record.id);
       results.push({ employee_id: r.employee_id, date: r.date, ok: true, id: record.id });
     } catch {
       results.push({ employee_id: r.employee_id, date: r.date, ok: false, error: "Failed to write attendance record." });

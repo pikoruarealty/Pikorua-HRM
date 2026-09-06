@@ -391,7 +391,9 @@ export function HomeScreen({
               title="On leave today"
               count={attendance ? onLeaveRows.length : null}
               rows={onLeaveRows}
-              subLabel={(r) => (r.leaveType === "leave_unpaid" ? "Unpaid" : "Paid")}
+              subLabel={(r) =>
+                r.leaveType === "leave_casual" ? "Casual" : r.leaveType === "leave_sick" ? "Sick" : "Unpaid"
+              }
               emptyLabel="No one on leave today."
               href="/attendance"
             />

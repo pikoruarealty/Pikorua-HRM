@@ -3,6 +3,7 @@ import { getSession } from "@/lib/auth";
 import { isFinanceRole, isLeadRole } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { EmployeeStatus, EventType, RequestStatus, RequestType, type Prisma } from "@prisma/client";
+import { isPaidLeaveType } from "@/lib/requests/leave-math";
 
 // Track A (2026-07-15). GET /api/v1/calendar?month=&year= — one feed for the
 // /calendar page: everything in the system that has a date, RBAC-scoped
@@ -180,7 +181,7 @@ export async function GET(req: Request) {
   if (leaveEmployeeScope) {
     const leaves = await prisma.request.findMany({
       where: {
-        type: { in: [RequestType.leave_paid, RequestType.leave_unpaid] },
+        type: { in: [RequestType.leave_casual, RequestType.leave_sick, RequestType.leave_unpaid] },
         status: { in: [RequestStatus.approved, RequestStatus.pending] },
         dateFrom: { lt: nextMonthStart },
         dateTo: { gte: monthStart },
@@ -190,7 +191,11 @@ export async function GET(req: Request) {
     });
     for (const leave of leaves) {
       if (!leave.dateFrom || !leave.dateTo) continue;
-      const label = leave.type === RequestType.leave_paid ? "Paid leave" : "Unpaid leave";
+      const label = isPaidLeaveType(leave.type)
+        ? leave.type === RequestType.leave_casual
+          ? "Casual leave"
+          : "Sick leave"
+        : "Unpaid leave";
       const rangeNote =
         isoDay(leave.dateFrom) === isoDay(leave.dateTo)
           ? label

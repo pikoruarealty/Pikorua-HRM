@@ -152,8 +152,15 @@ enum WorkLocation {
   wfh
 }
 
+// leave_paid retired 2026-09-06 (leave-type overhaul, owner request): the old
+// binary paid/unpaid leave taxonomy is replaced with casual/sick, sharing one
+// combined balance pool (see LeaveConfig — the numeric caps are unchanged,
+// only the type names split). leave_unpaid is unchanged — it is both a
+// directly-requestable type and the auto-overflow target when a casual/sick
+// request exceeds the employee's monthly/yearly paid allowance.
 enum RequestType {
-  leave_paid
+  leave_casual
+  leave_sick
   leave_unpaid
   reimbursement
   wfh
@@ -254,10 +261,11 @@ model Department {
   typeKey   String   @map("type_key") // machine key: tech / sales / bd
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  teams                Team[]
-  employees            Employee[]
-  workUnits            WorkUnit[]
-  recognitionSnapshots RecognitionSnapshot[]
+  teams                   Team[]
+  employees               Employee[]
+  workUnits               WorkUnit[]
+  recognitionSnapshots    RecognitionSnapshot[]
+  leaderboardPublications RecognitionLeaderboardPublish[]
 
   @@map("departments")
 }
@@ -352,26 +360,28 @@ model Employee {
   updatedAt              DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   user                    User?
-  ledTeams                Team[]                 @relation("TeamLead")
-  ledWorkUnits            WorkUnit[]             @relation("WorkUnitProjectLead")
-  assignedWorkItems       WorkItem[]             @relation("WorkItemAssignee")
-  reviewedWorkItems       WorkItem[]             @relation("WorkItemReviewer")
+  ledTeams                Team[]                          @relation("TeamLead")
+  ledWorkUnits            WorkUnit[]                      @relation("WorkUnitProjectLead")
+  assignedWorkItems       WorkItem[]                      @relation("WorkItemAssignee")
+  reviewedWorkItems       WorkItem[]                      @relation("WorkItemReviewer")
   dailySelections         DailyTaskSelection[]
   pointLedger             EmployeePointLedger[]
   attendanceRecords       AttendanceRecord[]
   payslips                Payslip[]
   requests                Request[]
   recognitionSnapshots    RecognitionSnapshot[]
-  performanceReviews      PerformanceReview[]    @relation("PerformanceReviewSubject")
-  performanceReviewsGiven PerformanceReview[]    @relation("PerformanceReviewReviewer")
+  performanceReviews      PerformanceReview[]             @relation("PerformanceReviewSubject")
+  performanceReviewsGiven PerformanceReview[]             @relation("PerformanceReviewReviewer")
   documents               EmployeeDocument[]
   assets                  Asset[]
-  eventsAbout             Event[]                @relation("EventSubject")
+  eventsAbout             Event[]                         @relation("EventSubject")
   eventInvitees           EventInvitee[]
   weeklyOffMoves          WeeklyOffMove[]
   salesActivitySyncs      SalesActivitySync[]
-  offlineClaims           OfflineActivityClaim[] @relation("OfflineClaimSubject")
-  offlineClaimsReviewed   OfflineActivityClaim[] @relation("OfflineClaimReviewer")
+  offlineClaims           OfflineActivityClaim[]          @relation("OfflineClaimSubject")
+  offlineClaimsReviewed   OfflineActivityClaim[]          @relation("OfflineClaimReviewer")
+  compensationCredits     CompensationCredit[]
+  leaderboardsPublished   RecognitionLeaderboardPublish[]
 
   @@map("employees")
 }
@@ -661,29 +671,29 @@ model PerformanceConfig {
 // ===========================================================================
 
 model AttendanceRecord {
-  id               String                   @id @default(uuid()) @db.Uuid
-  employeeId       String                   @map("employee_id") @db.Uuid
-  employee         Employee                 @relation(fields: [employeeId], references: [id])
-  date             DateTime                 @db.Date
+  id                 String                   @id @default(uuid()) @db.Uuid
+  employeeId         String                   @map("employee_id") @db.Uuid
+  employee           Employee                 @relation(fields: [employeeId], references: [id])
+  date               DateTime                 @db.Date
   // The day's BOUNDS, not a single stretch of work. With re-clock-in
   // (2026-08-11) a day can be several sessions: clock_in_raw is the first
   // punch in of the day (what late-arrival is measured from) and
   // clock_out_raw the last punch out, or null while a session is open.
   // Worked time is the SUM of attendance_sessions, never out-minus-in —
   // otherwise a lunch break would be paid as work.
-  clockInRaw       DateTime?                @map("clock_in_raw") @db.Timestamptz(6)
-  clockOutRaw      DateTime?                @map("clock_out_raw") @db.Timestamptz(6)
-  clockInApproved  DateTime?                @map("clock_in_approved") @db.Timestamptz(6)
-  clockOutApproved DateTime?                @map("clock_out_approved") @db.Timestamptz(6)
-  totalHours       Decimal?                 @map("total_hours") @db.Decimal(4, 2)
-  isHalfDay        Boolean                  @default(false) @map("is_half_day")
+  clockInRaw         DateTime?                @map("clock_in_raw") @db.Timestamptz(6)
+  clockOutRaw        DateTime?                @map("clock_out_raw") @db.Timestamptz(6)
+  clockInApproved    DateTime?                @map("clock_in_approved") @db.Timestamptz(6)
+  clockOutApproved   DateTime?                @map("clock_out_approved") @db.Timestamptz(6)
+  totalHours         Decimal?                 @map("total_hours") @db.Decimal(4, 2)
+  isHalfDay          Boolean                  @default(false) @map("is_half_day")
   // Manual admin override (2026-08-07): marks an otherwise-normal present
   // day as a compensation day (e.g. an employee came in to make up for a
   // leave taken elsewhere), independent of the automatic Sunday-clock-in
   // detection in lib/attendance/monthly-breakdown.ts. Both paths feed the
   // same `compensationDays` bucket — this just adds a second, manual way to
   // land in it for a weekday that isn't otherwise a day off.
-  isCompensation   Boolean                  @default(false) @map("is_compensation")
+  isCompensation     Boolean                  @default(false) @map("is_compensation")
   // Manual late-deduction waiver (2026-08-12, owner request): for cases where
   // a late clock-in wasn't the employee's fault (e.g. office inaccessible,
   // key not available) and they shouldn't have to "make up" the lost time by
@@ -692,19 +702,19 @@ model AttendanceRecord {
   // when the employee's own clock-out compensates for their late arrival —
   // this is Admin/HR's explicit override when neither lateness nor make-up
   // is the employee's responsibility. Set via PATCH .../edit, audited.
-  lateExempt       Boolean                  @default(false) @map("late_exempt")
-  lateExemptReason String?                  @map("late_exempt_reason")
-  approvalStatus   AttendanceApprovalStatus @default(pending) @map("approval_status")
-  approvedById     String?                  @map("approved_by") @db.Uuid // must be admin/hr
-  approvedBy       User?                    @relation("AttendanceApprover", fields: [approvedById], references: [id])
-  approvedAt       DateTime?                @map("approved_at") @db.Timestamptz(6)
-  source           AttendanceSource         @default(manual)
+  lateExempt         Boolean                  @default(false) @map("late_exempt")
+  lateExemptReason   String?                  @map("late_exempt_reason")
+  approvalStatus     AttendanceApprovalStatus @default(pending) @map("approval_status")
+  approvedById       String?                  @map("approved_by") @db.Uuid // must be admin/hr
+  approvedBy         User?                    @relation("AttendanceApprover", fields: [approvedById], references: [id])
+  approvedAt         DateTime?                @map("approved_at") @db.Timestamptz(6)
+  source             AttendanceSource         @default(manual)
   // The day's location, taken from the FIRST session of the day. Per-session
   // location is the authoritative value (someone can come in after a WFH
   // morning); this copy exists so attendance lists and filters don't have to
   // join sessions to answer "was this a WFH day?".
-  workLocation     WorkLocation             @default(office) @map("work_location")
-  sessions         AttendanceSession[]
+  workLocation       WorkLocation             @default(office) @map("work_location")
+  sessions           AttendanceSession[]
   // Device-sync review flag (2026-08-12): the biometric feed gives no IN/OUT
   // flag, only a position-based guess (odd=in, even=out — see reconcile.ts).
   // A lone device punch left open at end-of-day is genuinely ambiguous: it
@@ -714,10 +724,11 @@ model AttendanceRecord {
   // (heuristic: a solo punch implausibly late for a first arrival) rather
   // than guessing and fabricating totalHours — Admin/HR resolve it via the
   // existing PATCH .../edit, which clears the flag.
-  flaggedForReview Boolean                  @default(false) @map("flagged_for_review")
-  flagReason       String?                  @map("flag_reason")
-  createdAt        DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt        DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(6)
+  flaggedForReview   Boolean                  @default(false) @map("flagged_for_review")
+  flagReason         String?                  @map("flag_reason")
+  createdAt          DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(6)
+  compensationCredit CompensationCredit?
 
   @@unique([employeeId, date])
   @@index([approvalStatus])
@@ -782,6 +793,42 @@ model WeeklyOffMove {
 
   @@unique([employeeId, weekStart])
   @@map("weekly_off_moves")
+}
+
+// Comp-off ledger (2026-09-06, owner request): "if I come in on my weekoff,
+// it should compensate my leave within a 60-day window and reflect in the
+// CURRENT month's payslip." One credit is minted per attendance record that
+// lands in the existing compensationDays bucket (off-day clock-in, whether
+// auto-detected or the manual is_compensation override — see AttendanceRecord
+// above) — sourceRecordId is unique so re-editing the same record never mints
+// a second credit. A credit expires 60 days after it's earned; redemption
+// converts an approved leave_unpaid day within that window back to paid,
+// applied at whichever month's payslip is being generated when the redemption
+// happens (see lib/payroll — this does NOT retroactively regenerate a
+// finalized payslip for an earlier month). Distinct from the pre-existing,
+// unrelated WeeklyOffMove (that's about WHICH day is off; this is about
+// redeeming having worked one).
+model CompensationCredit {
+  id                   String           @id @default(uuid()) @db.Uuid
+  employeeId           String           @map("employee_id") @db.Uuid
+  employee             Employee         @relation(fields: [employeeId], references: [id])
+  earnedDate           DateTime         @map("earned_date") @db.Date
+  expiresAt            DateTime         @map("expires_at") @db.Date
+  // The attendance record that earned this credit. Unique so upserting on
+  // record edit/approve never mints a duplicate for the same day.
+  sourceRecordId       String           @unique @map("source_record_id") @db.Uuid
+  sourceRecord         AttendanceRecord @relation(fields: [sourceRecordId], references: [id])
+  // Null until redeemed against a specific unpaid-leave day. consumedForDate
+  // is the leave day it paid for (not necessarily the same as earnedDate);
+  // consumedForRequestId is the (post-split) Request row that day belongs to.
+  consumedAt           DateTime?        @map("consumed_at") @db.Timestamptz(6)
+  consumedForDate      DateTime?        @map("consumed_for_date") @db.Date
+  consumedForRequestId String?          @map("consumed_for_request_id") @db.Uuid
+  consumedForRequest   Request?         @relation(fields: [consumedForRequestId], references: [id])
+  createdAt            DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([employeeId, consumedAt])
+  @@map("compensation_credits")
 }
 
 // TeamOffice biometric integration (2026-08-12). The vendor's incremental
@@ -920,20 +967,21 @@ model Payslip {
 // ===========================================================================
 
 model Request {
-  id            String        @id @default(uuid()) @db.Uuid
-  employeeId    String        @map("employee_id") @db.Uuid
-  employee      Employee      @relation(fields: [employeeId], references: [id])
-  type          RequestType
-  status        RequestStatus @default(pending)
-  dateFrom      DateTime?     @map("date_from") @db.Date
-  dateTo        DateTime?     @map("date_to") @db.Date
-  amount        Decimal?      @db.Decimal(12, 2) // for reimbursement
-  description   String?
-  attachmentUrl String?       @map("attachment_url")
-  approverId    String?       @map("approver_id") @db.Uuid // MUST be admin/hr (enforce in app logic)
-  approver      User?         @relation("RequestApprover", fields: [approverId], references: [id])
-  approvedAt    DateTime?     @map("approved_at") @db.Timestamptz(6)
-  createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  id                          String               @id @default(uuid()) @db.Uuid
+  employeeId                  String               @map("employee_id") @db.Uuid
+  employee                    Employee             @relation(fields: [employeeId], references: [id])
+  type                        RequestType
+  status                      RequestStatus        @default(pending)
+  dateFrom                    DateTime?            @map("date_from") @db.Date
+  dateTo                      DateTime?            @map("date_to") @db.Date
+  amount                      Decimal?             @db.Decimal(12, 2) // for reimbursement
+  description                 String?
+  attachmentUrl               String?              @map("attachment_url")
+  approverId                  String?              @map("approver_id") @db.Uuid // MUST be admin/hr (enforce in app logic)
+  approver                    User?                @relation("RequestApprover", fields: [approverId], references: [id])
+  approvedAt                  DateTime?            @map("approved_at") @db.Timestamptz(6)
+  createdAt                   DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  redeemedCompensationCredits CompensationCredit[]
 
   @@index([employeeId])
   @@index([type, status])
@@ -972,6 +1020,30 @@ model RecognitionSnapshot {
   @@index([periodType, periodStart, departmentId])
   @@index([isEmployeeOfMonth, publishedAt])
   @@map("recognition_snapshots")
+}
+
+// Leaderboard visibility gate (owner request, 2026-09-06), distinct from
+// RecognitionSnapshot.publishedAt above (which drives the Employee of the
+// Week/Month banner for ONE winning row). This is coarser: one row per
+// (periodType, periodStart, departmentId) says whether that department's
+// WHOLE current leaderboard is visible to its own employees yet. Admin/HR
+// always see every department's leaderboard regardless of this row — see
+// GET /recognition. A recompute does not touch or require this row; an
+// already-published department stays visible (showing its latest scores)
+// through as many recomputes as needed until an Admin unpublishes or
+// re-publishes it.
+model RecognitionLeaderboardPublish {
+  id           String                @id @default(uuid()) @db.Uuid
+  periodType   RecognitionPeriodType @map("period_type")
+  periodStart  DateTime              @map("period_start") @db.Date
+  departmentId String                @map("department_id") @db.Uuid
+  department   Department            @relation(fields: [departmentId], references: [id])
+  publishedAt  DateTime              @default(now()) @map("published_at") @db.Timestamptz(6)
+  publishedBy  String                @map("published_by") @db.Uuid
+  publisher    Employee              @relation(fields: [publishedBy], references: [id])
+
+  @@unique([periodType, periodStart, departmentId])
+  @@map("recognition_leaderboard_publishes")
 }
 
 // Monthly, Lead-entered quality review (Pillar 3, 2026-08-08). The deliberately

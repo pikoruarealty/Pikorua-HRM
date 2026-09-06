@@ -5,6 +5,7 @@ import { FINANCE_ROLES } from "@/lib/rbac";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { audit, clientIp } from "@/lib/audit";
 import { computePayslipPreview } from "@/lib/payroll/payslip-preview";
+import { commitCompensationRedemptions } from "@/lib/attendance/compensation-credits";
 
 // Track A. POST /api/v1/payslips/generate — Admin/HR only. The money math +
 // cross-track calls live in lib/payroll/payslip-preview.ts (shared with the
@@ -73,34 +74,40 @@ export async function POST(req: Request) {
     return fail(preview.code, preview.message, preview.status);
   }
 
-  const payslip = await prisma.payslip.create({
-    data: {
-      employeeId,
-      periodMonth: month,
-      periodYear: year,
-      baseSalary: preview.baseSalary,
-      incentiveAmount,
-      bonusAmount,
-      bonusReason,
-      otherAdditionAmount: otherAdditionAmount ?? null,
-      otherAdditionReason,
-      otherDeductionAmount: otherDeductionAmount ?? null,
-      otherDeductionReason,
-      lateCount: preview.lateCount,
-      unpaidLeaveCount: preview.unpaidLeaveDays,
-      halfDayCount: preview.halfDays,
-      absentCount: preview.absentDays,
-      presentCount: preview.presentDays,
-      paidLeaveCount: preview.paidLeaveDays,
-      holidayCount: preview.holidayDays,
-      compensationCount: preview.compensationDays,
-      earnedBasePay: preview.earnedBasePay,
-      lateDeductionTotal: preview.lateDeductionTotal,
-      reimbursementTotal: preview.reimbursementTotal,
-      employeeOfMonthRef: preview.employeeOfMonthRef,
-      netPay: preview.netPay,
-      generatedById: session.userId,
-    },
+  const payslip = await prisma.$transaction(async (tx) => {
+    const created = await tx.payslip.create({
+      data: {
+        employeeId,
+        periodMonth: month,
+        periodYear: year,
+        baseSalary: preview.baseSalary,
+        incentiveAmount,
+        bonusAmount,
+        bonusReason,
+        otherAdditionAmount: otherAdditionAmount ?? null,
+        otherAdditionReason,
+        otherDeductionAmount: otherDeductionAmount ?? null,
+        otherDeductionReason,
+        lateCount: preview.lateCount,
+        unpaidLeaveCount: preview.unpaidLeaveDays,
+        halfDayCount: preview.halfDays,
+        absentCount: preview.absentDays,
+        presentCount: preview.presentDays,
+        paidLeaveCount: preview.paidLeaveDays,
+        holidayCount: preview.holidayDays,
+        compensationCount: preview.compensationDays,
+        earnedBasePay: preview.earnedBasePay,
+        lateDeductionTotal: preview.lateDeductionTotal,
+        reimbursementTotal: preview.reimbursementTotal,
+        employeeOfMonthRef: preview.employeeOfMonthRef,
+        netPay: preview.netPay,
+        generatedById: session.userId,
+      },
+    });
+    // Same list the preview showed — committed here so a credit can never be
+    // marked consumed without the payslip that consumed it actually existing.
+    await commitCompensationRedemptions(preview.compensationRedemptions, tx);
+    return created;
   });
 
   await audit({
@@ -116,6 +123,7 @@ export async function POST(req: Request) {
       earned_base_pay: preview.earnedBasePay,
       late_deduction_total: preview.lateDeductionTotal,
       reimbursement_total: preview.reimbursementTotal,
+      compensation_credits_redeemed: preview.compensationCreditsRedeemed,
     },
     ip: clientIp(req),
   });

@@ -10,6 +10,7 @@ import {
 } from "@/lib/payroll/calc";
 import { getApprovedReimbursementTotal } from "@/lib/requests/reimbursements";
 import { getEmployeeOfMonthStatus } from "@/lib/recognition/employee-of-month";
+import { computeCompensationRedemption, type CompensationRedemption } from "@/lib/attendance/compensation-credits";
 import { NotImplementedError } from "@/lib/errors";
 import { ErrorCode, type ErrorCodeValue } from "@/lib/api/response";
 
@@ -45,9 +46,18 @@ export type PayslipPreviewResult = {
   reimbursementTotal: number;
   employeeOfMonthRef: boolean;
   netPay: number;
+  /** Count of leave_unpaid days converted to paid via a compensation credit
+   *  (see lib/attendance/compensation-credits.ts) — already folded into
+   *  paidLeaveDays/unpaidLeaveDays above. */
+  compensationCreditsRedeemed: number;
+  /** The exact allocation behind compensationCreditsRedeemed — generate/
+   *  recompute commit this list transactionally so what was previewed is
+   *  exactly what gets persisted. */
+  compensationRedemptions: CompensationRedemption[];
   notes: {
     late_tracking_unavailable?: string;
     employee_of_month_unavailable?: string;
+    compensation_credits_redeemed?: string;
   };
 };
 
@@ -86,10 +96,17 @@ export async function computePayslipPreview(
   // count (present/half/paid-leave/holiday/compensation/unpaid/absent) comes
   // from the day-by-day monthly breakdown, which is holiday- and
   // Sunday-compensation-aware.
-  const [summary, breakdown] = await Promise.all([
+  const [summary, breakdown, compensationRedemptions] = await Promise.all([
     getAttendanceSummary(employeeId, month, year, config.lateGraceMinutes),
     getMonthlyAttendanceBreakdown(employeeId, month, year),
+    computeCompensationRedemption(employeeId, month, year),
   ]);
+
+  // Fold redemptions into the breakdown before they reach computeEarnedBasePay
+  // — each redeemed day moves from unpaid to paid, per the owner's "compensate
+  // for my leaves ... reflect in current month's payslip" requirement.
+  breakdown.paidLeaveDays += compensationRedemptions.length;
+  breakdown.unpaidLeaveDays = Math.max(0, breakdown.unpaidLeaveDays - compensationRedemptions.length);
 
   let reimbursementTotal: number;
   try {
@@ -168,6 +185,8 @@ export async function computePayslipPreview(
     reimbursementTotal,
     employeeOfMonthRef,
     netPay,
+    compensationCreditsRedeemed: compensationRedemptions.length,
+    compensationRedemptions,
     notes: {
       late_tracking_unavailable: summary.lateTrackingUnavailable
         ? "This employee's team has no expected_start_time configured — late count excludes those days."
@@ -175,6 +194,10 @@ export async function computePayslipPreview(
       employee_of_month_unavailable: employeeOfMonthUnavailable
         ? "Track B has not implemented getEmployeeOfMonthStatus yet — reference badge defaulted to false."
         : undefined,
+      compensation_credits_redeemed:
+        compensationRedemptions.length > 0
+          ? `${compensationRedemptions.length} unpaid-leave day(s) converted to paid using compensation credit(s) earned within the last 60 days.`
+          : undefined,
     },
   };
 }

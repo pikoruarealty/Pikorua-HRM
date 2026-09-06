@@ -5,6 +5,7 @@ import { requireRole, AuthzError, FINANCE_ROLES } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { computeHours, isImplausibleDuration, MAX_PLAUSIBLE_SHIFT_HOURS } from "@/lib/attendance/time";
 import { summariseSessions } from "@/lib/attendance/sessions";
+import { syncCompensationCreditForRecord } from "@/lib/attendance/compensation-credits";
 import { audit, clientIp } from "@/lib/audit";
 
 // Track A. PATCH /api/v1/attendance/:id/edit — Admin/HR. Edits the
@@ -142,6 +143,12 @@ export async function PATCH(
       ...(clearsReviewFlag ? { flaggedForReview: false, flagReason: null } : {}),
     },
   });
+
+  // is_compensation is the only field this route can change that affects
+  // credit qualification — skip the extra query otherwise.
+  if (parsed.data.is_compensation !== undefined) {
+    await syncCompensationCreditForRecord(updated.id);
+  }
 
   await audit({
     action: "attendance.edit",

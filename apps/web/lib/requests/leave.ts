@@ -5,7 +5,13 @@ import {
   countDaysClippedToPeriod,
   yearBounds,
   countDaysClippedToYear,
+  PAID_LEAVE_TYPES,
 } from "@/lib/requests/leave-math";
+
+// Leave-type overhaul (2026-09-06): leave_paid retired in favor of
+// leave_casual + leave_sick sharing one combined pool — every "paid leave"
+// query below now matches BOTH types instead of the old single leave_paid.
+const PAID_LEAVE_REQUEST_TYPES = PAID_LEAVE_TYPES.map((t) => RequestType[t]);
 
 // CROSS-TRACK CONTRACT — added 2026-07-13 (not in the original Phase 0
 // agreement, which only covered getApprovedReimbursementTotal and
@@ -64,12 +70,13 @@ export async function getApprovedUnpaidLeaveDays(
   return totalDays;
 }
 
-// Added 2026-08-07 (leave-balance feature, owner request). Mirrors
-// getApprovedUnpaidLeaveDays above but for `leave_paid` — count of APPROVED
-// paid-leave days for the employee, clipped to the given month. Used against
-// the admin-configured monthly allowance (lib/leave/config.ts) to show
-// used/remaining, not by payroll (payroll's earned-day math already counts
-// paid-leave days directly via lib/attendance/monthly-breakdown.ts).
+// Added 2026-08-07 (leave-balance feature, owner request). Count of APPROVED
+// paid-leave days (leave_casual + leave_sick, shared pool since the
+// 2026-09-06 leave-type overhaul) for the employee, clipped to the given
+// month. Used against the admin-configured monthly allowance
+// (lib/leave/config.ts) to show used/remaining, not by payroll (payroll's
+// earned-day math already counts paid-leave days directly via
+// lib/attendance/monthly-breakdown.ts).
 export async function getApprovedPaidLeaveDays(
   employeeId: string,
   month: number,
@@ -80,7 +87,7 @@ export async function getApprovedPaidLeaveDays(
   const requests = await prisma.request.findMany({
     where: {
       employeeId,
-      type: RequestType.leave_paid,
+      type: { in: PAID_LEAVE_REQUEST_TYPES },
       status: RequestStatus.approved,
       dateFrom: { lte: periodLastDay },
       dateTo: { gte: periodStart },
@@ -104,7 +111,7 @@ export async function getApprovedPaidLeaveDaysForYear(employeeId: string, year: 
   const requests = await prisma.request.findMany({
     where: {
       employeeId,
-      type: RequestType.leave_paid,
+      type: { in: PAID_LEAVE_REQUEST_TYPES },
       status: RequestStatus.approved,
       dateFrom: { lte: yearLastDay },
       dateTo: { gte: yearStart },
@@ -118,4 +125,27 @@ export async function getApprovedPaidLeaveDaysForYear(employeeId: string, year: 
     totalDays += countDaysClippedToYear(r.dateFrom, r.dateTo, year);
   }
   return totalDays;
+}
+
+/** Behind the monthly-cap auto-overflow at approval time (2026-09-06):
+ *  already-approved paid-leave-day counts for every calendar month touched
+ *  by [dateFrom, dateTo], keyed "YYYY-MM" — lets a request spanning a month
+ *  boundary reset its monthly cap correctly per month instead of treating
+ *  the whole range as one bucket. */
+export async function getApprovedPaidLeaveDaysByMonthsInRange(
+  employeeId: string,
+  dateFrom: Date,
+  dateTo: Date,
+): Promise<Map<string, number>> {
+  const result = new Map<string, number>();
+  const cursor = new Date(Date.UTC(dateFrom.getUTCFullYear(), dateFrom.getUTCMonth(), 1));
+  const end = new Date(Date.UTC(dateTo.getUTCFullYear(), dateTo.getUTCMonth(), 1));
+  while (cursor <= end) {
+    const month = cursor.getUTCMonth() + 1;
+    const year = cursor.getUTCFullYear();
+    const count = await getApprovedPaidLeaveDays(employeeId, month, year);
+    result.set(`${year}-${String(month).padStart(2, "0")}`, count);
+    cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+  }
+  return result;
 }

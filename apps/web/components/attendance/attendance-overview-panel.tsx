@@ -197,7 +197,11 @@ export function AttendanceOverviewPanel() {
                         {r.late && <Badge variant="destructive">late</Badge>}
                         {r.leaveType && (
                           <span className="text-xs text-muted-foreground">
-                            {r.leaveType === "leave_paid" ? "paid" : "unpaid"}
+                            {r.leaveType === "leave_casual"
+                              ? "casual"
+                              : r.leaveType === "leave_sick"
+                                ? "sick"
+                                : "unpaid"}
                           </span>
                         )}
                       </span>

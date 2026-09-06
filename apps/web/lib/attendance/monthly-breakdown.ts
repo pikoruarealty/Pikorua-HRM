@@ -2,6 +2,13 @@ import { AttendanceApprovalStatus, EmploymentType, RequestStatus, RequestType } 
 import { prisma } from "@/lib/db/prisma";
 import { addDays, buildMovedOffDateByWeek, isOffDay, resolveDefaultOffDay, weekStartOf } from "@/lib/attendance/week";
 import { dayCredit } from "@/lib/attendance/time";
+import { isPaidLeaveType } from "@/lib/requests/leave-math";
+
+// Leave-type overhaul (2026-09-06): leave_paid retired in favor of
+// leave_casual + leave_sick sharing one combined pool — every "which
+// requests count as leave" query below now matches all three leave types
+// instead of the old binary pair.
+const ALL_LEAVE_TYPES: RequestType[] = [RequestType.leave_casual, RequestType.leave_sick, RequestType.leave_unpaid];
 
 // Track A (2026-07-17). Reporting-only day-by-day attendance classification —
 // present/absent/leave/holiday/compensation counts for a calendar month.
@@ -140,7 +147,7 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
         else result.absentDays += 1;
       } else {
         const leaveType = lookups.leaveTypeByDate.get(key);
-        if (leaveType === RequestType.leave_paid) result.paidLeaveDays += 1;
+        if (leaveType && isPaidLeaveType(leaveType)) result.paidLeaveDays += 1;
         else if (leaveType === RequestType.leave_unpaid) result.unpaidLeaveDays += 1;
         else result.absentDays += 1;
       }
@@ -206,7 +213,7 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
         // quota shortfall picks it up as an absence below.
       } else {
         const leaveType = lookups.leaveTypeByDate.get(key);
-        if (leaveType === RequestType.leave_paid) weekPaidLeave += 1;
+        if (leaveType && isPaidLeaveType(leaveType)) weekPaidLeave += 1;
         else if (leaveType === RequestType.leave_unpaid) weekUnpaidLeave += 1;
       }
     }
@@ -309,8 +316,11 @@ export function expectedWorkingDaysInMonth(
 }
 
 /** Effective default off-day + this employee's active WeeklyOffMoves overlapping
- *  [rangeStart, rangeEnd) — the context isOffDay() and classification need. */
-async function getOffDayContext(
+ *  [rangeStart, rangeEnd) — the context isOffDay() and classification need.
+ *  Exported (2026-09-06) for lib/attendance/compensation-credits.ts, which
+ *  needs the same off-day/flexible-schedule context to decide whether a
+ *  single attendance record qualifies for automatic credit issuance. */
+export async function getOffDayContext(
   employeeId: string,
   rangeStart: Date,
   rangeEnd: Date,
@@ -378,7 +388,7 @@ export async function getMonthlyAttendanceBreakdown(
     prisma.request.findMany({
       where: {
         employeeId,
-        type: { in: [RequestType.leave_paid, RequestType.leave_unpaid] },
+        type: { in: ALL_LEAVE_TYPES },
         status: RequestStatus.approved,
         dateFrom: { lte: new Date(periodEnd.getTime() - MS_PER_DAY) },
         dateTo: { gte: periodStart },
@@ -526,7 +536,7 @@ export async function getMonthlyAttendanceBreakdownForAllEmployees(
     }),
     prisma.request.findMany({
       where: {
-        type: { in: [RequestType.leave_paid, RequestType.leave_unpaid] },
+        type: { in: ALL_LEAVE_TYPES },
         status: RequestStatus.approved,
         dateFrom: { lte: new Date(periodEnd.getTime() - MS_PER_DAY) },
         dateTo: { gte: periodStart },

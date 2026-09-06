@@ -10,6 +10,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { apiFetch } from "@/components/_lib/api";
+import { isPaidLeaveType, type LeaveDayType } from "@/lib/requests/leave-math";
 
 type EmployeeSummary = {
   id: string;
@@ -36,12 +37,17 @@ type RequestRow = {
 };
 
 const TYPE_LABELS: Record<string, string> = {
-  leave_paid: "Paid leave",
+  leave_casual: "Casual leave",
+  leave_sick: "Sick leave",
   leave_unpaid: "Unpaid leave",
   reimbursement: "Reimbursement",
   wfh: "Work from home",
   other: "Other",
 };
+
+function dayTypeLabel(t: string): string {
+  return t === "leave_casual" ? "Casual" : t === "leave_sick" ? "Sick" : "Unpaid";
+}
 
 const STATUS_VARIANT: Record<string, "outline" | "success" | "warning" | "muted"> = {
   pending: "warning",
@@ -56,6 +62,7 @@ type LeaveBalance = {
   periodYear: number;
   month: { allowance: number; used: number; compensated: number; remaining: number };
   year: { allowance: number; used: number; compensated: number; remaining: number };
+  compensationCredits: { activeCount: number; nearestExpiry: string | null };
 };
 
 function fmtDate(d?: string | null) {
@@ -79,7 +86,7 @@ export function RequestsScreen() {
   const [editSubmitting, setEditSubmitting] = useState(false);
 
   // Submit form
-  const [type, setType] = useState("leave_paid");
+  const [type, setType] = useState("leave_casual");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [amount, setAmount] = useState("");
@@ -121,12 +128,12 @@ export function RequestsScreen() {
     });
   }, []);
 
-  const isLeave = type === "leave_paid" || type === "leave_unpaid";
+  const isLeave = isPaidLeaveType(type) || type === "leave_unpaid";
   // Only offer paid leave once there's actual balance left to spend — before
   // the balance loads, don't hide it on a false "0 remaining" flash.
   const hasPaidLeaveBalance = !balance || balance.month.remaining > 0 || balance.year.remaining > 0;
   useEffect(() => {
-    if (type === "leave_paid" && balance && !hasPaidLeaveBalance) {
+    if (isPaidLeaveType(type) && balance && !hasPaidLeaveBalance) {
       setType("leave_unpaid");
     }
   }, [balance, hasPaidLeaveBalance, type]);
@@ -198,7 +205,7 @@ export function RequestsScreen() {
   // individual days of a multi-day leave request to the other paid/unpaid
   // type before confirming, instead of only all-or-nothing approval.
   const [splittingId, setSplittingId] = useState<string | null>(null);
-  const [dayTypes, setDayTypes] = useState<Record<string, "leave_paid" | "leave_unpaid">>({});
+  const [dayTypes, setDayTypes] = useState<Record<string, LeaveDayType>>({});
 
   function datesInRange(from: string, to: string): string[] {
     const dates: string[] = [];
@@ -213,15 +220,18 @@ export function RequestsScreen() {
   function openSplit(r: RequestRow) {
     if (!r.dateFrom || !r.dateTo) return;
     const dates = datesInRange(r.dateFrom, r.dateTo);
-    const base = r.type as "leave_paid" | "leave_unpaid";
+    const base = r.type as LeaveDayType;
     setDayTypes(Object.fromEntries(dates.map((d) => [d, base])));
     setSplittingId(r.id);
   }
 
-  function toggleDayType(date: string) {
+  // Toggling flips a day between the request's own base type (casual/sick)
+  // and unpaid — a day never becomes a *different* paid type than the
+  // request it belongs to.
+  function toggleDayType(date: string, baseType: LeaveDayType) {
     setDayTypes((prev) => ({
       ...prev,
-      [date]: prev[date] === "leave_paid" ? "leave_unpaid" : "leave_paid",
+      [date]: prev[date] === "leave_unpaid" ? baseType : "leave_unpaid",
     }));
   }
 
@@ -231,6 +241,19 @@ export function RequestsScreen() {
       .map(([date, type]) => ({ date, type }));
     await decide(r.id, "approve", overrides.length > 0 ? { day_overrides: overrides } : undefined);
     setSplittingId(null);
+  }
+
+  // Admin-only escape hatch (2026-09-06, owner request): normal approval
+  // auto-converts any days beyond the employee's monthly/annual paid-leave
+  // cap to unpaid. This skips that auto-conversion entirely and approves the
+  // whole range as paid, drawing down the employee's annual balance instead.
+  async function approveWithCapOverride(r: RequestRow) {
+    const reason = prompt("Reason for allowing paid leave over the monthly cap?");
+    if (!reason || reason.trim().length < 3) {
+      if (reason !== null) setActionError("A reason of at least 3 characters is required.");
+      return;
+    }
+    await decide(r.id, "approve", { override_monthly_cap: true, reason: reason.trim() });
   }
 
   async function override(id: string, status: "pending" | "approved" | "rejected") {
@@ -261,7 +284,7 @@ export function RequestsScreen() {
   async function saveEdit(r: RequestRow) {
     setEditSubmitting(true);
     setActionError(null);
-    const isLeaveRow = r.type === "leave_paid" || r.type === "leave_unpaid";
+    const isLeaveRow = isPaidLeaveType(r.type) || r.type === "leave_unpaid";
     const body: Record<string, unknown> = { description: editDescription || undefined };
     if (isLeaveRow) {
       body.dateFrom = editDateFrom;
@@ -324,6 +347,16 @@ export function RequestsScreen() {
                 back this year.
               </p>
             )}
+            {balance.compensationCredits.activeCount > 0 && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                You have {balance.compensationCredits.activeCount} compensation credit
+                {balance.compensationCredits.activeCount === 1 ? "" : "s"} available for coming in on a weekly off
+                {balance.compensationCredits.nearestExpiry && (
+                  <> — the soonest expires {fmtDate(balance.compensationCredits.nearestExpiry)}</>
+                )}
+                . Approved unpaid leave within 60 days of earning a credit is automatically converted to paid.
+              </p>
+            )}
           </CardContent>
         </Card>
       )}
@@ -355,7 +388,8 @@ export function RequestsScreen() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {hasPaidLeaveBalance && <SelectItem value="leave_paid">Paid leave</SelectItem>}
+                    {hasPaidLeaveBalance && <SelectItem value="leave_casual">Casual leave</SelectItem>}
+                    {hasPaidLeaveBalance && <SelectItem value="leave_sick">Sick leave</SelectItem>}
                     <SelectItem value="leave_unpaid">Unpaid leave</SelectItem>
                     <SelectItem value="reimbursement">Reimbursement</SelectItem>
                   </SelectContent>
@@ -424,7 +458,8 @@ export function RequestsScreen() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All types</SelectItem>
-                  <SelectItem value="leave_paid">Paid leave</SelectItem>
+                  <SelectItem value="leave_casual">Casual leave</SelectItem>
+                  <SelectItem value="leave_sick">Sick leave</SelectItem>
                   <SelectItem value="leave_unpaid">Unpaid leave</SelectItem>
                   <SelectItem value="reimbursement">Reimbursement</SelectItem>
                 </SelectContent>
@@ -492,7 +527,7 @@ export function RequestsScreen() {
 
                 {editingId === r.id ? (
                   <div className="flex flex-wrap items-end gap-3 rounded border bg-muted/30 p-3">
-                    {(r.type === "leave_paid" || r.type === "leave_unpaid") ? (
+                    {(isPaidLeaveType(r.type) || r.type === "leave_unpaid") ? (
                       <>
                         <div className="flex flex-col gap-1.5">
                           <Label className="text-xs">Date from</Label>
@@ -555,24 +590,25 @@ export function RequestsScreen() {
                 {splittingId === r.id && r.dateFrom && r.dateTo && (
                   <div className="flex flex-col gap-2 rounded-md border bg-muted/30 p-3">
                     <p className="text-xs text-muted-foreground">
-                      Click a day to toggle it between paid and unpaid before approving. Unpaid days are
-                      deducted from pay; paid days are not.
+                      Click a day to toggle it between {dayTypeLabel(r.type).toLowerCase()} and unpaid before
+                      approving. Unpaid days are deducted from pay; {dayTypeLabel(r.type).toLowerCase()} days
+                      are not.
                     </p>
                     <div className="flex flex-wrap gap-1.5">
                       {datesInRange(r.dateFrom, r.dateTo).map((date) => {
-                        const dType = dayTypes[date] ?? r.type;
+                        const dType = (dayTypes[date] ?? r.type) as LeaveDayType;
                         return (
                           <button
                             type="button"
                             key={date}
-                            onClick={() => toggleDayType(date)}
+                            onClick={() => toggleDayType(date, r.type as LeaveDayType)}
                             className={`rounded-md border px-2 py-1 text-xs ${
-                              dType === "leave_paid"
+                              dType !== "leave_unpaid"
                                 ? "border-emerald-600 bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
                                 : "border-amber-600 bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
                             }`}
                           >
-                            {fmtDate(date)} · {dType === "leave_paid" ? "Paid" : "Unpaid"}
+                            {fmtDate(date)} · {dayTypeLabel(dType)}
                           </button>
                         );
                       })}
@@ -616,7 +652,7 @@ export function RequestsScreen() {
                           size="sm"
                           variant="outline"
                           onClick={() => {
-                            const isLeaveRow = r.type === "leave_paid" || r.type === "leave_unpaid";
+                            const isLeaveRow = isPaidLeaveType(r.type) || r.type === "leave_unpaid";
                             const isMultiDay = r.dateFrom && r.dateTo && r.dateFrom.slice(0, 10) !== r.dateTo.slice(0, 10);
                             if (isLeaveRow && isMultiDay) openSplit(r);
                             else decide(r.id, "approve");
@@ -624,6 +660,11 @@ export function RequestsScreen() {
                         >
                           Approve
                         </Button>
+                        {isAdmin && isPaidLeaveType(r.type) && (
+                          <Button size="sm" variant="outline" onClick={() => approveWithCapOverride(r)}>
+                            Approve (allow over cap)
+                          </Button>
+                        )}
                         <Button size="sm" variant="destructive" onClick={() => decide(r.id, "reject")}>
                           Reject
                         </Button>

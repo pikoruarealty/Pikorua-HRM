@@ -57,12 +57,15 @@ function fmt(iso: string | null) {
 export function AttendanceScreen({
   canReview,
   canSeeAll,
+  isAdmin,
   employeeId,
 }: {
   /** Admin/HR — can edit + approve, and use the manual-record override form. */
   canReview: boolean;
   /** Admin/HR or Lead — sees more than just their own records. */
   canSeeAll: boolean;
+  /** Admin only — can force-delete any attendance record, including approved history. */
+  isAdmin: boolean;
   employeeId: string | null;
 }) {
   return (
@@ -81,7 +84,7 @@ export function AttendanceScreen({
       {canReview && <AttendanceOverviewPanel />}
 
       {/* Attendance Records sits right after the daily overview */}
-      <AttendanceTable canReview={canReview} canSeeAll={canSeeAll} employeeId={employeeId} />
+      <AttendanceTable canReview={canReview} canSeeAll={canSeeAll} isAdmin={isAdmin} employeeId={employeeId} />
 
       {canReview && <AttendanceMonthlyPanel />}
 
@@ -99,10 +102,12 @@ const PAGE_SIZE = 10;
 function AttendanceTable({
   canReview,
   canSeeAll,
+  isAdmin,
   employeeId,
 }: {
   canReview: boolean;
   canSeeAll: boolean;
+  isAdmin: boolean;
   employeeId: string | null;
 }) {
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
@@ -162,6 +167,36 @@ function AttendanceTable({
       setRecords((prev) => prev.filter((r) => r.id !== id));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to remove record.");
+    } finally {
+      setRemovingId(null);
+    }
+  }
+
+  // Admin-only override (2026-09-06, owner request): unlike removeRecord
+  // above, this bypasses the "phantom/incomplete only" guard server-side and
+  // can delete any record, including approved history. Requires a reason,
+  // collected here rather than via a plain confirm() since it's audited.
+  async function forceDeleteRecord(id: string) {
+    const reason = window.prompt(
+      "This permanently deletes the attendance record, including approved history. Enter a reason to continue:",
+    );
+    if (!reason || reason.trim().length < 3) {
+      if (reason !== null) setError("A reason of at least 3 characters is required to force-delete a record.");
+      return;
+    }
+    setRemovingId(id);
+    setError(null);
+    try {
+      await getJson(
+        await fetch(`/api/v1/attendance/${id}`, {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ admin_override: true, reason: reason.trim() }),
+        }),
+      );
+      setRecords((prev) => prev.filter((r) => r.id !== id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to delete record.");
     } finally {
       setRemovingId(null);
     }
@@ -337,6 +372,21 @@ function AttendanceTable({
                                       onClick={() => removeRecord(r.id)}
                                     >
                                       {removingId === r.id ? "Removing…" : "Remove"}
+                                    </Button>
+                                  )}
+                                  {/* Admin-only force-delete: unlike Remove above, shown on
+                                      every record (including approved/clocked ones) and
+                                      requires a reason — the route bypasses its usual
+                                      phantom-only guard only for this call. */}
+                                  {isAdmin && (
+                                    <Button
+                                      variant="destructive"
+                                      size="sm"
+                                      disabled={removingId === r.id}
+                                      onClick={() => forceDeleteRecord(r.id)}
+                                      title="Admin override: permanently delete this record, including approved history."
+                                    >
+                                      {removingId === r.id ? "Deleting…" : "Delete (admin)"}
                                     </Button>
                                   )}
                                 </div>

@@ -24,7 +24,9 @@ function canSubmitRoles(): readonly string[] {
 
 // Track B. GET/POST /api/v1/requests — Milestone 1.3 (leave) + 2.4 (reimbursement).
 
-const LEAVE_TYPES: RequestType[] = [RequestType.leave_paid, RequestType.leave_unpaid];
+// Leave-type overhaul (2026-09-06): leave_paid retired in favor of
+// leave_casual + leave_sick (shared balance pool — see lib/requests/leave-math.ts).
+const LEAVE_TYPES: RequestType[] = [RequestType.leave_casual, RequestType.leave_sick, RequestType.leave_unpaid];
 
 // The employee summary shown on every request row so approvers see *who* filed
 // it and non-finance viewers still get context. Financial fields are redacted
@@ -70,7 +72,8 @@ const createSchema = z
   .strict();
 
 const REQUEST_TYPE_LABELS: Record<RequestType, string> = {
-  [RequestType.leave_paid]: "paid leave",
+  [RequestType.leave_casual]: "casual leave",
+  [RequestType.leave_sick]: "sick leave",
   [RequestType.leave_unpaid]: "unpaid leave",
   [RequestType.reimbursement]: "reimbursement",
   [RequestType.wfh]: "work-from-home",

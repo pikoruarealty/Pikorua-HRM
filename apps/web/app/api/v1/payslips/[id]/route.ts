@@ -5,6 +5,7 @@ import { FINANCE_ROLES, Role } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { isUuid } from "@/lib/api/params";
 import { audit, clientIp } from "@/lib/audit";
+import { rollbackCompensationRedemptionsForPeriod } from "@/lib/attendance/compensation-credits";
 
 // Track A. GET /api/v1/payslips/:id — Admin/HR (any), Employee (self only,
 // and only if finalized — drafts are never visible to the employee).
@@ -73,7 +74,13 @@ export async function DELETE(
     return failFor(ErrorCode.CONFLICT, "Only draft payslips can be deleted — unfinalize first.");
   }
 
-  await prisma.payslip.delete({ where: { id: params.id } });
+  await prisma.$transaction(async (tx) => {
+    // A deleted draft must not silently burn the compensation credits it
+    // consumed — release them back to the pool so a subsequent regenerate
+    // can redeem them again.
+    await rollbackCompensationRedemptionsForPeriod(payslip.employeeId, payslip.periodMonth, payslip.periodYear, tx);
+    await tx.payslip.delete({ where: { id: params.id } });
+  });
 
   await audit({
     action: "payslip.delete_draft",

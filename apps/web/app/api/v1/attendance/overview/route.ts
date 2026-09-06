@@ -61,7 +61,7 @@ export async function GET(req: Request) {
     prisma.attendanceRecord.findMany({ where: { date } }),
     prisma.request.findMany({
       where: {
-        type: { in: [RequestType.leave_paid, RequestType.leave_unpaid] },
+        type: { in: [RequestType.leave_casual, RequestType.leave_sick, RequestType.leave_unpaid] },
         status: RequestStatus.approved,
         dateFrom: { lte: date },
         dateTo: { gte: date },

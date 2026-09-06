@@ -38,13 +38,17 @@ function proratedAnnualAllowance(annual: number, dateOfJoining: Date, year: numb
   return Math.round(((annual * monthsWorked) / 12) * 2) / 2;
 }
 
-export async function getLeaveBalance(
+/** The raw (un-prorated, pre-joining-check) monthly/yearly paid-leave caps
+ *  for an employee's employment type, from whichever LeaveConfig row is
+ *  effective for the given month/year. Factored out of getLeaveBalance
+ *  (2026-09-06) so the approve route's monthly-cap auto-overflow can look up
+ *  the same caps without duplicating the employment-type branching. */
+export async function getEffectivePaidLeaveCaps(
   employeeId: string,
   month: number,
   year: number,
-  dateOfJoining?: Date,
   employmentType?: EmploymentType,
-): Promise<LeaveBalance> {
+): Promise<{ monthlyCap: number; yearlyCap: number }> {
   const config = await getEffectiveLeaveConfig(month, year);
   const empType =
     employmentType ??
@@ -56,22 +60,43 @@ export async function getLeaveBalance(
     )?.employmentType ??
     EmploymentType.fulltime;
 
+  if (empType === EmploymentType.parttime) {
+    return {
+      monthlyCap: config?.partTimePaidLeavesPerMonth ?? config?.paidLeavesPerMonth ?? 0,
+      yearlyCap: config?.partTimePaidLeavesPerYear ?? config?.paidLeavesPerYear ?? 0,
+    };
+  }
+  if (empType === EmploymentType.intern) {
+    return {
+      monthlyCap: config?.internPaidLeavesPerMonth ?? config?.paidLeavesPerMonth ?? 0,
+      yearlyCap: config?.internPaidLeavesPerYear ?? config?.paidLeavesPerYear ?? 0,
+    };
+  }
+  return {
+    monthlyCap: config?.paidLeavesPerMonth ?? 0,
+    yearlyCap: config?.paidLeavesPerYear ?? 0,
+  };
+}
+
+export async function getLeaveBalance(
+  employeeId: string,
+  month: number,
+  year: number,
+  dateOfJoining?: Date,
+  employmentType?: EmploymentType,
+): Promise<LeaveBalance> {
+  const { monthlyCap: rawMonth, yearlyCap: rawYear } = await getEffectivePaidLeaveCaps(
+    employeeId,
+    month,
+    year,
+    employmentType,
+  );
+
   // Before the employee's joining month/year, they hadn't accrued anything.
   const beforeJoining =
     dateOfJoining &&
     (year < dateOfJoining.getUTCFullYear() ||
       (year === dateOfJoining.getUTCFullYear() && month < dateOfJoining.getUTCMonth() + 1));
-
-  let rawMonth = config?.paidLeavesPerMonth ?? 0;
-  let rawYear = config?.paidLeavesPerYear ?? 0;
-
-  if (empType === EmploymentType.parttime) {
-    rawMonth = config?.partTimePaidLeavesPerMonth ?? config?.paidLeavesPerMonth ?? 0;
-    rawYear = config?.partTimePaidLeavesPerYear ?? config?.paidLeavesPerYear ?? 0;
-  } else if (empType === EmploymentType.intern) {
-    rawMonth = config?.internPaidLeavesPerMonth ?? config?.paidLeavesPerMonth ?? 0;
-    rawYear = config?.internPaidLeavesPerYear ?? config?.paidLeavesPerYear ?? 0;
-  }
 
   const allowanceMonth = beforeJoining ? 0 : rawMonth;
   const allowanceYear = dateOfJoining
