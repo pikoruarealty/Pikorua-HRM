@@ -35,6 +35,12 @@ export type MonthlyBreakdown = {
   compensationDays: number;
   /** Expected working days considered so far (present+half+holiday+paidLeave+unpaidLeave+absent). */
   workingDaysElapsed: number;
+  /** The actual dates behind absentDays — fixed-schedule employees only (see
+   *  isFlexible below); a flexible employee's absences are a weekly-aggregate
+   *  shortfall with no single date to anchor to, so this stays empty for
+   *  them. Added 2026-09-18 so lib/attendance/compensation-credits.ts can
+   *  redeem a credit against a specific absent day, not just a count. */
+  absentDates: Date[];
 };
 
 type DayAttendance = {
@@ -101,6 +107,7 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
     absentDays: 0,
     compensationDays: 0,
     workingDaysElapsed: 0,
+    absentDates: [],
   };
 
   const through = lastElapsedDay(month, year);
@@ -144,12 +151,18 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
         const credit = dayCredit(attendance.totalHours, attendance.isHalfDay);
         if (credit === 1) result.presentDays += 1;
         else if (credit === 0.5) result.halfDays += 1;
-        else result.absentDays += 1;
+        else {
+          result.absentDays += 1;
+          result.absentDates.push(date);
+        }
       } else {
         const leaveType = lookups.leaveTypeByDate.get(key);
         if (leaveType && isPaidLeaveType(leaveType)) result.paidLeaveDays += 1;
         else if (leaveType === RequestType.leave_unpaid) result.unpaidLeaveDays += 1;
-        else result.absentDays += 1;
+        else {
+          result.absentDays += 1;
+          result.absentDates.push(date);
+        }
       }
     }
 
@@ -428,62 +441,6 @@ export async function getMonthlyAttendanceBreakdown(
   const holidayDates = new Set(holidays.map((h) => dateKey(h.date)));
 
   return classifyMonth(month, year, { attendanceByDate, leaveTypeByDate, holidayDates, ...offDayContext });
-}
-
-/** Count of compensation days for one employee within an arbitrary inclusive
- *  date range — used by leave balance to credit compensation days back. */
-export async function getCompensationDaysInRange(
-  employeeId: string,
-  start: Date,
-  end: Date,
-): Promise<number> {
-  const [records, offDayContext] = await Promise.all([
-    prisma.attendanceRecord.findMany({
-      where: {
-        employeeId,
-        approvalStatus: AttendanceApprovalStatus.approved,
-        // OR, not just clockInApproved: a device-synced day never sets that
-        // field (see the hasClockIn fallback above) and was being dropped
-        // from compensation-day counting entirely as a result.
-        OR: [{ clockInApproved: { not: null } }, { clockInRaw: { not: null } }],
-        date: { gte: start, lte: end },
-      },
-      select: { date: true, isCompensation: true },
-    }),
-    getOffDayContext(employeeId, start, end),
-  ]);
-
-  if (
-    offDayContext.employmentType &&
-    offDayContext.employmentType !== "fulltime" &&
-    offDayContext.requiredDaysPerWeek != null &&
-    offDayContext.requiredDaysPerWeek > 0
-  ) {
-    const req = offDayContext.requiredDaysPerWeek;
-    const recordsByWeek = new Map<string, { total: number; manualComp: number }>();
-    for (const r of records) {
-      const wKey = dateKey(weekStartOf(r.date));
-      let entry = recordsByWeek.get(wKey);
-      if (!entry) {
-        entry = { total: 0, manualComp: 0 };
-        recordsByWeek.set(wKey, entry);
-      }
-      if (r.isCompensation) {
-        entry.manualComp += 1;
-      } else {
-        entry.total += 1;
-      }
-    }
-    let totalComp = 0;
-    for (const w of recordsByWeek.values()) {
-      totalComp += w.manualComp + Math.max(0, w.total - req);
-    }
-    return totalComp;
-  }
-
-  return records.filter(
-    (r) => r.isCompensation || isOffDay(r.date, offDayContext.defaultOffDay, offDayContext.movedOffDateByWeek),
-  ).length;
 }
 
 export type EmployeeMonthlyBreakdown = MonthlyBreakdown & {

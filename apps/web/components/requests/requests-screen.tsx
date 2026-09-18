@@ -343,8 +343,8 @@ export function RequestsScreen() {
             )}
             {(balance.month.compensated > 0 || balance.year.compensated > 0) && (
               <p className="mt-3 text-xs text-muted-foreground">
-                Includes {balance.year.compensated} compensation day{balance.year.compensated === 1 ? "" : "s"} credited
-                back this year.
+                Includes {balance.year.compensated} compensation credit{balance.year.compensated === 1 ? "" : "s"} that
+                expired unused and were credited back this year.
               </p>
             )}
             {balance.compensationCredits.activeCount > 0 && (
@@ -354,7 +354,8 @@ export function RequestsScreen() {
                 {balance.compensationCredits.nearestExpiry && (
                   <> — the soonest expires {fmtDate(balance.compensationCredits.nearestExpiry)}</>
                 )}
-                . Approved unpaid leave within 60 days of earning a credit is automatically converted to paid.
+                . Each credit first covers an absent day, then an approved unpaid-leave day, within 60 days of being
+                earned — only if it expires without covering anything does it add to your leave balance instead.
               </p>
             )}
           </CardContent>

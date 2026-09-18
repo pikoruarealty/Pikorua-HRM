@@ -51,7 +51,12 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       },
       select: { id: true, consumedForDate: true, consumedForRequestId: true },
     })
-  ).map((c) => ({ creditId: c.id, date: c.consumedForDate!, requestId: c.consumedForRequestId! }));
+  ).map((c) => ({
+    creditId: c.id,
+    date: c.consumedForDate!,
+    requestId: c.consumedForRequestId,
+    kind: (c.consumedForRequestId ? "unpaid_leave" : "absence") as CompensationRedemption["kind"],
+  }));
 
   await rollbackCompensationRedemptionsForPeriod(payslip.employeeId, payslip.periodMonth, payslip.periodYear);
 

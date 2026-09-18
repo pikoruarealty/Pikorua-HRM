@@ -2,21 +2,22 @@ import { EmploymentType } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { getEffectiveLeaveConfig } from "@/lib/leave/config";
 import { getApprovedPaidLeaveDays, getApprovedPaidLeaveDaysForYear } from "@/lib/requests/leave";
-import { getCompensationDaysInRange } from "@/lib/attendance/monthly-breakdown";
+import { getExpiredUnusedCreditCount } from "@/lib/attendance/compensation-credits";
 import { periodBounds, yearBounds } from "@/lib/requests/leave-math";
 
 // Leave balance (2026-08-07, owner request). Combines the admin-configured
 // allowance with actual usage to show an employee "used X, Y remaining" for
 // both the current month and the current year.
 //
-// Compensation credit: a compensation day (Sunday clock-in, or an admin
-// manually flagging a weekday record — see monthly-breakdown.ts) ADDS BACK
-// to remaining, on the idea that coming in to compensate for a leave earns
-// that leave day back. remaining = allowance - used + compensated, floored
-// at 0. This is a reasonable reading of "when compensated the leave
-// counters should go up," not a stakeholder-confirmed formula — flag if the
-// intended relationship is different (e.g. compensation should only offset
-// unpaid leave, not add on top of the paid allowance).
+// Compensation credit (reworked 2026-09-18, owner request): a credit's whole
+// job is to redeem a specific absent/unpaid-leave day within its 60-day
+// window — see lib/attendance/compensation-credits.ts. It does NOT add to
+// `remaining` the moment it's earned. Only once a credit expires having
+// covered nothing at all does it convert into a paid-leave-balance day
+// (getExpiredUnusedCreditCount) — "compensate for the absent days first,
+// and only if there's nothing left to compensate, add to the leave
+// balance." remaining = allowance - used + compensated, floored at 0, where
+// `compensated` now counts only genuinely-unused, expired credits.
 export type LeaveBalance = {
   month: { allowance: number; used: number; compensated: number; remaining: number };
   year: { allowance: number; used: number; compensated: number; remaining: number };
@@ -109,8 +110,8 @@ export async function getLeaveBalance(
   const [usedMonth, usedYear, compensatedMonth, compensatedYear] = await Promise.all([
     getApprovedPaidLeaveDays(employeeId, month, year),
     getApprovedPaidLeaveDaysForYear(employeeId, year),
-    getCompensationDaysInRange(employeeId, monthStart, monthEnd),
-    getCompensationDaysInRange(employeeId, yearStart, yearEnd),
+    getExpiredUnusedCreditCount(employeeId, monthStart, monthEnd),
+    getExpiredUnusedCreditCount(employeeId, yearStart, yearEnd),
   ]);
 
   return {

@@ -1,4 +1,4 @@
-import { SalesMetric, WorkItemFrequency, WorkItemMode } from "@prisma/client";
+import { SalesMetric, WorkItemFrequency, WorkItemMode, WorkItemStatus } from "@prisma/client";
 import { Role } from "@/lib/rbac";
 import { prisma } from "@/lib/db/prisma";
 import { createLogger } from "@/lib/log";
@@ -97,6 +97,18 @@ type PeriodKey = { periodYear: number; periodMonth: number; periodDay: number | 
  * the sync and the rollover cron cannot drift into creating two rival rows.
  *
  * Idempotent: a second call in the same period returns the same row.
+ *
+ * Daily metrics (calls) are a standing counter, not a new row per day
+ * (2026-09-18, owner request: "the calls won't [get] rolled over if not
+ * completed — just reset the counter"). The full day-by-day call history
+ * already lives in SalesActivitySync (crm-sync.ts persists it independently
+ * of this WorkItem, and write-through.ts recomputes currentValue from it on
+ * every sync), so a new row every day bought nothing but a rep's task list
+ * filling up with stale, never-completed "Calls" rows for every day they
+ * missed target. One row is kept per (rep, metric) and reset in place — same
+ * id, target/currentValue/period refreshed — when the day rolls over. Monthly
+ * metrics (site visits, bookings) are unaffected: a new row per month is the
+ * correct cadence there, not a stacking bug.
  */
 export async function ensureSalesWorkItem(args: {
   employeeId: string;
@@ -107,6 +119,58 @@ export async function ensureSalesWorkItem(args: {
 }): Promise<string | null> {
   const { employeeId, metric, period, targetValue } = args;
 
+  if (period.periodDay !== null) {
+    const existing = await prisma.workItem.findFirst({
+      where: { assignedTo: employeeId, mode: WorkItemMode.metric, salesMetric: metric, deletedAt: null },
+      select: { id: true, periodYear: true, periodMonth: true, periodDay: true },
+    });
+
+    if (!existing) {
+      const subUnitId = await ensureSalesContainer(args.departmentId);
+      if (!subUnitId) return null;
+      const created = await prisma.workItem.create({
+        data: {
+          subUnitId,
+          assignedTo: employeeId,
+          title: METRIC_TITLES[metric],
+          mode: WorkItemMode.metric,
+          salesMetric: metric,
+          frequency: WorkItemFrequency.daily,
+          targetValue,
+          currentValue: 0,
+          periodYear: period.periodYear,
+          periodMonth: period.periodMonth,
+          periodDay: period.periodDay,
+          repeatDaily: true,
+        },
+        select: { id: true },
+      });
+      return created.id;
+    }
+
+    const isNewDay =
+      existing.periodYear !== period.periodYear ||
+      existing.periodMonth !== period.periodMonth ||
+      existing.periodDay !== period.periodDay;
+    if (isNewDay) {
+      await prisma.workItem.update({
+        where: { id: existing.id },
+        data: {
+          periodYear: period.periodYear,
+          periodMonth: period.periodMonth,
+          periodDay: period.periodDay,
+          targetValue,
+          currentValue: 0,
+          status: WorkItemStatus.pending,
+          completedAt: null,
+        },
+      });
+    }
+    return existing.id;
+  }
+
+  // Monthly metrics: one row per month, as before — a genuinely new period,
+  // not a daily reset.
   const existing = await prisma.workItem.findFirst({
     where: {
       assignedTo: employeeId,
@@ -131,16 +195,13 @@ export async function ensureSalesWorkItem(args: {
       title: METRIC_TITLES[metric],
       mode: WorkItemMode.metric,
       salesMetric: metric,
-      frequency: period.periodDay === null ? WorkItemFrequency.monthly : WorkItemFrequency.daily,
+      frequency: WorkItemFrequency.monthly,
       targetValue,
       currentValue: 0,
       periodYear: period.periodYear,
       periodMonth: period.periodMonth,
       periodDay: period.periodDay,
-      // The daily calls row is regenerated per day by the rollover cron, which
-      // keys off this flag. The monthly rows are per-month by construction and
-      // must not be cloned daily.
-      repeatDaily: period.periodDay !== null,
+      repeatDaily: false,
     },
     select: { id: true },
   });

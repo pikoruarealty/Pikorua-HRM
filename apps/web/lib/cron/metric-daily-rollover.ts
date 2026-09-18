@@ -9,10 +9,16 @@ import { provisionSalesTargets } from "@/lib/sales/provisioning";
 //
 // Two kinds of recurrence, one job:
 //
-//  1. METRIC daily-frequency items — "a new row per day" (mirrors the manual
-//     monthly-per-period pattern, just automated; nobody will hand-create a
-//     fresh row every single day the way Leads do monthly). Clones the most
-//     recent non-deleted row per (subUnitId, assignedTo) forward to today.
+//  1. METRIC daily-frequency items with no salesMetric — "a new row per day"
+//     (mirrors the manual monthly-per-period pattern, just automated; nobody
+//     will hand-create a fresh row every single day the way Leads do
+//     monthly). Clones the most recent non-deleted row per (subUnitId,
+//     assignedTo) forward to today. CRM-fed sales metrics (calls) are
+//     deliberately excluded here — those are a standing counter reset in
+//     place by ensureSalesWorkItem/provisionSalesTargets (2026-09-18), not
+//     cloned, because their full history already lives in SalesActivitySync
+//     and a new row per day just piled up as stale, never-completed tasks in
+//     a rep's own task list.
 //
 //  2. ATOMIC items flagged `repeatDaily` (2026-08-10, owner request: "for the
 //     other departments also like bde when any task is added give option to
@@ -35,7 +41,12 @@ function todayUTC(): { year: number; month: number; day: number } {
 
 async function rollMetricItems(year: number, month: number, day: number): Promise<number> {
   const dailyItems = await prisma.workItem.findMany({
-    where: { mode: WorkItemMode.metric, frequency: WorkItemFrequency.daily, deletedAt: null },
+    where: {
+      mode: WorkItemMode.metric,
+      frequency: WorkItemFrequency.daily,
+      salesMetric: null,
+      deletedAt: null,
+    },
     orderBy: [{ periodYear: "desc" }, { periodMonth: "desc" }, { periodDay: "desc" }],
   });
 

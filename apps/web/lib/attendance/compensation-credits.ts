@@ -6,7 +6,7 @@ import { prisma } from "@/lib/db/prisma";
  *  payslip write that depends on them. */
 type Db = typeof prisma | Prisma.TransactionClient;
 import { isOffDay } from "@/lib/attendance/week";
-import { getOffDayContext } from "@/lib/attendance/monthly-breakdown";
+import { getOffDayContext, getMonthlyAttendanceBreakdown } from "@/lib/attendance/monthly-breakdown";
 import { periodBounds } from "@/lib/requests/leave-math";
 
 // Compensation credit (comp-off) ledger, 2026-09-06 owner request: "if I come
@@ -32,11 +32,25 @@ import { periodBounds } from "@/lib/requests/leave-math";
 //    with no single record to anchor a credit to. The manual isCompensation
 //    override still applies to them, since that's an explicit per-record
 //    Admin/HR decision.
-// 4. Redemption only converts leave_unpaid days to paid — it feeds
-//    lib/payroll/payslip-preview.ts (adjusts paidLeaveDays/unpaidLeaveDays
-//    before computeEarnedBasePay), separate from and in addition to the
-//    pre-existing "compensated" leave-balance add-back in lib/leave/balance.ts
-//    (which has no ledger/expiry and is not touched by this module).
+// 4. Redemption feeds lib/payroll/payslip-preview.ts (adjusts
+//    paidLeaveDays/absentDays/unpaidLeaveDays before computeEarnedBasePay).
+//
+// Absence-first redemption (2026-09-18, owner request — "compensation should
+// firstly compensate for the absent days, and then if the absent days are
+// completed, then only add them to the leave balance, not directly"):
+// 5. A credit's window covers a combined pool of unpaid days: plain
+//    no-record absences (MonthlyBreakdown.absentDates, fixed-schedule
+//    employees only — see isFlexible in classifyMonth) AND approved
+//    leave_unpaid request days. Plain absences are matched first (oldest
+//    first), then leftover credits match unpaid-leave-request days — so an
+//    employee who came in early (earning a credit) and was later absent
+//    without filing anything still gets covered, per the owner's "someone
+//    came in advance and then not came in" example.
+// 6. lib/leave/balance.ts no longer adds every compensation day straight
+//    onto the leave balance. A credit only tops up the balance once it
+//    expires having covered nothing at all in its 60-day life — see
+//    getExpiredUnusedCreditCount below. A credit that redeemed an absence or
+//    an unpaid-leave day never adds to the balance; it already did its job.
 
 export const COMPENSATION_CREDIT_WINDOW_DAYS = 60;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -110,7 +124,15 @@ export async function syncCompensationCreditForRecord(recordId: string): Promise
   }
 }
 
-export type CompensationRedemption = { creditId: string; date: Date; requestId: string };
+export type CompensationRedemption = {
+  creditId: string;
+  date: Date;
+  /** Which pool the redeemed day came from — absences are matched first. */
+  kind: "absence" | "unpaid_leave";
+  /** The Request row the day belongs to; null for a plain absence (there is
+   *  no request — see consumedForRequestId's nullability in schema.prisma). */
+  requestId: string | null;
+};
 
 async function getUnpaidLeaveDaysInPeriod(
   employeeId: string,
@@ -141,47 +163,75 @@ async function getUnpaidLeaveDaysInPeriod(
   return days;
 }
 
-/** Pure allocator (unit-testable without a DB): greedily matches each
- *  unpaid-leave day, oldest first, against the unconsumed credit that covers
- *  it and expires soonest — so no credit is left idle while an earlier one
- *  expires unused. Each credit and each leave day is used at most once. */
+/** Plain no-record absences (MonthlyBreakdown.absentDates) for the month —
+ *  fixed-schedule employees only, same scope as automatic credit issuance
+ *  (see point 3 above). */
+async function getAbsentDaysInPeriod(
+  employeeId: string,
+  month: number,
+  year: number,
+): Promise<{ date: Date }[]> {
+  const breakdown = await getMonthlyAttendanceBreakdown(employeeId, month, year);
+  return breakdown.absentDates.map((date) => ({ date }));
+}
+
+/** Pure allocator (unit-testable without a DB): greedily matches each day,
+ *  oldest first, against the unconsumed credit that covers it and expires
+ *  soonest — so no credit is left idle while an earlier one expires unused.
+ *  Absence days are matched in full before any unpaid-leave day is
+ *  considered, per the owner's "compensate for absent days first" ordering
+ *  — only credits left over after absences are exhausted can cover leave.
+ *  Each credit and each day is used at most once. */
 export function allocateCompensationCredits(
+  absenceDays: { date: Date }[],
   unpaidLeaveDays: { date: Date; requestId: string }[],
   credits: { id: string; earnedDate: Date; expiresAt: Date }[],
 ): CompensationRedemption[] {
-  if (unpaidLeaveDays.length === 0 || credits.length === 0) return [];
+  if (credits.length === 0 || (absenceDays.length === 0 && unpaidLeaveDays.length === 0)) return [];
 
-  const sortedDays = [...unpaidLeaveDays].sort((a, b) => a.date.getTime() - b.date.getTime());
   const sortedCredits = [...credits].sort((a, b) => a.expiresAt.getTime() - b.expiresAt.getTime());
   const usedCreditIds = new Set<string>();
   const redemptions: CompensationRedemption[] = [];
 
-  for (const day of sortedDays) {
-    const match = sortedCredits.find(
-      (c) =>
-        !usedCreditIds.has(c.id) &&
-        c.earnedDate.getTime() <= day.date.getTime() &&
-        day.date.getTime() <= c.expiresAt.getTime(),
-    );
-    if (match) {
-      usedCreditIds.add(match.id);
-      redemptions.push({ creditId: match.id, date: day.date, requestId: day.requestId });
+  const allocate = <T extends { date: Date }>(
+    days: T[],
+    kind: CompensationRedemption["kind"],
+    requestIdOf: (day: T) => string | null,
+  ) => {
+    const sortedDays = [...days].sort((a, b) => a.date.getTime() - b.date.getTime());
+    for (const day of sortedDays) {
+      const match = sortedCredits.find(
+        (c) =>
+          !usedCreditIds.has(c.id) &&
+          c.earnedDate.getTime() <= day.date.getTime() &&
+          day.date.getTime() <= c.expiresAt.getTime(),
+      );
+      if (match) {
+        usedCreditIds.add(match.id);
+        redemptions.push({ creditId: match.id, date: day.date, kind, requestId: requestIdOf(day) });
+      }
     }
-  }
+  };
+
+  allocate(absenceDays, "absence", () => null);
+  allocate(unpaidLeaveDays, "unpaid_leave", (day) => day.requestId);
+
   return redemptions;
 }
 
-/** Dry-run: which approved leave_unpaid days in this month WOULD be redeemed
- *  against this employee's unconsumed compensation credits. Read-only — does
- *  not touch consumedAt. Used by payslip-preview.ts (both the live preview
- *  and as the exact list generate/recompute commit transactionally, so what
- *  the user previewed is exactly what gets persisted). */
+/** Dry-run: which absent/approved-unpaid-leave days in this month WOULD be
+ *  redeemed against this employee's unconsumed compensation credits.
+ *  Read-only — does not touch consumedAt. Used by payslip-preview.ts (both
+ *  the live preview and as the exact list generate/recompute commit
+ *  transactionally, so what the user previewed is exactly what gets
+ *  persisted). */
 export async function computeCompensationRedemption(
   employeeId: string,
   month: number,
   year: number,
 ): Promise<CompensationRedemption[]> {
-  const [unpaidDays, credits] = await Promise.all([
+  const [absenceDays, unpaidDays, credits] = await Promise.all([
+    getAbsentDaysInPeriod(employeeId, month, year),
     getUnpaidLeaveDaysInPeriod(employeeId, month, year),
     prisma.compensationCredit.findMany({
       where: { employeeId, consumedAt: null },
@@ -189,7 +239,7 @@ export async function computeCompensationRedemption(
     }),
   ]);
 
-  return allocateCompensationCredits(unpaidDays, credits);
+  return allocateCompensationCredits(absenceDays, unpaidDays, credits);
 }
 
 /** Commits a redemption list computed by computeCompensationRedemption —
@@ -230,6 +280,26 @@ export async function getCompensationCreditSummary(employeeId: string): Promise<
     orderBy: { expiresAt: "asc" },
   });
   return { activeCount: credits.length, nearestExpiry: credits[0]?.expiresAt ?? null };
+}
+
+/** Credits that expired having covered nothing at all in their 60-day
+ *  window (consumedAt still null, expiresAt in the past), scoped to expiries
+ *  falling within [start, end]. These are the only credits that top up
+ *  lib/leave/balance.ts's leave balance — see point 6 above: a credit that
+ *  redeemed an absence or unpaid-leave day already did its job and never
+ *  also adds to the balance. */
+export async function getExpiredUnusedCreditCount(
+  employeeId: string,
+  start: Date,
+  end: Date,
+): Promise<number> {
+  return prisma.compensationCredit.count({
+    where: {
+      employeeId,
+      consumedAt: null,
+      expiresAt: { gte: start, lte: end, lt: new Date() },
+    },
+  });
 }
 
 export async function rollbackCompensationRedemptionsForPeriod(

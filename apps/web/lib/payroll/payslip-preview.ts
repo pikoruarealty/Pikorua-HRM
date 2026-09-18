@@ -46,9 +46,9 @@ export type PayslipPreviewResult = {
   reimbursementTotal: number;
   employeeOfMonthRef: boolean;
   netPay: number;
-  /** Count of leave_unpaid days converted to paid via a compensation credit
-   *  (see lib/attendance/compensation-credits.ts) — already folded into
-   *  paidLeaveDays/unpaidLeaveDays above. */
+  /** Count of absent/leave_unpaid days converted to paid via a compensation
+   *  credit (see lib/attendance/compensation-credits.ts) — already folded
+   *  into paidLeaveDays/absentDays/unpaidLeaveDays above. */
   compensationCreditsRedeemed: number;
   /** The exact allocation behind compensationCreditsRedeemed — generate/
    *  recompute commit this list transactionally so what was previewed is
@@ -105,8 +105,14 @@ export async function computePayslipPreview(
   // Fold redemptions into the breakdown before they reach computeEarnedBasePay
   // — each redeemed day moves from unpaid to paid, per the owner's "compensate
   // for my leaves ... reflect in current month's payslip" requirement.
+  // Absences are redeemed before unpaid-leave-request days (see
+  // compensation-credits.ts point 5), so each pool is decremented by its own
+  // redemption count, not the combined total.
+  const absenceRedemptions = compensationRedemptions.filter((r) => r.kind === "absence").length;
+  const unpaidLeaveRedemptions = compensationRedemptions.length - absenceRedemptions;
   breakdown.paidLeaveDays += compensationRedemptions.length;
-  breakdown.unpaidLeaveDays = Math.max(0, breakdown.unpaidLeaveDays - compensationRedemptions.length);
+  breakdown.absentDays = Math.max(0, breakdown.absentDays - absenceRedemptions);
+  breakdown.unpaidLeaveDays = Math.max(0, breakdown.unpaidLeaveDays - unpaidLeaveRedemptions);
 
   let reimbursementTotal: number;
   try {
@@ -196,7 +202,12 @@ export async function computePayslipPreview(
         : undefined,
       compensation_credits_redeemed:
         compensationRedemptions.length > 0
-          ? `${compensationRedemptions.length} unpaid-leave day(s) converted to paid using compensation credit(s) earned within the last 60 days.`
+          ? [
+              absenceRedemptions > 0 ? `${absenceRedemptions} absent day(s)` : null,
+              unpaidLeaveRedemptions > 0 ? `${unpaidLeaveRedemptions} unpaid-leave day(s)` : null,
+            ]
+              .filter(Boolean)
+              .join(" and ") + " converted to paid using compensation credit(s) earned within the last 60 days."
           : undefined,
     },
   };
