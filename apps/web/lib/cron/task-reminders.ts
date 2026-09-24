@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db/prisma";
-import { sendTaskReminders } from "@/lib/notifications/task-reminders-send";
+import { isReminderDue, sendTaskReminders } from "@/lib/notifications/task-reminders-send";
 import { isClockedInNow } from "@/lib/attendance/status";
 import { getTaskReminderConfig } from "@/lib/notifications/task-reminders-config";
 import { TaskReminderScope, WorkItemStatus } from "@prisma/client";
@@ -19,7 +19,6 @@ import { TaskReminderScope, WorkItemStatus } from "@prisma/client";
 // `in_review` is out of the assignee's hands and isn't something reminding
 // them helps with.
 
-const TICK_MINUTES_FLOOR = 5; // guards against an admin setting 0/negative minutes spamming every tick
 
 function startOfUtcDay(d: Date): Date {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
@@ -33,8 +32,6 @@ export async function runTaskReminders(now: Date = new Date()): Promise<{
 }> {
   const config = await getTaskReminderConfig();
   if (!config.enabled) return { enabled: false, employeesChecked: 0, remindersSent: 0, skippedNotClockedIn: 0 };
-
-  const intervalMinutes = Math.max(config.intervalMinutes, TICK_MINUTES_FLOOR);
 
   const dueDateFilter =
     config.scope === TaskReminderScope.due_today
@@ -67,9 +64,7 @@ export async function runTaskReminders(now: Date = new Date()): Promise<{
     employeesChecked++;
 
     const state = await prisma.taskReminderState.findUnique({ where: { employeeId } });
-    const dueForReminder =
-      !state || now.getTime() - state.lastSentAt.getTime() >= intervalMinutes * 60_000;
-    if (!dueForReminder) continue;
+    if (!isReminderDue(state?.lastSentAt, now, config.intervalMinutes)) continue;
 
     // Only nudge people who are at work right now (2026-09-24, owner request).
     // Deliberately `continue` BEFORE the lastSentAt upsert below: a skipped

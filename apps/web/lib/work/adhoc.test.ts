@@ -66,9 +66,15 @@ describe("requiresReviewForItem", () => {
     expect(requiresReviewForItem({ taskPoints: 8, selfLogged: true, adhocTypeId: null })).toBe(true);
   });
 
-  it("leaves assigned work on the ordinary threshold", () => {
-    expect(requiresReviewForItem({ taskPoints: 1, selfLogged: false })).toBe(false);
+  it("always reviews admin-assigned work, however small", () => {
+    // 2026-09-24: the assignee's "Complete" is a claim, not the verdict — a
+    // 1-point assigned task used to auto-credit under the old threshold and
+    // now waits for a Lead/Admin accept/reject like any other.
+    expect(requiresReviewForItem({ taskPoints: 1, selfLogged: false })).toBe(true);
     expect(requiresReviewForItem({ taskPoints: 8, selfLogged: false })).toBe(true);
+    // `selfLogged` omitted/null (older call sites) means "not self-logged".
+    expect(requiresReviewForItem({ taskPoints: 1 })).toBe(true);
+    expect(requiresReviewForItem({ taskPoints: 1, selfLogged: null })).toBe(true);
   });
 
   it("does not gate metric items, which carry no points", () => {
