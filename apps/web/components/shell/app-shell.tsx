@@ -11,6 +11,7 @@ import { visibleGroups, type NavCtx } from "@/components/shell/nav-config";
 import { useTheme } from "@/lib/hooks/use-theme";
 import { EnablePushBanner } from "@/components/notifications/enable-push-banner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { syncPushRegistration } from "@/lib/firebase/messaging-client";
 
 const ROLE_LABELS: Record<string, string> = {
   admin: "Admin",
@@ -272,6 +273,13 @@ export function AppShell({
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [unread, setUnread] = useState(0);
+
+  // Devices that already opted in: re-attach the foreground listener and
+  // re-register if the server lost this browser's token (see
+  // syncPushRegistration). No-op for everyone else.
+  useEffect(() => {
+    syncPushRegistration();
+  }, []);
 
   useEffect(() => {
     let active = true;

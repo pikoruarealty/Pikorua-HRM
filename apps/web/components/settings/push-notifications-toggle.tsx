@@ -26,6 +26,8 @@ export function PushNotificationsToggle() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isBrave, setIsBrave] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [diag, setDiag] = useState<{ ok: boolean; text: string } | null>(null);
 
   useEffect(() => {
     setSupport(pushSupportStatus());
@@ -57,6 +59,62 @@ export function PushNotificationsToggle() {
       setError(e instanceof Error ? e.message : "Failed to disable push notifications.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  // "Why don't I see popups?" — asks the server what it can actually do, then
+  // sends a real push and reports FCM's answer, so the failure is named
+  // (server key missing / device not registered / FCM rejected / OS-level block)
+  // instead of guessed at.
+  async function onTest() {
+    setTesting(true);
+    setDiag(null);
+    try {
+      const token = currentStoredToken();
+      const statusRes = await fetch(
+        `/api/v1/notifications/push-status${token ? `?token=${encodeURIComponent(token)}` : ""}`,
+      );
+      const status = (await statusRes.json()).data as
+        | { serverConfigured: boolean; thisDeviceRegistered: boolean | null }
+        | null;
+      if (!status) throw new Error("Could not check push status.");
+      if (!status.serverConfigured) {
+        return setDiag({
+          ok: false,
+          text:
+            "The server can't send push notifications: its Firebase admin key isn't configured " +
+            "(FIREBASE_ADMIN_PROJECT_ID / FIREBASE_ADMIN_CLIENT_EMAIL / FIREBASE_ADMIN_PRIVATE_KEY in the server's .env). " +
+            "In-app notifications still work. This needs to be fixed on the server, not in your browser.",
+        });
+      }
+      if (status.thisDeviceRegistered === false) {
+        await enablePush(); // permission is already granted — re-registers without a prompt
+        setEnabled(true);
+      }
+      const result = (await (await fetch("/api/v1/notifications/push-test", { method: "POST" })).json()).data as
+        | { attempts: { ok: boolean; code?: string }[]; registeredTokens: number }
+        | null;
+      if (!result || result.registeredTokens === 0) {
+        return setDiag({ ok: false, text: "No device is registered for your account. Turn notifications off and on again." });
+      }
+      const failed = result.attempts.filter((a) => !a.ok);
+      if (failed.length === result.attempts.length) {
+        return setDiag({
+          ok: false,
+          text: `Google's push service rejected the send (${failed.map((f) => f.code).join(", ")}). Turn notifications off and on again on this device.`,
+        });
+      }
+      setDiag({
+        ok: true,
+        text:
+          `Sent to ${result.attempts.length - failed.length} of ${result.attempts.length} device(s). ` +
+          "If no popup appears, the block is on this computer: in Windows check Settings → System → Notifications " +
+          "(Chrome must be on; turn off Do not disturb / Focus assist), and in Chrome check chrome://settings/content/notifications.",
+      });
+    } catch (e) {
+      setDiag({ ok: false, text: e instanceof Error ? e.message : "Test failed." });
+    } finally {
+      setTesting(false);
     }
   }
 
@@ -101,6 +159,14 @@ export function PushNotificationsToggle() {
           <Button onClick={enabled ? onDisable : onEnable} disabled={busy} className="w-fit">
             {busy ? "Working…" : enabled ? "Disable on this device" : "Enable on this device"}
           </Button>
+        )}
+        {support === "ready" && enabled && (
+          <Button variant="outline" onClick={onTest} disabled={testing || busy} className="w-fit">
+            {testing ? "Testing…" : "Send test notification"}
+          </Button>
+        )}
+        {diag && (
+          <p className={diag.ok ? "text-sm text-muted-foreground" : "text-sm text-destructive"}>{diag.text}</p>
         )}
         {error && <p className="text-sm text-destructive">{error}</p>}
       </CardContent>

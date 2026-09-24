@@ -114,6 +114,53 @@ async function registerServiceWorker(): Promise<ServiceWorkerRegistration> {
   return registration;
 }
 
+/**
+ * Foreground messages aren't shown by the browser automatically (that's the
+ * service worker's job for background tabs) — show them manually here. Bound at
+ * most once per page: each onMessage() call adds another listener, which showed
+ * one duplicate notification per extra registration.
+ *
+ * Exported and called on every app load (not just from enablePush) because the
+ * listener lives in page memory: before 2026-09-24 it was only attached during
+ * the "Enable" click, so after any reload a push arriving while the tab was open
+ * was received and then silently dropped.
+ */
+export async function ensureForegroundHandler(): Promise<void> {
+  if (foregroundHandlerBound) return;
+  const messaging = await getMessagingInstance();
+  if (!messaging || foregroundHandlerBound) return;
+  foregroundHandlerBound = true;
+  onMessage(messaging, (payload) => {
+    const title = payload.notification?.title ?? "Pikorua HRM";
+    const body = payload.notification?.body ?? "";
+    if (Notification.permission === "granted") {
+      new Notification(title, { body, icon: "/icon-192.png" });
+    }
+  });
+}
+
+/**
+ * Run on app load for a device that already opted in. Re-attaches the
+ * foreground listener, and if the server no longer has this device's token
+ * (pruned as dead, DB restored, ...) quietly registers again — permission is
+ * already granted, so there is no prompt. The Settings toggle reads "On" from
+ * localStorage alone, so without this a lost server-side token looked like a
+ * working setup that just never delivered anything.
+ */
+export async function syncPushRegistration(): Promise<void> {
+  if (pushSupportStatus() !== "ready" || Notification.permission !== "granted") return;
+  const token = currentStoredToken();
+  if (!token) return;
+  try {
+    await ensureForegroundHandler();
+    const res = await fetch(`/api/v1/notifications/push-status?token=${encodeURIComponent(token)}`);
+    const json = await res.json();
+    if (json.data?.thisDeviceRegistered === false) await enablePush();
+  } catch {
+    // Best-effort self-heal; the Settings page's test button surfaces real problems.
+  }
+}
+
 /** Request permission (if needed), register the SW, get an FCM token, and register it server-side. */
 export async function enablePush(): Promise<string> {
   if (!("Notification" in window)) throw new Error("This browser does not support notifications.");
@@ -163,21 +210,7 @@ export async function enablePush(): Promise<string> {
 
   window.localStorage.setItem(STORAGE_KEY, token);
 
-  // Foreground messages aren't shown by the browser automatically (that's the
-  // service worker's job for background tabs) — show them manually here.
-  // Bound at most once per page: enablePush() can be called repeatedly (the
-  // toggle, retries), and each onMessage() call adds another listener, which
-  // showed one duplicate notification per extra registration.
-  if (!foregroundHandlerBound) {
-    foregroundHandlerBound = true;
-    onMessage(messaging, (payload) => {
-      const title = payload.notification?.title ?? "Pikorua HRM";
-      const body = payload.notification?.body ?? "";
-      if (Notification.permission === "granted") {
-        new Notification(title, { body, icon: "/icon-192.png" });
-      }
-    });
-  }
+  await ensureForegroundHandler();
 
   return token;
 }

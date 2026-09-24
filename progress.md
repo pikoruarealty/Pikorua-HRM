@@ -598,3 +598,6 @@ See PRD §7. Tracked in memory (`open-questions`):
 - **Work Unit lead** editable from the UI (Admin/HR); ad-hoc container fallback lead now Lead → Admin → HR → any member.
 - **UI:** icon+tooltip action buttons (Attendance, Requests), `table-fixed` Employees table — no horizontal scroll. Push "Enable" hang fixed (missing timeout on the SW-activation fallback).
 - **Open:** prod "Ad-hoc Work" (AI Tech) lead is still Bhavarth — reassign via the new UI once deployed.
+
+### 2026-09-24 (later) — push popups not showing
+In-app notifications worked but no OS popup. Server can silently no-op when `FIREBASE_ADMIN_*` is missing, and the Settings toggle read "On" from localStorage only. Added `GET /notifications/push-status` + `POST /notifications/push-test` (real synchronous send, reports FCM's per-device answer) and a "Send test notification" button on the Push card that names the failure (server key missing / device not registered / FCM rejected / OS-level block). Fixed: the foreground `onMessage` listener was only attached during the Enable click, so after a reload pushes arriving with the tab open were dropped — now attached on every app load; also `syncPushRegistration()` re-registers a device the server lost. **Unverified on prod:** whether the VM's `.env` has the three `FIREBASE_ADMIN_*` vars — run the test button after deploy.

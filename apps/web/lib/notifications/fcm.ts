@@ -52,24 +52,22 @@ function getFirebaseApp(): App | null {
   return app;
 }
 
-/**
- * Push a notification to every device token registered for `userId`. Never
- * throws — send failures are logged, and tokens FCM reports as
- * invalid/unregistered/not-found are deleted so they stop being retried.
- */
-export async function sendPushToUser(
-  userId: string,
+export type PushAttempt = { ok: boolean; code?: string };
+
+/** True when the server has the Firebase admin credentials it needs to send. */
+export function fcmConfigured(): boolean {
+  return isConfigured();
+}
+
+type DeliverResult = { attempts: PushAttempt[]; staleIds: string[] };
+
+// Shared by the fire-and-forget fan-out and the synchronous test send, so a
+// "test worked" result means the real path works, not a lookalike.
+async function deliver(
+  fcmApp: App,
+  tokens: { id: string; token: string }[],
   payload: { title: string; body: string; type: string },
-): Promise<void> {
-  const fcmApp = getFirebaseApp();
-  if (!fcmApp) {
-    logger.debug("skipped — Firebase admin credentials not configured");
-    return;
-  }
-
-  const tokens = await prisma.pushToken.findMany({ where: { userId }, select: { id: true, token: true } });
-  if (tokens.length === 0) return;
-
+): Promise<DeliverResult> {
   const messaging = getMessaging(fcmApp);
   const results = await Promise.allSettled(
     tokens.map((t) =>
@@ -94,34 +92,83 @@ export async function sendPushToUser(
   );
 
   const staleIds: string[] = [];
-  results.forEach((result, i) => {
-    if (result.status === "rejected") {
-      // firebase-admin's FirebaseError puts the code directly on `.code`
-      // (e.g. "messaging/registration-token-not-registered"), not nested.
-      const code = (result.reason as { code?: string })?.code ?? "unknown";
+  const attempts: PushAttempt[] = results.map((result, i) => {
+    if (result.status === "fulfilled") return { ok: true };
+    // firebase-admin's FirebaseError puts the code directly on `.code`
+    // (e.g. "messaging/registration-token-not-registered"), not nested.
+    const code = (result.reason as { code?: string })?.code ?? "unknown";
 
-      if (DEAD_TOKEN_CODES.some((dead) => code.includes(dead))) {
-        staleIds.push(tokens[i]!.id);
-      } else if (code.includes("invalid-argument")) {
-        // Deliberately NOT pruned. FCM returns invalid-argument for a
-        // malformed *payload* as well as a bad token — pruning on it meant one
-        // bad payload would delete every user's token on the first send, and
-        // silently force the whole company to re-enable push. A payload bug is
-        // ours and affects everyone, so make it loud and keep the token.
-        logger.error(
-          `send rejected as invalid-argument (likely a malformed payload, NOT a dead token) — token ${tokens[i]!.id} kept`,
-          { code },
-        );
-      } else {
-        logger.warn(`send failed for token ${tokens[i]!.id}`, { code });
-      }
+    if (DEAD_TOKEN_CODES.some((dead) => code.includes(dead))) {
+      staleIds.push(tokens[i]!.id);
+    } else if (code.includes("invalid-argument")) {
+      // Deliberately NOT pruned. FCM returns invalid-argument for a
+      // malformed *payload* as well as a bad token — pruning on it meant one
+      // bad payload would delete every user's token on the first send, and
+      // silently force the whole company to re-enable push. A payload bug is
+      // ours and affects everyone, so make it loud and keep the token.
+      logger.error(
+        `send rejected as invalid-argument (likely a malformed payload, NOT a dead token) — token ${tokens[i]!.id} kept`,
+        { code },
+      );
+    } else {
+      logger.warn(`send failed for token ${tokens[i]!.id}`, { code });
     }
+    return { ok: false, code };
   });
+  return { attempts, staleIds };
+}
 
-  if (staleIds.length > 0) {
-    await prisma.pushToken.deleteMany({ where: { id: { in: staleIds } } });
-    logger.info(`pruned ${staleIds.length} stale token(s) for user=${userId}`);
+async function pruneStale(userId: string, staleIds: string[]): Promise<void> {
+  if (staleIds.length === 0) return;
+  await prisma.pushToken.deleteMany({ where: { id: { in: staleIds } } });
+  logger.info(`pruned ${staleIds.length} stale token(s) for user=${userId}`);
+}
+
+/**
+ * Push a notification to every device token registered for `userId`. Never
+ * throws — send failures are logged, and tokens FCM reports as
+ * invalid/unregistered/not-found are deleted so they stop being retried.
+ */
+export async function sendPushToUser(
+  userId: string,
+  payload: { title: string; body: string; type: string },
+): Promise<void> {
+  const fcmApp = getFirebaseApp();
+  if (!fcmApp) {
+    logger.debug("skipped — Firebase admin credentials not configured");
+    return;
   }
 
-  logger.debug(`sent to ${tokens.length - staleIds.length}/${tokens.length} token(s) for user=${userId}`);
+  const tokens = await prisma.pushToken.findMany({ where: { userId }, select: { id: true, token: true } });
+  if (tokens.length === 0) return;
+
+  const { attempts, staleIds } = await deliver(fcmApp, tokens, payload);
+  await pruneStale(userId, staleIds);
+  logger.debug(`sent to ${attempts.filter((a) => a.ok).length}/${tokens.length} token(s) for user=${userId}`);
+}
+
+/**
+ * Synchronous send that reports what FCM actually answered, for the Settings
+ * "Send test notification" button (2026-09-24: in-app notifications appeared
+ * but no OS popup, with no way to tell a missing server key from a dead token
+ * from an OS-level block). Not fire-and-forget on purpose.
+ */
+export async function sendTestPush(userId: string): Promise<{
+  configured: boolean;
+  registeredTokens: number;
+  attempts: PushAttempt[];
+}> {
+  const fcmApp = getFirebaseApp();
+  if (!fcmApp) return { configured: false, registeredTokens: 0, attempts: [] };
+
+  const tokens = await prisma.pushToken.findMany({ where: { userId }, select: { id: true, token: true } });
+  if (tokens.length === 0) return { configured: true, registeredTokens: 0, attempts: [] };
+
+  const { attempts, staleIds } = await deliver(fcmApp, tokens, {
+    title: "Test notification",
+    body: "If you can see this, push notifications work on this device.",
+    type: "push_test",
+  });
+  await pruneStale(userId, staleIds);
+  return { configured: true, registeredTokens: tokens.length, attempts };
 }
