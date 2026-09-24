@@ -27,6 +27,14 @@ const reviewSchema = z
     // credit taskPoints as-is.
     points: z.number().int().positive().optional(),
     note: z.string().trim().min(1).max(1000).optional(),
+    // reject-only (2026-09-24): push the deadline out when sending a task
+    // back, so the assignee isn't left with a due date that already passed
+    // while it sat waiting on review. Same YYYY-MM-DD convention as PATCH
+    // /work-items/:id's dueDate.
+    dueDate: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, "dueDate must be YYYY-MM-DD")
+      .optional(),
   })
   .strict();
 
@@ -63,7 +71,10 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       issue ? `${issue.path.join(".") || "body"}: ${issue.message}` : "Invalid request body.",
     );
   }
-  const { action, points, note } = parsed.data;
+  const { action, points, note, dueDate } = parsed.data;
+  if (dueDate !== undefined && action !== "reject") {
+    return failFor(ErrorCode.VALIDATION, "dueDate only applies when sending a task back.");
+  }
   // Catalog self-logged work (2026-08-10) is deliberately not negotiable at
   // review: the employee picked a type from the Admin-set catalog and the
   // type's points are the whole answer. The Lead's question here is "did this
@@ -130,16 +141,17 @@ export async function POST(req: Request, { params }: { params: { id: string } })
         // Not completed, so no completedAt; submittedAt stays as the record of
         // when it was first handed in.
         completedAt: null,
+        ...(dueDate ? { dueDate: new Date(`${dueDate}T00:00:00.000Z`) } : {}),
       },
     });
-    await notifyReviewRejected(workItem.assignedTo, workItem.title, note!);
+    await notifyReviewRejected(workItem.assignedTo, workItem.title, note!, dueDate ?? null);
     await audit({
       action: "work_item.review_reject",
       actorUserId: session.userId,
       actorRole: session.role,
       entityType: "work_item",
       entityId: workItem.id,
-      metadata: { status: updated.status, assigneeId: workItem.assignedTo, note },
+      metadata: { status: updated.status, assigneeId: workItem.assignedTo, note, dueDate: dueDate ?? null },
       ip: clientIp(req),
     });
     return ok(updated);

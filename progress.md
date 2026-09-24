@@ -587,3 +587,14 @@ See PRD §7. Tracked in memory (`open-questions`):
 2. ⚠️ Meeting reminder channel — in-app only vs. also email/SMS (assuming in-app)
 3. ⚠️ Employee of the Month ties — single winner vs. multiple
 4. ✅ Monthly metric-target reset — **resolved 2026-07-13: new row per month.** Each metric-mode WorkItem is scoped to one `period_month`/`period_year`; the next month gets a fresh `work_items` row rather than resetting `current_value` in place. Rationale: preserves per-month history for `recognition_snapshots` without a fragile "snapshot-before-reset" job ordering, and avoids any scheduled job silently destroying `current_value`. A monthly rollover (new row, `target_value` carried forward or re-set by the Lead) will be built as part of 2.2.
+
+---
+
+### 2026-09-24 — reminders, review gate, role-registry fix, action-column UX
+- **Role registry bug (prod, `tech_associate` 403 on My Tasks / Daily Planning):** `refreshRoleRegistry()` at boot ran in Next's separate instrumentation webpack layer, so route handlers never saw custom roles after any restart until a role was edited. Fixed with a self-healing `ensureRoleRegistry()` (30s TTL) called from `getSession()`. Verified: custom role inserted straight into the DB → 200 on My Tasks/Daily Planning, 403 on admin routes; on prod, `tech_associate` matched `tech_employee` across 32 endpoints. **Not yet deployed** — until it is, any restart re-breaks custom roles (workaround: edit any role in `/roles`).
+- **Task reminders (scheduled ones only fire while the employee is clocked in; a skipped employee stays due and is nudged on the first tick after clock-in):** admin page `/settings/task-reminders` (interval, count/list/per-task, due-today/all-pending), 15-min cron tick (`lib/cron/task-reminders.ts`) + CRON_SECRET route, per-employee cursor in `task_reminder_state`, migration `add_task_reminders`. App-wide "Enable notifications" banner with 3-day snooze, stops after 5 dismissals.
+- **On-demand Remind (Admin/HR):** `POST /work-items/:id/remind`, `POST /employees/:id/remind-tasks` (30s cooldown, audited); bell buttons on open task rows (Work Unit page) and Team task progress rows (Attendance).
+- **Review gate:** every admin-assigned task completion now goes to `in_review` (no point-threshold bypass); reject can set a new due date. Self-logged rules unchanged.
+- **Work Unit lead** editable from the UI (Admin/HR); ad-hoc container fallback lead now Lead → Admin → HR → any member.
+- **UI:** icon+tooltip action buttons (Attendance, Requests), `table-fixed` Employees table — no horizontal scroll. Push "Enable" hang fixed (missing timeout on the SW-activation fallback).
+- **Open:** prod "Ad-hoc Work" (AI Tech) lead is still Bhavarth — reassign via the new UI once deployed.

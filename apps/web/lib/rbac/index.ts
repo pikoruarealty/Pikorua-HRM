@@ -109,12 +109,37 @@ export function rolesAtOrBelow(actorRole: Role): Role[] {
   return Object.keys(ROLE_TIER).filter((r) => ROLE_TIER[r] >= ROLE_TIER[actorRole]);
 }
 
+const REGISTRY_TTL_MS = 30_000;
+let registryLoadedAt = 0;
+let registryInflight: Promise<void> | null = null;
+
+/** Self-healing guard, called from getSession(): re-reads the role registry if
+ * it is older than 30s. The boot-time call in instrumentation.ts is NOT enough
+ * on its own — Next runs the instrumentation hook in its own webpack layer, so
+ * it populates a different copy of these module-level arrays than the one the
+ * route handlers read (2026-09-24: after a restart every custom role was
+ * silently missing, so a `tech_associate` (tier employee) got 403 on My Tasks /
+ * Daily Planning until someone happened to edit a role, which rebuilds the
+ * registry inside the route layer). The TTL also bounds staleness if the app
+ * is ever run as more than one process. A failed refresh keeps the last-known
+ * registry rather than failing the request. */
+export async function ensureRoleRegistry(): Promise<void> {
+  if (Date.now() - registryLoadedAt < REGISTRY_TTL_MS) return;
+  registryInflight ??= refreshRoleRegistry()
+    .catch(() => undefined)
+    .finally(() => {
+      registryInflight = null;
+    });
+  await registryInflight;
+}
+
 /** Re-reads custom (non-system) roles from the `roles` table and rebuilds
  * FINANCE_ROLES / LEAD_ROLES / EMPLOYEE_ROLES / ROLE_TIER in place, so every
  * existing importer sees the update without any call-site changes. Call at
  * server boot and after any Role create/update/delete. */
 export async function refreshRoleRegistry(): Promise<void> {
   const customRoles = await prisma.role.findMany({ where: { isSystem: false } });
+  registryLoadedAt = Date.now();
 
   FINANCE_ROLES.length = 0;
   FINANCE_ROLES.push(...BASE_FINANCE_ROLES);

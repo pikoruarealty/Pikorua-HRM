@@ -1,7 +1,7 @@
 import { WorkItemMode, WorkItemStatus } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { createLogger } from "@/lib/log";
-import { LEAD_ROLES } from "@/lib/rbac";
+import { LEAD_ROLES, Role } from "@/lib/rbac";
 
 // Self-logged ad-hoc tasks (2026-08-10, owner request: "for the tech employees
 // if no tasks assigned, employees can log new tasks themselves while clock in
@@ -64,9 +64,25 @@ export async function ensureAdhocContainer(departmentId: string): Promise<string
   // employee it was set to has since left the department (or gone inactive)
   // the container would otherwise keep pointing at them forever, and every
   // self-logged task filed after that would sit unreviewable by anyone.
+  //
+  // Fallback order matches the golden rule elsewhere in the app for who gets
+  // to see this kind of thing: a department Lead first, then Admin, then HR
+  // — and only if none of those exist at all, literally any active member of
+  // the department, so ad-hoc work is never unreviewable rather than picking
+  // a "most senior available" person (2026-09-24: a lead-less department was
+  // silently defaulting to whichever employee happened to be first, which
+  // reads as arbitrary rather than as a real reviewing authority).
   const currentLead =
     (await prisma.employee.findFirst({
       where: { departmentId, status: "active", role: { in: [...LEAD_ROLES] } },
+      select: { id: true },
+    })) ??
+    (await prisma.employee.findFirst({
+      where: { status: "active", role: Role.admin },
+      select: { id: true },
+    })) ??
+    (await prisma.employee.findFirst({
+      where: { status: "active", role: Role.hr },
       select: { id: true },
     })) ??
     (await prisma.employee.findFirst({

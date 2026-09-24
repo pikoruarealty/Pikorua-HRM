@@ -14,6 +14,7 @@ import { Progress } from "@/components/ui/progress";
 import { apiFetch } from "@/components/_lib/api";
 import { DueDateBadge } from "@/components/work/due-date";
 import { WorkItemStatusBadge } from "@/components/work/status-badge";
+import { RemindButton } from "@/components/notifications/remind-button";
 import { formatDate } from "@/lib/format-date";
 
 type WorkItem = {
@@ -598,10 +599,25 @@ function SubUnitControls({
   );
 }
 
-function EditWorkUnitForm({ workUnit, onSaved }: { workUnit: WorkUnitDetail; onSaved: () => void }) {
+function EditWorkUnitForm({
+  workUnit,
+  members,
+  isFinance,
+  onSaved,
+}: {
+  workUnit: WorkUnitDetail;
+  members: Member[];
+  isFinance: boolean;
+  onSaved: () => void;
+}) {
   const [name, setName] = useState(workUnit.name);
   const [description, setDescription] = useState(workUnit.description ?? "");
   const [status, setStatus] = useState(workUnit.status);
+  // Reassigning the lead is Admin/HR-only (matches the PATCH route's own
+  // guard) — a project lead editing their own WorkUnit must never send this
+  // field at all, since the route rejects a non-finance caller sending
+  // projectLeadId outright, even unchanged.
+  const [projectLeadId, setProjectLeadId] = useState(workUnit.projectLeadId ?? "");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -609,9 +625,11 @@ function EditWorkUnitForm({ workUnit, onSaved }: { workUnit: WorkUnitDetail; onS
     e.preventDefault();
     setError(null);
     setBusy(true);
+    const body: Record<string, unknown> = { name, description: description || null, status };
+    if (isFinance && projectLeadId) body.projectLeadId = projectLeadId;
     const res = await apiFetch(`/work-units/${workUnit.id}`, {
       method: "PATCH",
-      body: JSON.stringify({ name, description: description || null, status }),
+      body: JSON.stringify(body),
     });
     setBusy(false);
     if (res.error) return setError(`${res.error.code}: ${res.error.message}`);
@@ -641,6 +659,26 @@ function EditWorkUnitForm({ workUnit, onSaved }: { workUnit: WorkUnitDetail; onS
           </SelectContent>
         </Select>
       </div>
+      {isFinance && (
+        <div className="flex flex-col gap-1.5">
+          <Label>Project lead</Label>
+          <Select value={projectLeadId} onValueChange={setProjectLeadId}>
+            <SelectTrigger className="w-64">
+              <SelectValue placeholder="Select a lead" />
+            </SelectTrigger>
+            <SelectContent>
+              {members.map((m) => (
+                <SelectItem key={m.id} value={m.id}>
+                  {m.fullName}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">
+            Who review/approve notifications for this WorkUnit&apos;s tasks go to.
+          </p>
+        </div>
+      )}
       {error && <p className="text-sm text-destructive">{error}</p>}
       <Button type="submit" size="sm" className="w-fit" disabled={busy}>
         Save changes
@@ -1014,6 +1052,8 @@ export function WorkUnitDetailScreen({
           <div className="mt-3">
             <EditWorkUnitForm
               workUnit={workUnit}
+              members={members}
+              isFinance={isFinance}
               onSaved={() => {
                 setEditingUnit(false);
                 refresh();
@@ -1138,6 +1178,12 @@ export function WorkUnitDetailScreen({
                   <span className="flex flex-wrap items-center gap-2">
                     <DueDateBadge dueDate={wi.dueDate} completed={wi.status === "completed"} />
                     <WorkItemStatusBadge status={wi.status} />
+                    {isFinance && (wi.status === "pending" || wi.status === "wip") && (
+                      <RemindButton
+                        endpoint={`/work-items/${wi.id}/remind`}
+                        label={`Remind ${wi.assignee?.fullName ?? "the assignee"} about this task`}
+                      />
+                    )}
                     {canManage && wi.status === "in_review" && (
                       <ReviewControl wi={wi} onReviewed={refresh} />
                     )}

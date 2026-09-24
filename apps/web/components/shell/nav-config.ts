@@ -115,6 +115,12 @@ export const NAV_GROUPS: NavGroup[] = [
         icon: Settings2,
         show: (c) => c.isFinance,
       },
+      {
+        href: "/settings/task-reminders",
+        label: "Task Reminders",
+        icon: Bell,
+        show: (c) => c.isFinance,
+      },
       { href: "/roles", label: "Roles", icon: ShieldCheck, show: (c) => c.isAdmin },
       { href: "/audit", label: "Audit Log", icon: ScrollText, show: (c) => c.isAdmin },
     ],

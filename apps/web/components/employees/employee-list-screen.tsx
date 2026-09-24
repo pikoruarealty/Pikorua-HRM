@@ -288,17 +288,17 @@ export function EmployeeListScreen({ canManage }: { canManage: boolean }) {
           ) : filtered.length === 0 ? (
             <p className="text-sm text-muted-foreground">No employees match these filters.</p>
           ) : (
-            <Table>
+            <Table className="table-fixed">
               <TableHeader>
                 <TableRow>
-                  <TableHead className="whitespace-nowrap">Name</TableHead>
-                  <TableHead className="whitespace-nowrap">Email</TableHead>
-                  <TableHead className="whitespace-nowrap">Type</TableHead>
-                  <TableHead className="whitespace-nowrap">Role</TableHead>
-                  {canManage && <TableHead className="whitespace-nowrap">Department</TableHead>}
-                  {canManage && <TableHead className="whitespace-nowrap">Team</TableHead>}
-                  <TableHead className="whitespace-nowrap">Status</TableHead>
-                  {canManage && <TableHead className="whitespace-nowrap">Base salary</TableHead>}
+                  <TableHead className="w-40">Name</TableHead>
+                  <TableHead className="w-48">Email</TableHead>
+                  <TableHead className="w-24">Type</TableHead>
+                  <TableHead className="w-32">Role</TableHead>
+                  {canManage && <TableHead className="w-28">Department</TableHead>}
+                  {canManage && <TableHead className="w-20">Team</TableHead>}
+                  <TableHead className="w-24">Status</TableHead>
+                  {canManage && <TableHead className="w-24">Base salary</TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -308,27 +308,35 @@ export function EmployeeListScreen({ canManage }: { canManage: boolean }) {
                     onClick={() => router.push(`/employees/${e.id}`)}
                     className="cursor-pointer hover:bg-muted/50"
                   >
-                    <TableCell className="whitespace-nowrap font-medium">
+                    <TableCell className="font-medium">
                       <span className="flex items-center gap-2">
                         <EmployeeAvatar fullName={e.fullName} photoUrl={e.photoUrl} size="sm" />
-                        {e.fullName}
+                        <span className="truncate" title={e.fullName}>
+                          {e.fullName}
+                        </span>
                       </span>
                     </TableCell>
-                    <TableCell className="whitespace-nowrap">{e.email}</TableCell>
-                    <TableCell className="whitespace-nowrap">
+                    <TableCell className="truncate" title={e.email}>
+                      {e.email}
+                    </TableCell>
+                    <TableCell>
                       <Badge variant="outline">
                         {humanizeEmploymentType(e.employmentType)}
                       </Badge>
                     </TableCell>
-                    <TableCell className="whitespace-nowrap">{humanizeRole(e.role)}</TableCell>
-                    {canManage && <TableCell className="whitespace-nowrap">{deptName(e.departmentId)}</TableCell>}
-                    {canManage && <TableCell className="whitespace-nowrap">{teamName(e.teamId)}</TableCell>}
-                    <TableCell className="whitespace-nowrap">
+                    <TableCell className="truncate">{humanizeRole(e.role)}</TableCell>
+                    {canManage && (
+                      <TableCell className="truncate" title={deptName(e.departmentId)}>
+                        {deptName(e.departmentId)}
+                      </TableCell>
+                    )}
+                    {canManage && <TableCell className="truncate">{teamName(e.teamId)}</TableCell>}
+                    <TableCell>
                       <Badge variant={e.status === "active" ? "default" : "secondary"}>
                         {e.status}
                       </Badge>
                     </TableCell>
-                    {canManage && <TableCell className="whitespace-nowrap">{e.baseSalary ?? "—"}</TableCell>}
+                    {canManage && <TableCell className="truncate">{e.baseSalary ?? "—"}</TableCell>}
                   </TableRow>
                 ))}
               </TableBody>

@@ -58,11 +58,13 @@ export async function notifyReviewRejected(
   assigneeId: string,
   taskTitle: string,
   note: string,
+  newDueDate?: string | null,
 ): Promise<void> {
+  const dueSuffix = newDueDate ? ` New due date: ${newDueDate}.` : "";
   await notifyEmployee(
     assigneeId,
     "task_review_rejected",
-    `"${taskTitle}" was sent back for more work — ${note}`,
+    `"${taskTitle}" was sent back for more work — ${note}${dueSuffix}`,
     "Task sent back",
   );
 }

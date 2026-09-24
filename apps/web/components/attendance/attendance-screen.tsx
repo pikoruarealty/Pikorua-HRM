@@ -20,7 +20,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DatePicker } from "@/components/ui/date-picker";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { ChevronsUpDown, Search, X } from "lucide-react";
+import { ChevronsUpDown, Search, X, Pencil, Check, Trash2, ShieldAlert } from "lucide-react";
+import { IconActionButton } from "@/components/ui/icon-action-button";
 import { formatDate, formatDateTime } from "@/lib/format-date";
 import { MAX_PLAUSIBLE_SHIFT_HOURS } from "@/lib/attendance/time";
 
@@ -88,7 +89,7 @@ export function AttendanceScreen({
 
       {canReview && <AttendanceMonthlyPanel />}
 
-      {canSeeAll && <TeamTaskProgressPanel />}
+      {canSeeAll && <TeamTaskProgressPanel canRemind={canReview} />}
 
       {canReview && <ManualRecordSection />}
 
@@ -269,7 +270,7 @@ function AttendanceTable({
                       <TableHead className="w-44">Clock out</TableHead>
                       <TableHead className="w-36">Hours</TableHead>
                       <TableHead className="w-56">Status</TableHead>
-                      {canReview && <TableHead className="w-56">Actions</TableHead>}
+                      {canReview && <TableHead className="w-32">Actions</TableHead>}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -337,25 +338,28 @@ function AttendanceTable({
                             </TableCell>
                             {canReview && (
                               <TableCell>
-                                <div className="flex flex-wrap gap-2">
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
+                                <div className="flex flex-wrap gap-1.5">
+                                  <IconActionButton
+                                    icon={editingId === r.id ? X : Pencil}
+                                    label={editingId === r.id ? "Close edit form" : "Edit record"}
                                     onClick={() => setEditingId(editingId === r.id ? null : r.id)}
-                                  >
-                                    {editingId === r.id ? "Close" : "Edit"}
-                                  </Button>
+                                  />
                                   {Boolean(r.clockInApproved ?? r.clockInRaw) &&
                                     r.approvalStatus === "pending" &&
                                     !r.flaggedForReview && (
-                                      <Button
-                                        size="sm"
+                                      <IconActionButton
+                                        icon={Check}
+                                        variant="default"
+                                        label={
+                                          busyId === r.id
+                                            ? "Approving…"
+                                            : !r.clockOutApproved && !r.clockOutRaw
+                                              ? "Approve (missing clock-out will be auto-set to default shift end, 19:00)"
+                                              : "Approve"
+                                        }
                                         disabled={busyId === r.id}
                                         onClick={() => approve(r.id)}
-                                        title={!r.clockOutApproved && !r.clockOutRaw ? "Missing clock-out will be auto-set to default shift end (19:00)" : undefined}
-                                      >
-                                        {busyId === r.id ? "Approving…" : "Approve"}
-                                      </Button>
+                                      />
                                     )}
                                   {/* Matches the DELETE route's actual guard exactly (not
                                       just "incomplete or pending") — it only ever accepts a
@@ -365,29 +369,30 @@ function AttendanceTable({
                                       correct it instead. Showing the button more broadly than
                                       this just invites a 409 on click. */}
                                   {r.approvalStatus !== "approved" && !r.clockInRaw && !r.clockOutRaw && (
-                                    <Button
+                                    <IconActionButton
+                                      icon={Trash2}
                                       variant="destructive"
-                                      size="sm"
+                                      label={removingId === r.id ? "Removing…" : "Remove record"}
                                       disabled={removingId === r.id}
                                       onClick={() => removeRecord(r.id)}
-                                    >
-                                      {removingId === r.id ? "Removing…" : "Remove"}
-                                    </Button>
+                                    />
                                   )}
                                   {/* Admin-only force-delete: unlike Remove above, shown on
                                       every record (including approved/clocked ones) and
                                       requires a reason — the route bypasses its usual
                                       phantom-only guard only for this call. */}
                                   {isAdmin && (
-                                    <Button
+                                    <IconActionButton
+                                      icon={ShieldAlert}
                                       variant="destructive"
-                                      size="sm"
+                                      label={
+                                        removingId === r.id
+                                          ? "Deleting…"
+                                          : "Admin: permanently delete this record, including approved history"
+                                      }
                                       disabled={removingId === r.id}
                                       onClick={() => forceDeleteRecord(r.id)}
-                                      title="Admin override: permanently delete this record, including approved history."
-                                    >
-                                      {removingId === r.id ? "Deleting…" : "Delete (admin)"}
-                                    </Button>
+                                    />
                                   )}
                                 </div>
                               </TableCell>

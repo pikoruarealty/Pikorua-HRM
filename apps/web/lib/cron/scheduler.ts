@@ -5,6 +5,7 @@ import { runMetricDailyRollover } from "@/lib/cron/metric-daily-rollover";
 import { runAttendanceEodCleanup } from "@/lib/cron/attendance-eod-cleanup";
 import { runCrmSync } from "@/lib/cron/crm-sync";
 import { runDeviceSync } from "@/lib/integrations/teamoffice/sync";
+import { runTaskReminders } from "@/lib/cron/task-reminders";
 
 // In-process scheduler (PRD §6 — "a lightweight scheduled-jobs mechanism").
 // Registered once at server boot from instrumentation.ts. Assumes a single
@@ -92,6 +93,15 @@ export function startScheduler(): void {
     },
     { timezone: "Asia/Kolkata" },
   );
+
+  // Pending-task reminder — every 15 minutes. The admin-configured interval
+  // (hours-scale) is evaluated inside runTaskReminders() against each
+  // employee's TaskReminderState, not encoded as a cron expression, so this
+  // tick just needs to be frequent enough that the configured interval feels
+  // responsive; it no-ops immediately if the reminder is disabled.
+  cron.schedule("*/15 * * * *", () => {
+    safeRun("task-reminders", () => runTaskReminders());
+  });
 
   // Recognition weekly/monthly snapshots are no longer auto-scheduled
   // (2026-08-07) — "Employee of the Week/Month" is now an Admin-only manual

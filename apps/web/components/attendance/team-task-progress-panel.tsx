@@ -8,6 +8,7 @@ import { Progress } from "@/components/ui/progress";
 import { DatePicker } from "@/components/ui/date-picker";
 import { EmployeeAvatar } from "@/components/employees/employee-avatar";
 import { WorkItemStatusBadge } from "@/components/work/status-badge";
+import { RemindButton } from "@/components/notifications/remind-button";
 import { formatTime } from "@/lib/format-date";
 
 // Lead/Admin "what is everyone doing right now" live view (companion to the
@@ -51,7 +52,7 @@ function fmtTime(iso: string | null) {
   return formatTime(iso);
 }
 
-export function TeamTaskProgressPanel() {
+export function TeamTaskProgressPanel({ canRemind = false }: { canRemind?: boolean }) {
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [data, setData] = useState<TaskProgress | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -131,6 +132,12 @@ export function TeamTaskProgressPanel() {
                     >
                       {isOpen ? "Hide tasks" : "View tasks"}
                     </button>
+                  )}
+                  {canRemind && (
+                    <RemindButton
+                      endpoint={`/employees/${r.employeeId}/remind-tasks`}
+                      label={`Remind ${r.fullName} about their open tasks`}
+                    />
                   )}
                 </div>
                 {isOpen && (

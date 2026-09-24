@@ -65,32 +65,40 @@ function waitForActivation(
   if (registration.active) return Promise.resolve();
 
   const worker = registration.installing ?? registration.waiting;
-  if (!worker) {
-    // No worker on this registration yet — fall back to whatever ends up
-    // controlling our scope (navigator.serviceWorker.ready resolves on active).
-    return navigator.serviceWorker.ready.then(() => undefined);
-  }
 
-  return new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      worker.removeEventListener("statechange", onStateChange);
-      reject(new Error("The notification service worker did not start in time. Reload and try again."));
-    }, timeoutMs);
+  // No worker on this registration yet — fall back to whatever ends up
+  // controlling our scope. `navigator.serviceWorker.ready` never rejects, so
+  // on its own this branch could hang the "Enable" button on "Working…"
+  // forever if the worker never ends up controlling the page (e.g. its
+  // install failed before `installing`/`waiting` was observable here, or the
+  // browser never assigns a controller for some other reason) — hence the
+  // same bounded timeout as the tracked-worker branch below applies to it too
+  // (2026-09-24, reported: "clicked enable, allowed the permission prompt,
+  // stayed on Working… forever").
+  const activation: Promise<void> = worker
+    ? new Promise<void>((resolve, reject) => {
+        function onStateChange() {
+          if (worker!.state === "activated") {
+            worker!.removeEventListener("statechange", onStateChange);
+            resolve();
+          } else if (worker!.state === "redundant") {
+            worker!.removeEventListener("statechange", onStateChange);
+            reject(new Error("The notification service worker failed to install."));
+          }
+        }
+        worker.addEventListener("statechange", onStateChange);
+      })
+    : navigator.serviceWorker.ready.then(() => undefined);
 
-    function onStateChange() {
-      if (worker!.state === "activated") {
-        clearTimeout(timer);
-        worker!.removeEventListener("statechange", onStateChange);
-        resolve();
-      } else if (worker!.state === "redundant") {
-        clearTimeout(timer);
-        worker!.removeEventListener("statechange", onStateChange);
-        reject(new Error("The notification service worker failed to install."));
-      }
-    }
-
-    worker.addEventListener("statechange", onStateChange);
-  });
+  return Promise.race([
+    activation,
+    new Promise<void>((_, reject) =>
+      setTimeout(
+        () => reject(new Error("The notification service worker did not start in time. Reload and try again.")),
+        timeoutMs,
+      ),
+    ),
+  ]);
 }
 
 async function registerServiceWorker(): Promise<ServiceWorkerRegistration> {

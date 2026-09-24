@@ -9,6 +9,8 @@ import { DatePicker } from "@/components/ui/date-picker";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { IconActionButton } from "@/components/ui/icon-action-button";
+import { Pencil, Trash2, Check, ShieldCheck, X, RotateCcw, ShieldAlert } from "lucide-react";
 import { apiFetch } from "@/components/_lib/api";
 import { isPaidLeaveType, type LeaveDayType } from "@/lib/requests/leave-math";
 
@@ -639,47 +641,58 @@ export function RequestsScreen() {
                   <span className="ml-auto flex items-center gap-2">
                     {r.status === "pending" && r.employeeId === myEmployeeId && editingId !== r.id && (
                       <>
-                        <Button size="sm" variant="outline" onClick={() => startEdit(r)}>
-                          Edit
-                        </Button>
-                        <Button size="sm" variant="destructive" onClick={() => deleteOwn(r.id)}>
-                          Delete
-                        </Button>
+                        <IconActionButton icon={Pencil} label="Edit request" onClick={() => startEdit(r)} />
+                        <IconActionButton
+                          icon={Trash2}
+                          variant="destructive"
+                          label="Delete request"
+                          onClick={() => deleteOwn(r.id)}
+                        />
                       </>
                     )}
                     {r.status === "pending" && canApprove && splittingId !== r.id && (
                       <>
-                        <Button
-                          size="sm"
-                          variant="outline"
+                        <IconActionButton
+                          icon={Check}
+                          variant="default"
+                          label="Approve"
                           onClick={() => {
                             const isLeaveRow = isPaidLeaveType(r.type) || r.type === "leave_unpaid";
                             const isMultiDay = r.dateFrom && r.dateTo && r.dateFrom.slice(0, 10) !== r.dateTo.slice(0, 10);
                             if (isLeaveRow && isMultiDay) openSplit(r);
                             else decide(r.id, "approve");
                           }}
-                        >
-                          Approve
-                        </Button>
+                        />
                         {isAdmin && isPaidLeaveType(r.type) && (
-                          <Button size="sm" variant="outline" onClick={() => approveWithCapOverride(r)}>
-                            Approve (allow over cap)
-                          </Button>
+                          <IconActionButton
+                            icon={ShieldCheck}
+                            label="Admin: approve and allow over the leave cap"
+                            onClick={() => approveWithCapOverride(r)}
+                          />
                         )}
-                        <Button size="sm" variant="destructive" onClick={() => decide(r.id, "reject")}>
-                          Reject
-                        </Button>
+                        <IconActionButton
+                          icon={X}
+                          variant="destructive"
+                          label="Reject"
+                          onClick={() => decide(r.id, "reject")}
+                        />
                       </>
                     )}
                     {r.status !== "pending" && isAdmin && (
-                      <Button size="sm" variant="ghost" onClick={() => override(r.id, "pending")}>
-                        Reopen
-                      </Button>
+                      <IconActionButton
+                        icon={RotateCcw}
+                        variant="ghost"
+                        label="Admin: reopen (set back to pending)"
+                        onClick={() => override(r.id, "pending")}
+                      />
                     )}
                     {isAdmin && (
-                      <Button size="sm" variant="ghost" onClick={() => deleteOwn(r.id)}>
-                        Delete (admin)
-                      </Button>
+                      <IconActionButton
+                        icon={ShieldAlert}
+                        variant="ghost"
+                        label="Admin: delete this request"
+                        onClick={() => deleteOwn(r.id)}
+                      />
                     )}
                   </span>
                 </div>

@@ -9,6 +9,8 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { visibleGroups, type NavCtx } from "@/components/shell/nav-config";
 import { useTheme } from "@/lib/hooks/use-theme";
+import { EnablePushBanner } from "@/components/notifications/enable-push-banner";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 const ROLE_LABELS: Record<string, string> = {
   admin: "Admin",
@@ -297,6 +299,7 @@ export function AppShell({
   }
 
   return (
+    <TooltipProvider delayDuration={200}>
     <div className="min-h-[100dvh]">
       {/* Desktop sidebar */}
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 overflow-hidden border-r border-sidebar-border md:block">
@@ -347,9 +350,11 @@ export function AppShell({
         </header>
 
         <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-10">
+          <EnablePushBanner />
           <PageTransition>{children}</PageTransition>
         </main>
       </div>
     </div>
+    </TooltipProvider>
   );
 }

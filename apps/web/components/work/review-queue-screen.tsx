@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { DatePicker } from "@/components/ui/date-picker";
 import { apiFetch } from "@/components/_lib/api";
 import { EmployeeAvatar } from "@/components/employees/employee-avatar";
 import { DueDateBadge } from "@/components/work/due-date";
@@ -35,6 +36,7 @@ type QueueItem = {
 function ReviewRow({ item, onReviewed }: { item: QueueItem; onReviewed: () => void }) {
   const [points, setPoints] = useState(String(item.taskPoints ?? ""));
   const [note, setNote] = useState("");
+  const [newDueDate, setNewDueDate] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -47,6 +49,7 @@ function ReviewRow({ item, onReviewed }: { item: QueueItem; onReviewed: () => vo
       if (!Number.isInteger(n) || n <= 0) return setError("Points must be a positive whole number.");
       body.points = n;
     }
+    if (action === "reject" && newDueDate) body.dueDate = newDueDate;
     setBusy(true);
     const res = await apiFetch(`/work-items/${item.id}/review`, {
       method: "POST",
@@ -107,6 +110,12 @@ function ReviewRow({ item, onReviewed }: { item: QueueItem; onReviewed: () => vo
           value={note}
           onChange={(e) => setNote(e.target.value)}
           placeholder="Reason — required to send back, or to change the points."
+        />
+        <DatePicker
+          value={newDueDate}
+          onChange={setNewDueDate}
+          className="w-40"
+          placeholder="New due date"
         />
         <Button size="sm" onClick={() => submit("accept")} disabled={busy}>
           Accept &amp; credit

@@ -382,6 +382,7 @@ model Employee {
   offlineClaimsReviewed   OfflineActivityClaim[]          @relation("OfflineClaimReviewer")
   compensationCredits     CompensationCredit[]
   leaderboardsPublished   RecognitionLeaderboardPublish[]
+  taskReminderState       TaskReminderState?
 
   @@map("employees")
 }
@@ -1112,6 +1113,47 @@ model PushToken {
 
   @@index([userId])
   @@map("push_tokens")
+}
+
+enum TaskReminderContentMode {
+  count // one notification: "You have N pending task(s)."
+  full_list // one notification listing every pending task's title
+  per_task // a separate notification for each pending task
+}
+
+enum TaskReminderScope {
+  due_today // only tasks whose dueDate is today
+  all_pending // every open task regardless of due date
+}
+
+// Admin-configurable pending-task nudge (2026-09-24, owner request). Singleton
+// row — not versioned like the payroll/scoring configs, since a reminder
+// setting has no historical/reproducibility concern the way a payslip or a
+// published score does; only the current setting ever matters. Read/written
+// via lib/notifications/task-reminders-config.ts, which get-or-creates this
+// row so the app works before an Admin ever visits the settings page.
+model TaskReminderConfig {
+  id              String                   @id @default(uuid()) @db.Uuid
+  enabled         Boolean                  @default(true)
+  intervalMinutes Int                      @default(120) @map("interval_minutes")
+  contentMode     TaskReminderContentMode  @default(count) @map("content_mode")
+  scope           TaskReminderScope        @default(all_pending)
+  updatedAt       DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("task_reminder_config")
+}
+
+// Per-employee "when did they last get nudged" cursor (2026-09-24). The cron
+// job (lib/cron/task-reminders.ts) runs on a short fixed tick and decides who
+// is actually due by comparing `lastSentAt` against the admin-configured
+// interval — this table is what makes a configurable interval possible
+// without reprogramming node-cron's own schedule at runtime.
+model TaskReminderState {
+  employeeId String   @id @map("employee_id") @db.Uuid
+  employee   Employee @relation(fields: [employeeId], references: [id])
+  lastSentAt DateTime @map("last_sent_at") @db.Timestamptz(6)
+
+  @@map("task_reminder_state")
 }
 
 model Announcement {
