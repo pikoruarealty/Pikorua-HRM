@@ -5,7 +5,8 @@ import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { isLateArrival, todayDateOnly } from "@/lib/attendance/time";
 import { getLatestPayrollConfig } from "@/lib/payroll/config";
 import { EmployeeStatus, RequestStatus, RequestType } from "@prisma/client";
-import { isOffDay, weekStartOf, buildMovedOffDateByWeek } from "@/lib/attendance/week";
+import { isOffDay, weekStartOf, buildMovedOffDateByWeek, resolveDefaultOffDay } from "@/lib/attendance/week";
+import { loadWeekOffs } from "@/lib/attendance/weekly-off";
 
 // Track A (2026-07-15). GET /api/v1/attendance/overview?date=YYYY-MM-DD —
 // Admin/HR only. The "glance" view of a single day: present / half-day /
@@ -53,6 +54,7 @@ export async function GET(req: Request) {
         id: true,
         fullName: true,
         photoUrl: true,
+        defaultWeeklyOffDay: true,
         team: { select: { id: true, name: true, expectedStartTime: true, defaultWeeklyOffDay: true } },
         department: { select: { id: true, name: true } },
       },
@@ -90,6 +92,13 @@ export async function GET(req: Request) {
     movesByEmployee.set(m.employeeId, empMap);
   }
 
+  // Resolved weekly off per employee (claimed / automatic / default); flexible
+  // schedules aren't in the map and keep the plain default-day check.
+  const weekOffs = await loadWeekOffs(
+    weekStart,
+    employees.map((e) => e.id),
+  );
+
   const rows = employees.map((e) => {
     const record = recordByEmployee.get(e.id);
     const leaveType = leaveByEmployee.get(e.id);
@@ -104,7 +113,18 @@ export async function GET(req: Request) {
       status = "on_leave";
     } else if (holiday) {
       status = "holiday";
-    } else if (isOffDay(date, e.team?.defaultWeeklyOffDay ?? 0, movesByEmployee.get(e.id) ?? new Map())) {
+    } else if (
+      weekOffs.has(e.id)
+        ? weekOffs.get(e.id)!.date === date.toISOString().slice(0, 10)
+        : isOffDay(
+            date,
+            // Employee override > team default > Sunday — the same precedence the
+            // monthly breakdown uses. This used to read the team default only, so
+            // anyone with a personal weekly-off day was tagged on the wrong day.
+            resolveDefaultOffDay(e.defaultWeeklyOffDay, e.team?.defaultWeeklyOffDay),
+            movesByEmployee.get(e.id) ?? new Map(),
+          )
+    ) {
       status = "weekly_off";
     } else {
       status = "absent";

@@ -1,12 +1,13 @@
-import { AttendanceApprovalStatus, EmploymentType, Prisma, RequestStatus, RequestType } from "@prisma/client";
+import { AttendanceApprovalStatus, Prisma, RequestStatus, RequestType } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 
 /** Either the default prisma singleton or an interactive-transaction client
  *  (tx) — lets commit/rollback run inside the same transaction as the
  *  payslip write that depends on them. */
 type Db = typeof prisma | Prisma.TransactionClient;
-import { isOffDay } from "@/lib/attendance/week";
-import { getOffDayContext, getMonthlyAttendanceBreakdown } from "@/lib/attendance/monthly-breakdown";
+import { addDays, weekStartOf } from "@/lib/attendance/week";
+import { getMonthlyAttendanceBreakdown } from "@/lib/attendance/monthly-breakdown";
+import { getWeekOff } from "@/lib/attendance/weekly-off";
 import { periodBounds } from "@/lib/requests/leave-math";
 
 // Compensation credit (comp-off) ledger, 2026-09-06 owner request: "if I come
@@ -63,64 +64,88 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 export async function syncCompensationCreditForRecord(recordId: string): Promise<void> {
   const record = await prisma.attendanceRecord.findUnique({
     where: { id: recordId },
-    select: {
-      id: true,
-      employeeId: true,
-      date: true,
-      approvalStatus: true,
-      isCompensation: true,
-      clockInApproved: true,
-      clockInRaw: true,
-    },
+    select: { employeeId: true, date: true },
   });
   if (!record) return;
+  await syncCompensationCreditsForWeek(record.employeeId, record.date);
+}
 
-  const hasClockIn = !!(record.clockInApproved ?? record.clockInRaw);
-  const isApproved = record.approvalStatus === AttendanceApprovalStatus.approved;
+/** Re-syncs every attendance record's credit in the ISO week containing `date`.
+ *
+ *  Whole-week, not per-record, since 2026-09-30: whether a worked day is a
+ *  compensation day now depends on the rest of its week — if the employee
+ *  worked their default off day but skipped another day, that other day is the
+ *  week's off and the default day is an ordinary workday (see
+ *  lib/attendance/weekly-off.ts). Approving, editing or deleting ANY record in
+ *  the week, or changing a leave/unpaid-day declaration, can flip that, so the
+ *  whole week is re-derived. Idempotent. */
+export async function syncCompensationCreditsForWeek(employeeId: string, date: Date): Promise<void> {
+  const weekStart = weekStartOf(date);
+  const weekEnd = addDays(weekStart, 7);
 
-  let qualifies = false;
-  if (isApproved && hasClockIn) {
-    if (record.isCompensation) {
-      qualifies = true;
-    } else {
-      const offDayContext = await getOffDayContext(record.employeeId, record.date, record.date);
-      const isFlexible =
-        offDayContext.employmentType != null &&
-        offDayContext.employmentType !== EmploymentType.fulltime &&
-        offDayContext.requiredDaysPerWeek != null &&
-        offDayContext.requiredDaysPerWeek > 0 &&
-        offDayContext.requiredDaysPerWeek < 7;
-      if (!isFlexible) {
-        qualifies = isOffDay(record.date, offDayContext.defaultOffDay, offDayContext.movedOffDateByWeek);
+  const [records, weekOff] = await Promise.all([
+    prisma.attendanceRecord.findMany({
+      where: { employeeId, date: { gte: weekStart, lt: weekEnd } },
+      select: {
+        id: true,
+        date: true,
+        approvalStatus: true,
+        isCompensation: true,
+        clockInApproved: true,
+        clockInRaw: true,
+      },
+    }),
+    getWeekOff(employeeId, weekStart),
+  ]);
+
+  for (const record of records) {
+    const hasClockIn = !!(record.clockInApproved ?? record.clockInRaw);
+    const isApproved = record.approvalStatus === AttendanceApprovalStatus.approved;
+
+    // weekOff is null for a flexible-schedule employee (part-time/intern on a
+    // days-per-week quota): they get no automatic off-day credit, only the
+    // explicit Admin/HR isCompensation flag.
+    const qualifies =
+      isApproved &&
+      hasClockIn &&
+      (record.isCompensation || (weekOff !== null && weekOff.date === record.date.toISOString().slice(0, 10)));
+
+    const existingCredit = await prisma.compensationCredit.findUnique({
+      where: { sourceRecordId: record.id },
+      select: { id: true, consumedAt: true },
+    });
+
+    if (qualifies) {
+      if (!existingCredit) {
+        await prisma.compensationCredit.create({
+          data: {
+            employeeId,
+            earnedDate: record.date,
+            expiresAt: new Date(record.date.getTime() + COMPENSATION_CREDIT_WINDOW_DAYS * MS_PER_DAY),
+            sourceRecordId: record.id,
+          },
+        });
       }
+      continue;
+    }
+
+    // No longer qualifies (e.g. the manual flag was unset, or the week's off
+    // moved to another day). A credit already consumed by a generated payslip is
+    // left alone — unwinding it would need to also touch the payslip that
+    // consumed it, which this sync has no knowledge of.
+    if (existingCredit && !existingCredit.consumedAt) {
+      await prisma.compensationCredit.delete({ where: { id: existingCredit.id } });
     }
   }
+}
 
-  const existingCredit = await prisma.compensationCredit.findUnique({
-    where: { sourceRecordId: recordId },
-    select: { id: true, consumedAt: true },
-  });
-
-  if (qualifies) {
-    if (!existingCredit) {
-      await prisma.compensationCredit.create({
-        data: {
-          employeeId: record.employeeId,
-          earnedDate: record.date,
-          expiresAt: new Date(record.date.getTime() + COMPENSATION_CREDIT_WINDOW_DAYS * MS_PER_DAY),
-          sourceRecordId: recordId,
-        },
-      });
-    }
-    return;
-  }
-
-  // No longer qualifies (e.g. the manual flag was unset). A credit already
-  // consumed by a generated payslip is left alone — unwinding it would need
-  // to also touch the payslip that consumed it, which this sync has no
-  // knowledge of.
-  if (existingCredit && !existingCredit.consumedAt) {
-    await prisma.compensationCredit.delete({ where: { id: existingCredit.id } });
+/** Week-by-week re-sync over an inclusive date range — for changes that aren't
+ *  tied to one record (an approved leave covering several days, an unpaid-day
+ *  declaration). */
+export async function syncCompensationCreditsForRange(employeeId: string, from: Date, to: Date): Promise<void> {
+  const last = weekStartOf(to).getTime();
+  for (let w = weekStartOf(from).getTime(); w <= last; w += 7 * MS_PER_DAY) {
+    await syncCompensationCreditsForWeek(employeeId, new Date(w));
   }
 }
 
@@ -138,20 +163,31 @@ async function getUnpaidLeaveDaysInPeriod(
   employeeId: string,
   month: number,
   year: number,
-): Promise<{ date: Date; requestId: string }[]> {
+): Promise<{ date: Date; requestId: string | null }[]> {
   const { start: periodStart, lastDay: periodLastDay } = periodBounds(month, year);
-  const requests = await prisma.request.findMany({
-    where: {
-      employeeId,
-      type: RequestType.leave_unpaid,
-      status: RequestStatus.approved,
-      dateFrom: { lte: periodLastDay },
-      dateTo: { gte: periodStart },
-    },
-    select: { id: true, dateFrom: true, dateTo: true },
-  });
+  const [requests, declared] = await Promise.all([
+    prisma.request.findMany({
+      where: {
+        employeeId,
+        type: RequestType.leave_unpaid,
+        status: RequestStatus.approved,
+        dateFrom: { lte: periodLastDay },
+        dateTo: { gte: periodStart },
+      },
+      select: { id: true, dateFrom: true, dateTo: true },
+    }),
+    // Days the employee switched from a weekly off to unpaid themselves — an
+    // unpaid day like any other, so a credit can cover it (no request row).
+    prisma.unpaidDayDeclaration.findMany({
+      where: { employeeId, date: { gte: periodStart, lte: periodLastDay } },
+      select: { date: true },
+    }),
+  ]);
 
-  const days: { date: Date; requestId: string }[] = [];
+  const days: { date: Date; requestId: string | null }[] = declared.map((d) => ({
+    date: d.date,
+    requestId: null,
+  }));
   for (const r of requests) {
     if (!r.dateFrom || !r.dateTo) continue;
     const start = r.dateFrom < periodStart ? periodStart : r.dateFrom;
@@ -184,7 +220,7 @@ async function getAbsentDaysInPeriod(
  *  Each credit and each day is used at most once. */
 export function allocateCompensationCredits(
   absenceDays: { date: Date }[],
-  unpaidLeaveDays: { date: Date; requestId: string }[],
+  unpaidLeaveDays: { date: Date; requestId: string | null }[],
   credits: { id: string; earnedDate: Date; expiresAt: Date }[],
 ): CompensationRedemption[] {
   if (credits.length === 0 || (absenceDays.length === 0 && unpaidLeaveDays.length === 0)) return [];

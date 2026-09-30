@@ -22,8 +22,40 @@ import { DatePicker } from "@/components/ui/date-picker";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ChevronsUpDown, Search, X, Pencil, Check, Trash2, ShieldAlert } from "lucide-react";
 import { IconActionButton } from "@/components/ui/icon-action-button";
-import { formatDate, formatDateTime } from "@/lib/format-date";
+import { formatDate, formatDateTime, formatTime } from "@/lib/format-date";
 import { MAX_PLAUSIBLE_SHIFT_HOURS } from "@/lib/attendance/time";
+import { isAttendanceExemptRole } from "@/lib/attendance/tracking";
+import { EmployeeAttendancePanel } from "@/components/attendance/employee-attendance-panel";
+
+type WorkLocationValue = "office" | "wfh";
+
+/** Office / work-from-home picker shared by the manual-entry forms (2026-09-30). */
+function LocationSelect({
+  id,
+  value,
+  onChange,
+}: {
+  id?: string;
+  value: WorkLocationValue;
+  onChange: (v: WorkLocationValue) => void;
+}) {
+  return (
+    <Select value={value} onValueChange={(v) => onChange(v as WorkLocationValue)}>
+      <SelectTrigger id={id}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="office">In office</SelectItem>
+        <SelectItem value="wfh">Work from home</SelectItem>
+      </SelectContent>
+    </Select>
+  );
+}
+
+/** Employee pickers for manual entry: Admin has no attendance to enter. */
+function withoutExempt(list: { id: string; fullName: string; role?: string }[]) {
+  return list.filter((e) => !isAttendanceExemptRole(e.role)).map(({ id, fullName }) => ({ id, fullName }));
+}
 
 type AttendanceRecord = {
   id: string;
@@ -69,12 +101,13 @@ export function AttendanceScreen({
   isAdmin: boolean;
   employeeId: string | null;
 }) {
+  const showOwnOverview = employeeId !== null && !isAdmin;
   return (
     <div className="flex flex-col gap-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Attendance</h1>
         <p className="text-sm text-muted-foreground">
-          {canReview ? "Review and approval." : "Your attendance history."} Clock in/out from{" "}
+          {canReview ? "Review and approval." : "Your month at a glance."} Clock in/out from{" "}
           <a href="/planning" className="underline">
             Daily Planning
           </a>
@@ -82,10 +115,20 @@ export function AttendanceScreen({
         </p>
       </div>
 
+      {/* Everyone who clocks in gets their own month: tiles (incl. office/WFH
+          hours) + calendar. Admin has no attendance, so no panel. For a plain
+          employee this replaces the old flat list of dates, which showed days
+          but no totals. */}
+      {showOwnOverview && <EmployeeAttendancePanel employeeId={employeeId} title="My attendance" canEditDays />}
+
       {canReview && <AttendanceOverviewPanel />}
 
-      {/* Attendance Records sits right after the daily overview */}
-      <AttendanceTable canReview={canReview} canSeeAll={canSeeAll} isAdmin={isAdmin} employeeId={employeeId} />
+      {/* Attendance Records sits right after the daily overview. Reviewers and
+          Leads use it as the approval/team queue; a plain employee's own days
+          are already on their calendar above. */}
+      {canSeeAll && (
+        <AttendanceTable canReview={canReview} canSeeAll={canSeeAll} isAdmin={isAdmin} employeeId={employeeId} />
+      )}
 
       {canReview && <AttendanceMonthlyPanel />}
 
@@ -262,6 +305,101 @@ function AttendanceTable({
                 <p className="mb-1.5 text-xs font-medium text-muted-foreground">
                   {formatDate(dateKey)}
                 </p>
+                {/* Phones: one card per record (the fixed-width table hid Clock out,
+                    Hours, Status and the actions behind a sideways scroll). */}
+                <ul className="flex flex-col gap-2 md:hidden">
+                  {pageGrouped[dateKey].map((r) => {
+                    const inTime = r.clockInApproved ?? r.clockInRaw;
+                    const outTime = r.clockOutApproved ?? r.clockOutRaw;
+                    const incomplete = !(inTime && outTime);
+                    return (
+                      <li
+                        key={r.id}
+                        className={`flex flex-col gap-2 rounded-lg border p-3 text-sm ${
+                          incomplete ? "bg-amber-500/5 dark:bg-amber-950/20" : ""
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            {canSeeAll && <p className="truncate font-medium">{r.employee.fullName}</p>}
+                            <p className="text-xs text-muted-foreground tabular-nums">
+                              {inTime ? formatTime(inTime) : "No clock-in"} – {outTime ? formatTime(outTime) : "no clock-out"}
+                              {r.totalHours ? ` · ${r.totalHours}h` : ""}
+                            </p>
+                          </div>
+                          <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                            <Badge variant={r.approvalStatus === "approved" ? "default" : "outline"}>
+                              {r.approvalStatus}
+                            </Badge>
+                            {r.flaggedForReview && (
+                              <Badge variant="destructive" className="text-[10px] uppercase tracking-wider">
+                                Review
+                              </Badge>
+                            )}
+                          </div>
+                        </div>
+                        {(r.isHalfDay || r.isCompensation || r.lateExempt || incomplete) && (
+                          <div className="flex flex-wrap gap-1">
+                            {r.isHalfDay && <Badge variant="secondary">Half-day</Badge>}
+                            {r.isCompensation && <Badge variant="outline">Compensation</Badge>}
+                            {r.lateExempt && <Badge variant="outline">Late exempt</Badge>}
+                            {incomplete && (
+                              <Badge variant="destructive" className="text-[10px] uppercase tracking-wider">
+                                Incomplete
+                              </Badge>
+                            )}
+                          </div>
+                        )}
+                        {canReview && (
+                          <div className="flex flex-wrap gap-1.5">
+                            <IconActionButton
+                              icon={editingId === r.id ? X : Pencil}
+                              label={editingId === r.id ? "Close edit form" : "Edit record"}
+                              onClick={() => setEditingId(editingId === r.id ? null : r.id)}
+                            />
+                            {Boolean(inTime) && r.approvalStatus === "pending" && !r.flaggedForReview && (
+                              <IconActionButton
+                                icon={Check}
+                                variant="default"
+                                label={busyId === r.id ? "Approving…" : "Approve"}
+                                disabled={busyId === r.id}
+                                onClick={() => approve(r.id)}
+                              />
+                            )}
+                            {r.approvalStatus !== "approved" && !r.clockInRaw && !r.clockOutRaw && (
+                              <IconActionButton
+                                icon={Trash2}
+                                variant="destructive"
+                                label={removingId === r.id ? "Removing…" : "Remove record"}
+                                disabled={removingId === r.id}
+                                onClick={() => removeRecord(r.id)}
+                              />
+                            )}
+                            {isAdmin && (
+                              <IconActionButton
+                                icon={ShieldAlert}
+                                variant="destructive"
+                                label="Admin: permanently delete this record, including approved history"
+                                disabled={removingId === r.id}
+                                onClick={() => forceDeleteRecord(r.id)}
+                              />
+                            )}
+                          </div>
+                        )}
+                        {canReview && editingId === r.id && (
+                          <EditRecordForm
+                            record={r}
+                            onSaved={() => {
+                              setEditingId(null);
+                              load();
+                            }}
+                          />
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+                <div className="hidden md:block">
                 <Table className="table-fixed">
                   <TableHeader>
                     <TableRow>
@@ -416,6 +554,7 @@ function AttendanceTable({
                     })}
                   </TableBody>
                 </Table>
+                </div>
               </div>
             ))}
 
@@ -750,6 +889,7 @@ function ManualRecordForm() {
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [clockIn, setClockIn] = useState("09:00");
   const [clockOut, setClockOut] = useState("18:00");
+  const [workLocation, setWorkLocation] = useState<WorkLocationValue>("office");
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -760,7 +900,7 @@ function ManualRecordForm() {
     (async () => {
       const res = await fetch("/api/v1/employees");
       const json = await res.json();
-      if (json.data) setEmployees(json.data);
+      if (json.data) setEmployees(withoutExempt(json.data));
     })();
   }, []);
 
@@ -778,6 +918,7 @@ function ManualRecordForm() {
           clock_in: new Date(`${date}T${clockIn}`).toISOString(),
           clock_out: clockOut ? new Date(`${date}T${clockOut}`).toISOString() : undefined,
           reason,
+          work_location: workLocation,
           confirm_long_duration: confirmLongDuration || undefined,
         }),
       });
@@ -831,6 +972,10 @@ function ManualRecordForm() {
         <Label htmlFor="manual_out">Clock out</Label>
         <Input id="manual_out" type="time" value={clockOut} onChange={(e) => setClockOut(e.target.value)} />
       </div>
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="manual_location">Worked from</Label>
+        <LocationSelect id="manual_location" value={workLocation} onChange={setWorkLocation} />
+      </div>
       <div className="flex flex-col gap-1.5 sm:col-span-2">
         <Label htmlFor="manual_reason">Reason (audited)</Label>
         <Input
@@ -877,6 +1022,7 @@ type BulkRow = {
   date: string;
   clockIn: string;
   clockOut: string;
+  workLocation: WorkLocationValue;
 };
 
 function dateRange(from: string, to: string): string[] {
@@ -900,6 +1046,7 @@ function BulkManualRecordForm() {
   const [dateTo, setDateTo] = useState(() => new Date().toISOString().slice(0, 10));
   const [defaultIn, setDefaultIn] = useState("09:00");
   const [defaultOut, setDefaultOut] = useState("18:00");
+  const [defaultLocation, setDefaultLocation] = useState<WorkLocationValue>("office");
   const [reason, setReason] = useState("");
   const [rows, setRows] = useState<BulkRow[] | null>(null);
   const [busy, setBusy] = useState(false);
@@ -911,7 +1058,7 @@ function BulkManualRecordForm() {
     (async () => {
       const res = await fetch("/api/v1/employees");
       const json = await res.json();
-      if (json.data) setEmployees(json.data);
+      if (json.data) setEmployees(withoutExempt(json.data));
     })();
   }, []);
 
@@ -928,6 +1075,7 @@ function BulkManualRecordForm() {
           date: d,
           clockIn: defaultIn,
           clockOut: defaultOut,
+          workLocation: defaultLocation,
         });
       }
     }
@@ -937,7 +1085,7 @@ function BulkManualRecordForm() {
     setLongDurationRows([]);
   }
 
-  function updateRow(key: string, field: "clockIn" | "clockOut", value: string) {
+  function updateRow(key: string, field: "clockIn" | "clockOut" | "workLocation", value: string) {
     setRows((prev) => (prev ? prev.map((r) => (r.key === key ? { ...r, [field]: value } : r)) : prev));
   }
 
@@ -963,6 +1111,7 @@ function BulkManualRecordForm() {
             date: r.date,
             clock_in: new Date(`${r.date}T${r.clockIn}`).toISOString(),
             clock_out: r.clockOut ? new Date(`${r.date}T${r.clockOut}`).toISOString() : undefined,
+            work_location: r.workLocation,
             confirm_long_duration: confirmLongDuration || undefined,
           })),
         }),
@@ -1023,6 +1172,10 @@ function BulkManualRecordForm() {
           <Label htmlFor="bulk_out">Default clock out</Label>
           <Input id="bulk_out" type="time" value={defaultOut} onChange={(e) => setDefaultOut(e.target.value)} />
         </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="bulk_location">Worked from</Label>
+          <LocationSelect id="bulk_location" value={defaultLocation} onChange={setDefaultLocation} />
+        </div>
         <div className="flex flex-col gap-1.5 sm:col-span-2 lg:col-span-3">
           <Label htmlFor="bulk_reason">Reason (audited)</Label>
           <Input
@@ -1050,6 +1203,7 @@ function BulkManualRecordForm() {
                   <TableHead>Date</TableHead>
                   <TableHead>Clock in</TableHead>
                   <TableHead>Clock out</TableHead>
+                  <TableHead>Worked from</TableHead>
                   <TableHead />
                 </TableRow>
               </TableHeader>
@@ -1073,6 +1227,11 @@ function BulkManualRecordForm() {
                         onChange={(e) => updateRow(r.key, "clockOut", e.target.value)}
                         className="h-8 w-28"
                       />
+                    </TableCell>
+                    <TableCell>
+                      <div className="w-40">
+                        <LocationSelect value={r.workLocation} onChange={(v) => updateRow(r.key, "workLocation", v)} />
+                      </div>
                     </TableCell>
                     <TableCell>
                       <Button type="button" size="sm" variant="ghost" onClick={() => removeRow(r.key)}>

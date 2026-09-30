@@ -2,7 +2,9 @@ import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { todayDateOnly } from "@/lib/attendance/time";
-import { isOffDay, weekStartOf } from "@/lib/attendance/week";
+import { isOffDay, resolveDefaultOffDay, weekStartOf } from "@/lib/attendance/week";
+import { loadWeekOffs } from "@/lib/attendance/weekly-off";
+import { syncCompensationCreditsForWeek } from "@/lib/attendance/compensation-credits";
 import { audit, clientIp } from "@/lib/audit";
 import { notifyFinanceUsers } from "@/lib/notifications/push";
 
@@ -20,7 +22,7 @@ async function getStatus(employeeId: string) {
   const [employee, todayRecord, move] = await Promise.all([
     prisma.employee.findUnique({
       where: { id: employeeId },
-      select: { team: { select: { defaultWeeklyOffDay: true } } },
+      select: { defaultWeeklyOffDay: true, team: { select: { defaultWeeklyOffDay: true } } },
     }),
     prisma.attendanceRecord.findUnique({
       where: { employeeId_date: { employeeId, date: today } },
@@ -31,13 +33,19 @@ async function getStatus(employeeId: string) {
     }),
   ]);
 
-  const defaultOffDay = employee?.team?.defaultWeeklyOffDay ?? 0;
+  // Employee override > team default > Sunday, same as everywhere else.
+  const defaultOffDay = resolveDefaultOffDay(employee?.defaultWeeklyOffDay, employee?.team?.defaultWeeklyOffDay);
   const movedOffDateByWeek = move?.active
     ? new Map([[weekStart.toISOString().slice(0, 10), move.date.toISOString().slice(0, 10)]])
     : new Map<string, string>();
 
   const clockedInToday = !!todayRecord?.clockInRaw;
-  const offToday = isOffDay(today, defaultOffDay, movedOffDateByWeek);
+  // The resolved week off (claimed / automatic / default) for fixed-schedule
+  // employees; flexible ones have no auto-resolution and keep the plain check.
+  const weekOff = (await loadWeekOffs(weekStart, [employeeId])).get(employeeId);
+  const offToday = weekOff
+    ? weekOff.date === today.toISOString().slice(0, 10)
+    : isOffDay(today, defaultOffDay, movedOffDateByWeek);
   const usedThisWeek = !!move?.active;
   const canClaimToday = !clockedInToday && !offToday && !usedThisWeek;
 
@@ -85,6 +93,10 @@ export async function POST(req: Request) {
     create: { employeeId: session.employeeId, weekStart, date: today, active: true },
     update: { date: today, active: true, revertedById: null, revertedAt: null },
   });
+
+  // Claiming a day moves the week's off, which can turn a worked default off day
+  // from a compensation day into an ordinary one (or back).
+  await syncCompensationCreditsForWeek(session.employeeId, today).catch(() => {});
 
   await audit({
     action: "attendance.weekly_off_claim",

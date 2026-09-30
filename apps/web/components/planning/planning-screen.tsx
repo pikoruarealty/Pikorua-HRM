@@ -42,6 +42,7 @@ export function PlanningScreen({ isAdmin = false }: { isAdmin?: boolean }) {
     openSession,
     clockedIn,
     clockedOut,
+    wfhAllowed,
     refresh: refreshAttendance,
   } = useAttendanceStatus();
 
@@ -147,7 +148,13 @@ export function PlanningScreen({ isAdmin = false }: { isAdmin?: boolean }) {
           </CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-          {!clockedIn && (
+          {!clockedIn && wfhAllowed === false && (
+            <p className="text-sm text-muted-foreground">
+              Work from home isn&apos;t enabled for your account. In-office attendance is recorded by the
+              biometric device.
+            </p>
+          )}
+          {!clockedIn && wfhAllowed !== false && (
             <>
               <p className="text-sm text-muted-foreground">
                 {clockedOut

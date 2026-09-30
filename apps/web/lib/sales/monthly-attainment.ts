@@ -147,3 +147,28 @@ export function attainmentFor(
     outcomeDetail: outcomeParts.length > 0 ? outcomeParts.join(", ") : null,
   };
 }
+
+/**
+ * Swap the calls bucket for what the CRM and approved offline claims actually
+ * show for the month (2026-09-30).
+ *
+ * Calls used to be summed off one WorkItem per day, which only worked while a
+ * new row was minted every day. Since the daily-calls row became a single
+ * standing counter reset in place (and the old per-day rows were retired), the
+ * WorkItem only ever holds *today's* figure — so the month's calls now come
+ * from SalesActivitySync + approved claims, the same sources that row is itself
+ * computed from, against a target of `dailyTarget` for each day the rep was
+ * expected to be selling (lib/sales/pacing.ts expectedActivityDaysElapsed).
+ */
+export function withCallsActivity(
+  totals: MetricTotals,
+  calls: { made: number; dailyTarget: number; expectedDaysElapsed: number },
+): MetricTotals {
+  return {
+    ...totals,
+    calls: {
+      current: calls.made,
+      target: Math.max(0, calls.dailyTarget) * Math.max(0, calls.expectedDaysElapsed),
+    },
+  };
+}

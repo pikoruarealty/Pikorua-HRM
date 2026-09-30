@@ -4,9 +4,10 @@ import { getSession } from "@/lib/auth";
 import { FINANCE_ROLES } from "@/lib/rbac";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { computeHours, isImplausibleDuration, MAX_PLAUSIBLE_SHIFT_HOURS } from "@/lib/attendance/time";
-import { AttendanceApprovalStatus, AttendanceSource } from "@prisma/client";
+import { AttendanceApprovalStatus, AttendanceSource, WorkLocation } from "@prisma/client";
 import { syncCompensationCreditForRecord } from "@/lib/attendance/compensation-credits";
 import { audit, clientIp } from "@/lib/audit";
+import { ATTENDANCE_EXEMPT_MESSAGE, isAttendanceExemptRole } from "@/lib/attendance/tracking";
 
 // Manual override (2026-07-15, widened to Admin/HR 2026-08-07). POST
 // /api/v1/attendance/manual — **Admin/HR**: create (or overwrite the
@@ -31,6 +32,11 @@ const manualSchema = z.object({
   // almost always a same-day-vs-next-day mistake in the time, not a real
   // shift. Requires an explicit second submit to confirm it's intentional.
   confirm_long_duration: z.boolean().optional(),
+  // 2026-09-30: where the day was worked. Omitted = keep the existing record's
+  // location, or office for a new one (the old behaviour). Set explicitly it
+  // also re-tags the day's sessions, since per-session location is what the
+  // office/WFH hours split reads.
+  work_location: z.nativeEnum(WorkLocation).optional(),
 });
 
 export async function POST(req: Request) {
@@ -52,6 +58,9 @@ export async function POST(req: Request) {
 
   const employee = await prisma.employee.findUnique({ where: { id: d.employee_id } });
   if (!employee) return failFor(ErrorCode.VALIDATION, "employee_id does not reference an existing employee.");
+  if (isAttendanceExemptRole(employee.role)) {
+    return failFor(ErrorCode.VALIDATION, ATTENDANCE_EXEMPT_MESSAGE);
+  }
 
   const date = new Date(`${d.date}T00:00:00.000Z`);
   const clockIn = new Date(d.clock_in);
@@ -89,6 +98,7 @@ export async function POST(req: Request) {
     approvedById: session.userId,
     approvedAt: new Date(),
     source: AttendanceSource.manual,
+    ...(d.work_location ? { workLocation: d.work_location } : {}),
   };
 
   const record = existing
@@ -96,6 +106,12 @@ export async function POST(req: Request) {
     : await prisma.attendanceRecord.create({
         data: { employeeId: d.employee_id, date, ...data },
       });
+  if (existing && d.work_location) {
+    await prisma.attendanceSession.updateMany({
+      where: { recordId: existing.id },
+      data: { workLocation: d.work_location },
+    });
+  }
 
   // Written pre-approved — re-derive whether this day earns a compensation
   // credit (off-day clock-in), same as the automated approve flow.
@@ -112,6 +128,7 @@ export async function POST(req: Request) {
       date: d.date,
       clock_in: clockIn.toISOString(),
       clock_out: clockOut?.toISOString() ?? null,
+      work_location: record.workLocation,
       reason: d.reason,
       ...(existing
         ? {

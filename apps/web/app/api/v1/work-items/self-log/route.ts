@@ -5,8 +5,11 @@ import { getSession } from "@/lib/auth";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { audit, clientIp } from "@/lib/audit";
 import { isClockedInNow } from "@/lib/attendance/status";
+import { todayDateOnly } from "@/lib/attendance/time";
 import { createSelfLoggedTask, createFreeTextSelfLoggedTask } from "@/lib/work/adhoc";
-import { estimateSelfLoggedTaskPoints, GroqError } from "@/lib/ai/task-generation";
+import { estimateSelfLoggedEffort, GroqError, type SelfLoggedEffort } from "@/lib/ai/task-generation";
+import { dailyCapHours, fitToDailyCap, hoursClaimed, pointsToHours } from "@/lib/work/self-log-scoring";
+import { shiftHoursFor } from "@/lib/attendance/expected-hours";
 
 // POST /api/v1/work-items/self-log (2026-08-10) — an employee logs work nobody
 // assigned them. Owner request: "for the tech employees if no tasks assigned,
@@ -63,7 +66,12 @@ export async function POST(req: Request) {
 
   const employee = await prisma.employee.findUnique({
     where: { id: session.employeeId },
-    select: { id: true, fullName: true, departmentId: true },
+    select: {
+      id: true,
+      fullName: true,
+      departmentId: true,
+      team: { select: { expectedStartTime: true, expectedEndTime: true } },
+    },
   });
   if (!employee?.departmentId) {
     // Admin/HR have no department and therefore no ad-hoc container or
@@ -86,13 +94,46 @@ export async function POST(req: Request) {
     return fail(ErrorCode.VALIDATION, "You must be clocked in to log a task.", 422);
   }
 
+  // One working day can only carry so much effort (lib/work/self-log-scoring.ts):
+  // production had 25 entries / 149 points from one person in a day, each a
+  // slice of the same feature. Today's earlier entries — catalog or free-text —
+  // use up the ceiling, whatever they were worth.
+  const earlierToday = (
+    await prisma.dailyTaskSelection.findMany({
+      where: {
+        employeeId: employee.id,
+        date: todayDateOnly(),
+        workItem: { selfLogged: true, deletedAt: null, taskPoints: { not: null } },
+      },
+      select: { workItem: { select: { title: true, taskPoints: true } } },
+    })
+  ).map((s) => ({ title: s.workItem.title, points: s.workItem.taskPoints ?? 0 }));
+  const capHours = dailyCapHours(shiftHoursFor(employee.team?.expectedStartTime, employee.team?.expectedEndTime));
+  const remainingHours = capHours - hoursClaimed(earlierToday.map((e) => e.points));
+  const limitMessage = (left: number) =>
+    left < 0.5
+      ? `You've already logged about ${capHours}h of work today, the most one day can carry.`
+      : `Only about ${left}h of today's ${capHours}h limit is left — too little for that task.`;
+
   let created: { id: string } | null;
-  let auditMetadata: { typeKey: string | null; title: string; points?: number; aiEstimated?: boolean };
+  let auditMetadata: {
+    typeKey: string | null;
+    title: string;
+    points?: number;
+    aiEstimated?: boolean;
+    hours?: number;
+    overlap?: boolean;
+    clamped?: boolean;
+  };
+  let sizing: { hours: number | null; overlap: boolean; clamped: boolean; remainingHours: number } | null = null;
 
   if (parsed.data.typeKey) {
     const type = await prisma.adhocTaskType.findUnique({ where: { key: parsed.data.typeKey } });
     if (!type || !type.active) {
       return failFor(ErrorCode.VALIDATION, "typeKey does not match an active ad-hoc task type.");
+    }
+    if (pointsToHours(type.points) > remainingHours) {
+      return fail(ErrorCode.VALIDATION, limitMessage(remainingHours), 422);
     }
     created = await createSelfLoggedTask({
       employeeId: employee.id,
@@ -105,6 +146,12 @@ export async function POST(req: Request) {
       description: parsed.data.description?.trim() || null,
     });
     auditMetadata = { typeKey: type.key, points: type.points, title: parsed.data.title };
+    sizing = {
+      hours: null,
+      overlap: false,
+      clamped: false,
+      remainingHours: Math.round((remainingHours - pointsToHours(type.points)) * 10) / 10,
+    };
   } else {
     // Free-text: no longer capped at one open claim at a time (2026-08-16,
     // owner request — the cap blocked a second log the moment the first was
@@ -112,9 +159,12 @@ export async function POST(req: Request) {
     // bug more than a guardrail). Aggregate self-logged points are still
     // bounded by performance_config.self_logged_cap_percent.
     const description = parsed.data.description!.trim();
-    let points: number;
+    if (remainingHours < 0.5) {
+      return fail(ErrorCode.VALIDATION, limitMessage(remainingHours), 422);
+    }
+    let effort: SelfLoggedEffort;
     try {
-      points = await estimateSelfLoggedTaskPoints({ title: parsed.data.title, description });
+      effort = await estimateSelfLoggedEffort({ title: parsed.data.title, description }, { earlierToday });
     } catch (err) {
       if (err instanceof GroqError) {
         return failFor(
@@ -124,6 +174,11 @@ export async function POST(req: Request) {
       }
       throw err;
     }
+    const fit = fitToDailyCap(effort.hours, remainingHours);
+    if (!fit.allowed) {
+      return fail(ErrorCode.VALIDATION, limitMessage(fit.remainingHours), 422);
+    }
+    const points = fit.points;
     created = await createFreeTextSelfLoggedTask({
       employeeId: employee.id,
       departmentId: employee.departmentId,
@@ -131,7 +186,21 @@ export async function POST(req: Request) {
       description,
       points,
     });
-    auditMetadata = { typeKey: null, title: parsed.data.title, points, aiEstimated: true };
+    auditMetadata = {
+      typeKey: null,
+      title: parsed.data.title,
+      points,
+      aiEstimated: true,
+      hours: fit.hours,
+      overlap: effort.overlap,
+      clamped: fit.clamped,
+    };
+    sizing = {
+      hours: fit.hours,
+      overlap: effort.overlap,
+      clamped: fit.clamped,
+      remainingHours: Math.round((remainingHours - pointsToHours(points)) * 10) / 10,
+    };
   }
   if (!created) {
     return failFor(
@@ -139,6 +208,16 @@ export async function POST(req: Request) {
       "Your department has no active members to review self-logged work yet.",
     );
   }
+
+  // What you log yourself is what you are working on, so it goes straight onto
+  // today's plan (2026-09-30, owner request) — the employee used to have to go
+  // back to Daily Planning and pick their own just-logged task. Same additive
+  // skipDuplicates write POST /daily-selections and clock-in use. The caller is
+  // clocked in (checked above), so today's record and the plan already exist.
+  await prisma.dailyTaskSelection.createMany({
+    data: [{ employeeId: employee.id, workItemId: created.id, date: todayDateOnly() }],
+    skipDuplicates: true,
+  });
 
   // Audited: this is an employee creating points-bearing work for themselves.
   // The Lead's later accept/reject is audited by the review route.
@@ -156,7 +235,7 @@ export async function POST(req: Request) {
     where: { id: created.id },
     include: { adhocType: { select: { key: true, label: true, points: true } } },
   });
-  return ok(item, 201);
+  return ok({ ...item, sizing }, 201);
 }
 
 export async function GET() {

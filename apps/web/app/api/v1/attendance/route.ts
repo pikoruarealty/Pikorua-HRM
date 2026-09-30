@@ -5,6 +5,7 @@ import { FINANCE_ROLES, isLeadRole } from "@/lib/rbac";
 import { getLedEmployeeIds } from "@/lib/employees/managed-scope";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { uuidFilter, dateFilter, enumFilter } from "@/lib/api/params";
+import { ATTENDANCE_EXEMPT_ROLES } from "@/lib/attendance/tracking";
 
 // Track A. GET /api/v1/attendance — Admin/HR see all (optionally filtered to
 // one employee), Lead sees their own team, Employee sees only themselves.
@@ -51,6 +52,9 @@ export async function GET(req: Request) {
 
   if (FINANCE_ROLES.includes(session.role)) {
     if (employeeIdParam) where.employeeId = employeeIdParam;
+    // Admin has no attendance (lib/attendance/tracking.ts) — keep any stray
+    // legacy row out of the review queue.
+    where.employee = { role: { notIn: ATTENDANCE_EXEMPT_ROLES } };
   } else if (isLeadRole(session.role)) {
     if (!session.employeeId) return ok([]);
     // Scope by the teams this Lead *leads*, not the one team they happen to be

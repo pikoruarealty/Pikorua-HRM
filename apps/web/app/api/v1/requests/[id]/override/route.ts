@@ -1,3 +1,4 @@
+import { syncCompensationCreditsForRange } from "@/lib/attendance/compensation-credits";
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
@@ -76,6 +77,12 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     },
     ip: clientIp(req),
   });
+
+  // Leave going in or out of force moves the week's weekly off — see the same
+  // hook in requests/[id]/approve.
+  if (request.dateFrom && request.dateTo) {
+    await syncCompensationCreditsForRange(request.employeeId, request.dateFrom, request.dateTo).catch(() => {});
+  }
 
   return ok(updated);
 }

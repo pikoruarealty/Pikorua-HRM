@@ -6,6 +6,7 @@ import { EmployeeStatus } from "@prisma/client";
 import { downloadPunchDataMCID } from "@/lib/integrations/teamoffice/client";
 import { bestNameMatches } from "@/lib/util/string-similarity";
 import { createLogger } from "@/lib/log";
+import { ATTENDANCE_EXEMPT_ROLES } from "@/lib/attendance/tracking";
 
 const logger = createLogger("teamoffice");
 
@@ -38,7 +39,7 @@ export async function GET() {
   const unmatchedGroups = grouped.filter((g) => !mappedSet.has(g.deviceUid));
 
   const unmappedEmployees = await prisma.employee.findMany({
-    where: { deviceUid: null, status: EmployeeStatus.active },
+    where: { deviceUid: null, status: EmployeeStatus.active, role: { notIn: ATTENDANCE_EXEMPT_ROLES } },
     select: { id: true, fullName: true },
   });
   const nameOptions = unmappedEmployees.map((e) => ({ id: e.id, name: e.fullName }));

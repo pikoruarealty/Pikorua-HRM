@@ -8,7 +8,7 @@ import { isUuid } from "@/lib/api/params";
 import { audit, clientIp } from "@/lib/audit";
 import { withPhotoPath } from "@/lib/employees/photo";
 import { getLedEmployeeIds } from "@/lib/employees/managed-scope";
-import { dateOnly } from "@/lib/attendance/time";
+import { dateOnly, todayDateOnly } from "@/lib/attendance/time";
 import { reconcileEmployeeDay } from "@/lib/integrations/teamoffice/reconcile";
 
 // Track A. GET/PATCH/DELETE /api/v1/employees/:id — role-scoped per PRD/API_SPEC.
@@ -24,6 +24,10 @@ const PUBLIC_SELECT = {
   employmentType: true,
   requiredDaysPerWeek: true,
   defaultWeeklyOffDay: true,
+  // Admin-set WFH controls (2026-09-30) — the employee sees their own, so the UI
+  // can hide the WFH buttons; edited only via PATCH below, Admin-only.
+  wfhAllowed: true,
+  expectedWfhHoursPerWeek: true,
   dateOfBirth: true,
   dateOfJoining: true,
   deviceUid: true,
@@ -102,6 +106,10 @@ const patchSchema = z.object({
   employment_type: z.nativeEnum(EmploymentType).optional(),
   required_days_per_week: z.number().int().min(1).max(7).nullable().optional(),
   default_weekly_off_day: z.number().int().min(0).max(6).nullable().optional(),
+  // 2026-09-30, both Admin-only (checked below): may this person clock in from
+  // home, and how many WFH hours a week a part-timer is expected to do.
+  wfh_allowed: z.boolean().optional(),
+  expected_wfh_hours_per_week: z.number().min(0).max(80).nullable().optional(),
   // Role change is a privilege-tier change: Admin-only (narrower than the
   // Admin/HR gate on the rest of this route), and handled specially below —
   // it also updates the linked User.role and revokes their sessions.
@@ -146,6 +154,13 @@ export async function PATCH(
     return failFor(ErrorCode.VALIDATION, "Invalid request body.");
   }
   const d = parsed.data;
+
+  if (
+    (d.wfh_allowed !== undefined || d.expected_wfh_hours_per_week !== undefined) &&
+    session.role !== Role.admin
+  ) {
+    return failFor(ErrorCode.FORBIDDEN, "Only an admin can change WFH settings.");
+  }
 
   // Role change is Admin-only and blocked on your own account (an admin
   // demoting themselves would revoke their own session mid-request).
@@ -208,6 +223,15 @@ export async function PATCH(
 
   const roleChanged = d.role !== undefined && d.role !== existing.role;
 
+  // A weekly WFH-hours target only makes sense for someone on a part-time /
+  // intern schedule; a full-timer's hours are the shift.
+  if (
+    d.expected_wfh_hours_per_week != null &&
+    (d.employment_type ?? existing.employmentType) === EmploymentType.fulltime
+  ) {
+    return failFor(ErrorCode.VALIDATION, "Expected WFH hours apply to part-time / intern employees only.");
+  }
+
   const employee = await prisma.employee.update({
     where: { id: params.id },
     data: {
@@ -219,6 +243,16 @@ export async function PATCH(
       ...(d.employment_type !== undefined ? { employmentType: d.employment_type } : {}),
       ...(d.required_days_per_week !== undefined ? { requiredDaysPerWeek: d.required_days_per_week } : {}),
       ...(d.default_weekly_off_day !== undefined ? { defaultWeeklyOffDay: d.default_weekly_off_day } : {}),
+      ...(d.wfh_allowed !== undefined ? { wfhAllowed: d.wfh_allowed } : {}),
+      ...(d.expected_wfh_hours_per_week !== undefined
+        ? {
+            expectedWfhHoursPerWeek: d.expected_wfh_hours_per_week,
+            // Restarts the measuring window only when the target really changed.
+            ...(Number(existing.expectedWfhHoursPerWeek ?? NaN) !== (d.expected_wfh_hours_per_week ?? NaN)
+              ? { expectedWfhHoursSince: d.expected_wfh_hours_per_week == null ? null : todayDateOnly() }
+              : {}),
+          }
+        : {}),
       ...(d.role !== undefined ? { role: d.role } : {}),
       ...(d.full_name !== undefined ? { fullName: d.full_name } : {}),
       ...(d.email !== undefined ? { email: d.email } : {}),
@@ -278,6 +312,9 @@ export async function PATCH(
         ? { base_salary_before: Number(existing.baseSalary), base_salary_after: d.base_salary }
         : {}),
       ...(d.status !== undefined ? { status_after: d.status } : {}),
+      ...(d.wfh_allowed !== undefined
+        ? { wfh_allowed_before: existing.wfhAllowed, wfh_allowed_after: d.wfh_allowed }
+        : {}),
       ...(roleChanged ? { role_before: existing.role, role_after: d.role } : {}),
       ...(emailChanged ? { email_before: existing.email, email_after: d.email } : {}),
     },

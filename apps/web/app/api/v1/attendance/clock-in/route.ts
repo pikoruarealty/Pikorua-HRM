@@ -5,6 +5,7 @@ import { getSession } from "@/lib/auth";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { todayDateOnly } from "@/lib/attendance/time";
 import { findOpenSession } from "@/lib/attendance/sessions";
+import { ATTENDANCE_EXEMPT_MESSAGE, isAttendanceExemptRole } from "@/lib/attendance/tracking";
 import { notifyFinanceUsers } from "@/lib/notifications/push";
 import { audit } from "@/lib/audit";
 
@@ -46,6 +47,22 @@ export async function POST(req: Request) {
     return failFor(ErrorCode.FORBIDDEN, "No employee record linked to this account.");
   }
   const employeeId = session.employeeId;
+  if (isAttendanceExemptRole(session.role)) {
+    return failFor(ErrorCode.FORBIDDEN, ATTENDANCE_EXEMPT_MESSAGE);
+  }
+
+  // Admin can switch WFH off per employee (Employee.wfhAllowed). Every app
+  // clock-in is a WFH clock-in (office attendance comes from the device), so this
+  // is the whole gate. Re-clocking in after a break is covered too — it is still
+  // a WFH session — while clock-out is deliberately NOT gated, so someone
+  // switched off mid-day can still close the session they have open.
+  const self = await prisma.employee.findUnique({
+    where: { id: employeeId },
+    select: { wfhAllowed: true },
+  });
+  if (self && !self.wfhAllowed) {
+    return failFor(ErrorCode.FORBIDDEN, "Work from home isn't enabled for your account. Ask Admin.");
+  }
 
   // Body is optional — a bare clock-in with no task selection is still valid.
   let workItemIds: string[] = [];

@@ -23,7 +23,9 @@ import type { MonthlyBreakdown } from "@/lib/attendance/monthly-breakdown";
  * expected to work and did not — removing it would quietly reward absence by
  * shrinking the target.
  */
-export function expectedActivityDaysElapsed(b: MonthlyBreakdown): number {
+export function expectedActivityDaysElapsed(
+  b: Pick<MonthlyBreakdown, "workingDaysElapsed" | "holidayDays" | "paidLeaveDays" | "unpaidLeaveDays">,
+): number {
   const days = b.workingDaysElapsed - b.holidayDays - b.paidLeaveDays - b.unpaidLeaveDays;
   return days > 0 ? days : 0;
 }

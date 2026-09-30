@@ -8,6 +8,13 @@
 // arbitrary department (e.g. "AI Tech"), any typeKey that isn't literally
 // "tech" was wrongly treated as sales/BD. Use this explicit allowlist check
 // instead everywhere that distinction matters.
+//
+// Matched case-insensitively (2026-09-30): type_key is free text an Admin
+// types, and production's Sales department was created as "Sales". The old
+// exact-match `=== "sales"` therefore classed the whole sales team as a
+// points (Tech) department everywhere — so they were scored on task points
+// they can't earn, and every recognition score read 0.
 export function isMetricDepartment(typeKey: string | null | undefined): boolean {
-  return typeKey === "sales" || typeKey === "bd";
+  const key = typeKey?.trim().toLowerCase();
+  return key === "sales" || key === "bd";
 }

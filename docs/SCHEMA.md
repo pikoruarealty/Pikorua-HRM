@@ -63,6 +63,9 @@ Config table implementing the generic label mapping described in PRD §4.1.
 | date_of_birth | date? | used by Event Management |
 | date_of_joining | date | used by Event Management (anniversary) and salary proration |
 | base_salary | numeric(12,2) | editable |
+| wfh_allowed | bool | Default `true`. Admin switch (2026-09-30): may the employee clock in from home. Gates `POST /attendance/clock-in` (403) and hides the WFH buttons; clock-out is never gated. |
+| expected_wfh_hours_per_week | decimal(5,2)? | Admin-set WFH target for part-time/intern staff (2026-09-30). Tracked with a 60-day advance/late offset (`lib/attendance/wfh-hours.ts`); does **not** feed payroll. |
+| expected_wfh_hours_since | date? | Day the target was set/changed — the balance is measured from the first full week after it, so enabling a target never charges for earlier weeks. |
 | device_uid | text? | TeamOffice biometric Empcode (2026-08-12). Not DB-unique — an unmapped Empcode must still be ingestible into device_punch_raw before an Admin confirms the mapping; "one employee per Empcode" is enforced at the application layer. |
 | status | enum | `active`, `inactive` |
 | created_at | timestamptz | |
@@ -445,6 +448,9 @@ Versioned by `effective_from`, same pattern as `payroll_config` / `leave_config`
 `work_items.self_logged` / `adhoc_type_id` (see §Work Items) are set by `POST /work-items/self-log` only. A self-logged item **always** routes through review regardless of the point threshold — the tiered threshold exists to spare a Lead from rubber-stamping small *assigned* work, but here the review is the only check that the work happened at all.
 
 The per-department container WorkUnit (`ensureAdhocContainer`, `lib/work/adhoc.ts`) re-checks its `project_lead_id` on every call, not just at creation (fixed 2026-08-11) — it used to only set the lead when first provisioning the container, so a lead who later left the department or went inactive would silently keep every future self-logged task unreviewable (review is scoped to the WorkUnit's own project lead).
+
+### `unpaid_day_declarations` (2026-09-30)
+A day an employee switched from an **automatic weekly off** to unpaid leave themselves — no approval, since it can only cost them pay. `(employee_id, date)` unique. Counted as an unpaid-leave day by the monthly breakdown, redeemable by a compensation credit like any unpaid day, and refused once the month has a payslip. The weekly-off rule itself (explicit claim → default day → first unexplained no-show when the default day was worked) is derived, not stored: `lib/attendance/weekly-off.ts`.
 
 ### `performance_config`
 Both knobs are **live as of 2026-08-11**; read through `getPerformanceConfig()` in `lib/performance/config.ts`, which resolves the row in force for a given date exactly like `SalesTargetConfig`/`PayrollConfig` (latest `effective_from` on or before it). Versioning is load-bearing here: turning scoring on in September must not retroactively publish August's ranks, and raising the cap must not silently rewrite last month's. Editable via `GET/PUT /performance/config` (Admin, Commit 7); no longer SQL-only.

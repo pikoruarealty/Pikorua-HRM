@@ -20,6 +20,7 @@ import { dateOnly, isImplausibleDuration } from "@/lib/attendance/time";
 import { sessionBounds, summariseSessions, type SessionSpan } from "@/lib/attendance/sessions";
 import { buildEodSummary } from "@/lib/eod/summary";
 import { pushNotification } from "@/lib/notifications/push";
+import { isAttendanceExemptRole } from "@/lib/attendance/tracking";
 
 const logger = createLogger("teamoffice");
 
@@ -28,6 +29,7 @@ export type ReconcileOutcome =
   | { status: "skipped_wfh"; deviceUid: string }
   | { status: "skipped_already_approved"; deviceUid: string }
   | { status: "unmapped"; deviceUid: string }
+  | { status: "skipped_exempt"; deviceUid: string }
   | { status: "no_unreconciled_punches"; deviceUid: string };
 
 /** The source-of-truth guard's decision for an existing AttendanceRecord,
@@ -92,6 +94,13 @@ export async function reconcileEmployeeDay(deviceUid: string, date: Date): Promi
   if (!employee) {
     logger.info("device punch unmapped, no employee links this Empcode", { deviceUid, date: day });
     return { status: "unmapped", deviceUid };
+  }
+  // Admin accounts have no attendance (lib/attendance/tracking.ts): if someone
+  // maps an Admin to a device badge anyway, their punches are left alone rather
+  // than turned into records nobody reviews or pays against.
+  if (isAttendanceExemptRole(employee.role)) {
+    logger.info("device punch ignored, employee is exempt from attendance", { deviceUid, date: day });
+    return { status: "skipped_exempt", deviceUid };
   }
 
   const outcome = await prisma.$transaction(async (tx): Promise<ReconcileOutcome> => {

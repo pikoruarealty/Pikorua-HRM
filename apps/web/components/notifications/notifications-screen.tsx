@@ -87,7 +87,7 @@ export function NotificationsScreen() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Notifications</h1>
           <p className="text-sm text-muted-foreground">{unreadCount} unread</p>
@@ -139,8 +139,10 @@ export function NotificationsScreen() {
                 />
                 {/* min-w-0 lets a long body wrap instead of stretching the row. */}
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <Badge variant="outline">{n.type}</Badge>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="outline" className="max-w-full truncate">
+                      {n.type}
+                    </Badge>
                     {!n.readAt && <Badge>unread</Badge>}
                   </div>
                   <p className="mt-1.5 font-medium">{n.title ?? humanizeType(n.type)}</p>

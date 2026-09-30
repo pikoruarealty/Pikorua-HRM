@@ -18,6 +18,8 @@ function breakdown(over: Partial<MonthlyBreakdown> = {}): MonthlyBreakdown {
     absentDays: 0,
     compensationDays: 0,
     workingDaysElapsed: 0,
+    absentDates: [],
+    days: [],
     ...over,
   };
 }

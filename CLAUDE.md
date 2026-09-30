@@ -39,6 +39,13 @@ A day is one `attendance_records` row **plus one or more `attendance_sessions`**
 - "Clocked in right now" = an open session today (`isClockedInNow`). That is the gate on completing tasks and self-logging: an employee may clock back in freely, but **cannot log progress while clocked out**.
 - `work_location` (`office` | `wfh`) is set per session at clock-in. A WFH day is a normally worked, normally paid day — distinct from the pre-existing `RequestType.wfh` (asking permission ahead of time).
 
+- **Admin has no attendance (2026-09-30).** Admin accounts don't clock in, aren't on the device and never appear in attendance tables/totals — the single list is `ATTENDANCE_EXEMPT_ROLES` in `@/lib/attendance/tracking`. Any new attendance query over "all employees" must filter on it; HR is *not* exempt.
+- **The tiles and the calendar share one walk.** `classifyMonth` returns the counts *and* `days[]`; build views from that, never re-derive day status elsewhere. The joining date decides what an employee *owes*, never which approved records are ignored. Office/WFH hours come from `lib/attendance/calendar.ts` (approved days only).
+
+- **Weekly off is resolved, not just read (2026-09-30).** Use `resolveWeekOff`/`loadWeekOffs` (`@/lib/attendance/weekly-off`) — never `isOffDay` alone — to decide a week's off; `classifyMonth`, comp-credit issuance, the overview and the sales panel all do. Anything that changes a week's inputs (record, leave, claim, declaration) must call `syncCompensationCreditsForWeek`. A schema change needs a migration *and* passes the CI drift check.
+- **WFH is an Admin switch per employee** (`employees.wfh_allowed`, gates clock-in, never clock-out). Expected WFH hours are tracking-only — they must not feed payroll without a new owner decision.
+- **Self-logged points are hours-based and capped per day** (`@/lib/work/self-log-scoring`). Don't put wording-sensitive scoring back into a prompt; A/B any prompt change on real production entries (see progress.md 2026-09-30).
+
 ## Biometric / TeamOffice integration — IN SCOPE
 The office biometric punch system is part of this project (API docs PDF in the repo root, gitignored; corporate id/username/password in `.env`). Every punch opens or closes an `attendance_sessions` row, so a device day and a manual day are the same object — `source` becomes `device_sync` and `employees.device_uid` maps the employee. Still open: source-of-truth between HRMS and the TeamOffice DB, and the name-match autoselect for mapping new hires.
 

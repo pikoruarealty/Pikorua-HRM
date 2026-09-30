@@ -24,9 +24,11 @@ import {
 import { getPerformanceConfig } from "@/lib/performance/config";
 import { cappedSelfLoggedPoints } from "@/lib/work/adhoc";
 import { expectedActivityDaysElapsed } from "@/lib/sales/pacing";
+import { getSalesTargetConfig, resolveTargets } from "@/lib/sales/targets";
 import {
   attainmentFor,
   summariseMetricItems,
+  withCallsActivity,
   type SalesAttainment,
 } from "@/lib/sales/monthly-attainment";
 
@@ -54,7 +56,7 @@ export type EmployeeRawInputs = {
   sales: SalesAttainment | null;
   /** Average Lead review rating 1-5, or null when unreviewed. */
   reviewAvg: number | null;
-  attendance: MonthlyBreakdown | null;
+  attendance: Omit<MonthlyBreakdown, "days"> | null;
   /** Due-dated tasks completed in the period, and how many of those were on time. */
   timeliness: { onTime: number; total: number };
   /** Distinct tasks committed to in Daily Planning, and how many reached completed. */
@@ -111,6 +113,9 @@ export async function gatherMonthlyInputs(
     selections,
     perfConfig,
     calendar,
+    callsSynced,
+    callsOffline,
+    salesTargetConfig,
   ] = await Promise.all([
     // Deleting a WorkItem deliberately leaves its ledger row in place (see the
     // DELETE handler in work-items/[id]) so the credit stays auditable. That
@@ -189,6 +194,9 @@ export async function gatherMonthlyInputs(
           select: {
             id: true,
             defaultWeeklyOffDay: true,
+            dailyCallTarget: true,
+            monthlySiteVisitTarget: true,
+            monthlyBookingTarget: true,
             team: { select: { defaultWeeklyOffDay: true } },
           },
         }),
@@ -206,7 +214,29 @@ export async function gatherMonthlyInputs(
       ]);
       return { employees, holidays, moves };
     })(),
+    // The month's calls, from the same sources the daily calls WorkItem is
+    // computed from. That item is now a single standing counter (reset daily),
+    // so summing "one row per day" no longer yields the month — see
+    // withCallsActivity in lib/sales/monthly-attainment.ts.
+    prisma.salesActivitySync.groupBy({
+      by: ["employeeId"],
+      where: { employeeId: { not: null }, date: { gte: periodStart, lt: periodEnd } },
+      _sum: { callsMade: true },
+    }),
+    prisma.offlineActivityClaim.groupBy({
+      by: ["employeeId"],
+      where: { status: "approved", date: { gte: periodStart, lt: periodEnd } },
+      _sum: { calls: true },
+    }),
+    getSalesTargetConfig(periodStart),
   ]);
+  const callsMadeByEmployee = new Map<string, number>();
+  for (const r of callsSynced) {
+    if (r.employeeId) callsMadeByEmployee.set(r.employeeId, r._sum.callsMade ?? 0);
+  }
+  for (const r of callsOffline) {
+    callsMadeByEmployee.set(r.employeeId, (callsMadeByEmployee.get(r.employeeId) ?? 0) + (r._sum.calls ?? 0));
+  }
 
   const selfLoggedByEmployee = new Map(
     selfLoggedLedger.map((r) => [r.employeeId, r._sum.points ?? 0]),
@@ -245,8 +275,8 @@ export async function gatherMonthlyInputs(
   }
   const metricTotals = summariseMetricItems(metricItems);
   for (const emp of calendar.employees) {
-    const totals = metricTotals.get(emp.id);
-    if (!totals) continue;
+    const metricRowTotals = metricTotals.get(emp.id);
+    if (!metricRowTotals) continue;
     const movedOffDateByWeek = buildMovedOffDateByWeek(movesByEmployee.get(emp.id) ?? []);
     const defaultOffDay = resolveDefaultOffDay(
       emp.defaultWeeklyOffDay,
@@ -259,6 +289,11 @@ export async function gatherMonthlyInputs(
     });
     const breakdown = entry(inputs, emp.id).attendance;
     const expectedDaysElapsed = breakdown ? expectedActivityDaysElapsed(breakdown) : 0;
+    const totals = withCallsActivity(metricRowTotals, {
+      made: callsMadeByEmployee.get(emp.id) ?? 0,
+      dailyTarget: resolveTargets(emp, salesTargetConfig).dailyCallTarget,
+      expectedDaysElapsed,
+    });
     entry(inputs, emp.id).sales = attainmentFor(totals, expectedDaysElapsed, expectedDaysInMonth);
   }
 

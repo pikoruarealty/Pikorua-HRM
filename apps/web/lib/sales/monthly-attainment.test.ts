@@ -1,8 +1,29 @@
 import { describe, expect, test } from "bun:test";
 import { SalesMetric } from "@prisma/client";
-import { attainmentFor, summariseMetricItems, type MetricItem } from "./monthly-attainment";
+import { attainmentFor, summariseMetricItems, withCallsActivity, type MetricItem } from "./monthly-attainment";
 
 const EMP = "emp-1";
+
+describe("withCallsActivity", () => {
+  const totals = {
+    calls: { current: 0, target: 100 },
+    siteVisits: { current: 3, target: 20 },
+    bookings: { current: 1, target: 2 },
+  };
+
+  test("replaces only the calls bucket: CRM+offline calls against dailyTarget x expected days", () => {
+    const r = withCallsActivity(totals, { made: 640, dailyTarget: 100, expectedDaysElapsed: 8 });
+    expect(r.calls).toEqual({ current: 640, target: 800 });
+    expect(r.siteVisits).toEqual(totals.siteVisits);
+    expect(r.bookings).toEqual(totals.bookings);
+  });
+
+  test("no expected days yet means no target, which attainment reads as unmeasurable", () => {
+    const r = withCallsActivity(totals, { made: 50, dailyTarget: 100, expectedDaysElapsed: 0 });
+    expect(r.calls.target).toBe(0);
+    expect(attainmentFor(r, 0, 26).callsPct).toBeNull();
+  });
+});
 
 function callRow(current: number, target: number): MetricItem {
   return {

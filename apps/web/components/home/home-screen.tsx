@@ -715,8 +715,10 @@ function fmtDuration(ms: number): string {
  *  eligible, also shows a "Take Weekly Off" button that posts to
  *  /attendance/weekly-off. */
 function ClockCard() {
-  const { attendance: rec, sessions, openSession, clockedIn, clockedOut, loading, refresh } =
+  const { attendance: rec, sessions, openSession, clockedIn, clockedOut, loading, refresh, wfhAllowed } =
     useAttendanceStatus();
+  // Only an explicit false hides the WFH buttons (Admin switched it off).
+  const canWfh = wfhAllowed !== false;
   const router = useRouter();
   const [now, setNow] = useState(() => Date.now());
   const [weeklyOff, setWeeklyOff] = useState<WeeklyOffStatus | null>(null);
@@ -872,13 +874,16 @@ function ClockCard() {
         ) : !clockedIn && !clockedOut ? (
           <>
             <p className="text-muted-foreground">
-              You haven&apos;t clocked in today. In-office attendance is captured automatically by
-              the biometric device — clock in here only if you&apos;re working from home.
+              {canWfh
+                ? "You haven't clocked in today. In-office attendance is captured automatically by the biometric device — clock in here only if you're working from home."
+                : "You haven't clocked in today. In-office attendance is captured by the biometric device; work from home isn't enabled for your account."}
             </p>
             <div className="flex flex-wrap gap-2">
-              <Button onClick={clockInWfh} disabled={clockBusy}>
-                {clockBusy ? "Clocking in…" : "Clock In WFH"}
-              </Button>
+              {canWfh && (
+                <Button onClick={clockInWfh} disabled={clockBusy}>
+                  {clockBusy ? "Clocking in…" : "Clock In WFH"}
+                </Button>
+              )}
               {weeklyOff?.canClaimToday && (
                 <Button
                   variant="outline"
@@ -918,6 +923,7 @@ function ClockCard() {
                 </div>
               </div>
             </div>
+            {(clockedIn || canWfh) && (
             <Button
               variant="outline"
               className="w-fit"
@@ -932,6 +938,7 @@ function ClockCard() {
                   ? "Clock Out"
                   : "Clock Back In (WFH)"}
             </Button>
+            )}
             {clockError && <p className="text-xs text-destructive">{clockError}</p>}
           </div>
         )}

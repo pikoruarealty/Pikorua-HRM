@@ -1,3 +1,4 @@
+import { syncCompensationCreditsForWeek } from "@/lib/attendance/compensation-credits";
 import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { requireRole, FINANCE_ROLES, AuthzError } from "@/lib/rbac";
@@ -59,6 +60,8 @@ export async function POST(
       revertedAt: new Date(),
     },
   });
+
+  await syncCompensationCreditsForWeek(move.employeeId, move.date).catch(() => {});
 
   await audit({
     action: "attendance.weekly_off_revert",

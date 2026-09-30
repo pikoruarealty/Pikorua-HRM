@@ -7,6 +7,9 @@ import { getAttendanceSummary } from "@/lib/attendance/summary";
 import { getMonthlyAttendanceBreakdown } from "@/lib/attendance/monthly-breakdown";
 import { getEffectivePayrollConfig } from "@/lib/payroll/config";
 import { getLedEmployeeIds } from "@/lib/employees/managed-scope";
+import { getEmployeeAttendanceCalendar } from "@/lib/attendance/calendar";
+import { getExpectedHoursForMonth } from "@/lib/attendance/expected-hours";
+import { ATTENDANCE_EXEMPT_MESSAGE, isAttendanceExemptRole } from "@/lib/attendance/tracking";
 
 // Track A. GET /api/v1/attendance/:employee_id/summary?month=&year=
 // (folder is named [id], not [employee_id], only because Next.js requires
@@ -55,16 +58,23 @@ export async function GET(
 
   const employee = await prisma.employee.findUnique({
     where: { id: employeeId },
-    select: { id: true },
+    select: { id: true, role: true },
   });
   if (!employee) {
     return failFor(ErrorCode.NOT_FOUND, "Employee not found.");
+  }
+  if (isAttendanceExemptRole(employee.role)) {
+    return failFor(ErrorCode.NOT_FOUND, ATTENDANCE_EXEMPT_MESSAGE);
   }
 
   const effectiveConfig = await getEffectivePayrollConfig(month, year);
   const [summary, breakdown] = await Promise.all([
     getAttendanceSummary(employeeId, month, year, effectiveConfig?.lateGraceMinutes ?? 0),
     getMonthlyAttendanceBreakdown(employeeId, month, year),
+  ]);
+  const [{ calendar }, expectedHours] = await Promise.all([
+    getEmployeeAttendanceCalendar(employeeId, month, year, breakdown),
+    getExpectedHoursForMonth(employeeId, month, year),
   ]);
 
   return ok({
@@ -86,6 +96,21 @@ export async function GET(
     compensation_days: breakdown.compensationDays,
     holiday_days: breakdown.holidayDays,
     working_days_elapsed: breakdown.workingDaysElapsed,
+    // 2026-09-30 — in-office vs work-from-home. Hours and the worked-day split
+    // use approved days only (same basis as every count above); a day that has a
+    // record but isn't approved yet is listed in `pending` and shows on the
+    // calendar as pending rather than being silently absent.
+    hours: calendar.hours,
+    // Expected hours of work for the whole month (muted figure beside "hours
+    // worked"): shift x expected working days for a fixed schedule, weekly
+    // (days x shift + WFH target) x 4 for a part-timer.
+    expected_hours: expectedHours,
+    worked_days: calendar.workedDays,
+    by_status: calendar.byStatus,
+    pending: calendar.pending,
+    // One entry per calendar day of the month — the same classification that
+    // produced the counts above, plus the day's hours/times/location.
+    days: calendar.days,
     notes: {
       late_tracking_unavailable: summary.lateTrackingUnavailable
         ? "This employee's team has no expected_start_time configured — late count excludes those days."

@@ -4,9 +4,10 @@ import { getSession } from "@/lib/auth";
 import { FINANCE_ROLES } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { computeHours, isImplausibleDuration, MAX_PLAUSIBLE_SHIFT_HOURS } from "@/lib/attendance/time";
-import { AttendanceApprovalStatus, AttendanceSource } from "@prisma/client";
+import { AttendanceApprovalStatus, AttendanceSource, WorkLocation } from "@prisma/client";
 import { syncCompensationCreditForRecord } from "@/lib/attendance/compensation-credits";
 import { audit, clientIp } from "@/lib/audit";
+import { ATTENDANCE_EXEMPT_MESSAGE, isAttendanceExemptRole } from "@/lib/attendance/tracking";
 
 // Manual override (2026-08-07, widened to Admin/HR same day). POST
 // /api/v1/attendance/manual/bulk — **Admin/HR**: the multi-employee x
@@ -32,6 +33,9 @@ const recordSchema = z.object({
   // — confirms an implausibly long (>14h) span is intentional, not a
   // same-day-vs-next-day time slip.
   confirm_long_duration: z.boolean().optional(),
+  // Same as the single-record route: omitted keeps the existing location (office
+  // for a new record); explicit also re-tags the day's sessions.
+  work_location: z.nativeEnum(WorkLocation).optional(),
 });
 
 const bulkSchema = z.object({
@@ -59,9 +63,12 @@ export async function POST(req: Request) {
   const employeeIds = [...new Set(records.map((r) => r.employee_id))];
   const employees = await prisma.employee.findMany({
     where: { id: { in: employeeIds } },
-    select: { id: true },
+    select: { id: true, role: true },
   });
   const validEmployeeIds = new Set(employees.map((e) => e.id));
+  const exemptEmployeeIds = new Set(
+    employees.filter((e) => isAttendanceExemptRole(e.role)).map((e) => e.id),
+  );
 
   type ResultRow = {
     employee_id: string;
@@ -77,6 +84,10 @@ export async function POST(req: Request) {
   for (const r of records) {
     if (!validEmployeeIds.has(r.employee_id)) {
       results.push({ employee_id: r.employee_id, date: r.date, ok: false, error: "employee_id does not reference an existing employee." });
+      continue;
+    }
+    if (exemptEmployeeIds.has(r.employee_id)) {
+      results.push({ employee_id: r.employee_id, date: r.date, ok: false, error: ATTENDANCE_EXEMPT_MESSAGE });
       continue;
     }
 
@@ -121,12 +132,19 @@ export async function POST(req: Request) {
       approvedById: session.userId,
       approvedAt: new Date(),
       source: AttendanceSource.manual,
+      ...(r.work_location ? { workLocation: r.work_location } : {}),
     };
 
     try {
       const record = existing
         ? await prisma.attendanceRecord.update({ where: { id: existing.id }, data })
         : await prisma.attendanceRecord.create({ data: { employeeId: r.employee_id, date, ...data } });
+      if (existing && r.work_location) {
+        await prisma.attendanceSession.updateMany({
+          where: { recordId: existing.id },
+          data: { workLocation: r.work_location },
+        });
+      }
       if (existing) updated++;
       else created++;
       // Written pre-approved — re-derive whether this day earns a

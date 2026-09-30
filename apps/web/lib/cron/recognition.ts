@@ -9,6 +9,7 @@ import {
 } from "@/lib/performance/monthly-score";
 import { getPerformanceConfig } from "@/lib/performance/config";
 import { isMetricDepartment } from "@/lib/departments/type";
+import { gatherWeeklySalesScores } from "@/lib/sales/weekly-score";
 
 const logger = createLogger("recognition-cron");
 
@@ -23,7 +24,8 @@ const logger = createLogger("recognition-cron");
 // attendance, timeliness and commitments kept — see lib/performance/composite.ts
 // for the weights and lib/performance/monthly-score.ts for the inputs. The
 // breakdown is stored alongside the score in `components` so a rank stays
-// explainable later. WEEKLY is untouched and still uses the raw scoring below.
+// explainable later. WEEKLY stays raw: task points for Tech, and for Sales/BD
+// the week's call/site-visit/booking attainment (0-100, weekly-attainment.ts).
 //
 // 2026-08-07: this snapshot is now reference-only leaderboard data — it no
 // longer sets isEmployeeOfMonth on its own. "Employee of the Week/Month" is
@@ -90,9 +92,6 @@ export async function computeAndReplace(
     }
   }
 
-  const targetMonth = periodStart.getUTCMonth() + 1;
-  const targetYear = periodStart.getUTCFullYear();
-
   const departments = await prisma.department.findMany({
     include: {
       employees: { where: { status: EmployeeStatus.active } },
@@ -155,33 +154,15 @@ export async function computeAndReplace(
         scored.push({ employeeId: emp.id, score: byEmployee.get(emp.id) ?? 0 });
       }
     } else {
-      const metricItems = await prisma.workItem.findMany({
-        where: {
-          assignedTo: { in: dept.employees.map((e) => e.id) },
-          mode: "metric",
-          periodMonth: targetMonth,
-          periodYear: targetYear,
-          deletedAt: null,
-        },
-        select: { assignedTo: true, targetValue: true, currentValue: true },
-      });
-      const byEmployee = new Map<string, number[]>();
-      for (const item of metricItems) {
-        const target = Number(item.targetValue ?? 0);
-        const current = Number(item.currentValue ?? 0);
-        // A target of 0 means nobody set one, which is not 0% attainment —
-        // scoring it as such dragged the whole average down for a rep whose
-        // targets simply hadn't been provisioned yet. Skipped instead.
-        if (!(target > 0)) continue;
-        const pct = (current / target) * 100;
-        const list = byEmployee.get(item.assignedTo) ?? [];
-        list.push(pct);
-        byEmployee.set(item.assignedTo, list);
-      }
+      // Sales/BD weekly (2026-09-30): the WEEK's calls / site visits / bookings
+      // against targets paced to the week, blended 10:17:23 and capped at 100 per
+      // metric — see lib/sales/weekly-attainment.ts. This used to average the
+      // percentage of every metric WorkItem in the *month*, which stopped meaning
+      // anything once the daily calls row became a single counter reset each day.
+      const weekly = await gatherWeeklySalesScores(periodStart, end, dept.employees);
       for (const emp of dept.employees) {
-        const pcts = byEmployee.get(emp.id) ?? [];
-        const avg = pcts.length > 0 ? pcts.reduce((a, b) => a + b, 0) / pcts.length : 0;
-        scored.push({ employeeId: emp.id, score: avg });
+        // null = unmeasurable (no expected selling days); ranked as 0 like before.
+        scored.push({ employeeId: emp.id, score: weekly.get(emp.id)?.score ?? 0 });
       }
     }
 

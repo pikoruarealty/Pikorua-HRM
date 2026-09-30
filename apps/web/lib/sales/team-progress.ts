@@ -11,6 +11,7 @@ import {
   resolveDefaultOffDay,
   weekStartOf,
 } from "@/lib/attendance/week";
+import { loadWeekOffs } from "@/lib/attendance/weekly-off";
 import { attainmentPct, expectedActivityDaysElapsed, proRatedTarget } from "@/lib/sales/pacing";
 import { getSalesTargetConfig, resolveTargets } from "@/lib/sales/targets";
 import { SALES_ROLES } from "@/lib/sales/provisioning";
@@ -125,6 +126,7 @@ export async function buildSalesTeamProgress(
     breakdowns,
     unmatched,
     clockedInToday,
+    weekOffs,
   ] = await Promise.all([
       getSalesTargetConfig(date),
       prisma.salesActivitySync.findMany({
@@ -170,6 +172,9 @@ export async function buildSalesTeamProgress(
         where: { employeeId: { in: repIds }, date, clockInRaw: { not: null } },
         select: { employeeId: true },
       }),
+      // Each rep's resolved weekly off for this week (claimed / automatic /
+      // default) — same rule attendance and payroll use.
+      loadWeekOffs(weekStartOf(date), repIds),
     ]);
 
   const clockedInTodaySet = new Set(clockedInToday.map((a) => a.employeeId));
@@ -206,11 +211,11 @@ export async function buildSalesTeamProgress(
     const breakdown = breakdownById.get(rep.id);
     const expectedDaysElapsed = breakdown ? expectedActivityDaysElapsed(breakdown) : 0;
 
-    const offToday = isOffDay(
-      new Date(Date.UTC(year, month - 1, day)),
-      defaultOffDay,
-      movedOffDateByWeek,
-    );
+    const dayDate = new Date(Date.UTC(year, month - 1, day));
+    const weekOff = weekOffs.get(rep.id);
+    const offToday = weekOff
+      ? weekOff.date === dayDate.toISOString().slice(0, 10)
+      : isOffDay(dayDate, defaultOffDay, movedOffDateByWeek);
 
     // Calls are the rep's daily task — once clocked in, an off day is a
     // normal working day for call-target purposes, same as compensationDays

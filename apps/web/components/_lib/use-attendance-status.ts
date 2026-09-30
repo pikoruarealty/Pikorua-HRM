@@ -36,6 +36,9 @@ function todayLocal(): string {
 export function useAttendanceStatus() {
   const [attendance, setAttendance] = useState<AttendanceRecord | null>(null);
   const [loading, setLoading] = useState(true);
+  // null until known; only an explicit false (Admin switched WFH off) hides the
+  // WFH clock-in buttons. The server enforces it either way (POST /attendance/clock-in).
+  const [wfhAllowed, setWfhAllowed] = useState<boolean | null>(null);
 
   const refresh = useCallback(async () => {
     const res = await apiFetch<AttendanceRecord[]>("/attendance");
@@ -48,6 +51,9 @@ export function useAttendanceStatus() {
 
   useEffect(() => {
     refresh();
+    apiFetch<{ employee: { wfhAllowed?: boolean } | null }>("/auth/me").then((res) => {
+      if (res.data?.employee) setWfhAllowed(res.data.employee.wfhAllowed ?? true);
+    });
   }, [refresh]);
 
   const sessions = attendance?.sessions ?? [];
@@ -56,7 +62,7 @@ export function useAttendanceStatus() {
   // Been in today, but currently out.
   const clockedOut = !clockedIn && !!attendance?.clockInRaw;
 
-  return { attendance, sessions, openSession, clockedIn, clockedOut, loading, refresh };
+  return { attendance, sessions, openSession, clockedIn, clockedOut, loading, refresh, wfhAllowed };
 }
 
 /** Worked milliseconds so far: closed sessions summed, plus the open one

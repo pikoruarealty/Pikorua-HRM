@@ -120,10 +120,30 @@ export async function ensureSalesWorkItem(args: {
   const { employeeId, metric, period, targetValue } = args;
 
   if (period.periodDay !== null) {
-    const existing = await prisma.workItem.findFirst({
+    // Newest first, and deterministically so: this is also the row
+    // GET /work-items/mine surfaces, so the one we keep is the one the rep sees.
+    const [existing, ...stale] = await prisma.workItem.findMany({
       where: { assignedTo: employeeId, mode: WorkItemMode.metric, salesMetric: metric, deletedAt: null },
+      orderBy: { createdAt: "desc" },
       select: { id: true, periodYear: true, periodMonth: true, periodDay: true },
     });
+
+    // Retire the per-day rows the old clone-forward job left behind
+    // (2026-09-30: "everyday's calls task is being added to the work unit and
+    // then stays there"). The 2026-09-18 fix stopped *new* rows being minted but
+    // left every historical one sitting in the Sales Activity work unit — 39
+    // "Calls" rows per rep in production — and the old `findFirst` (no ordering)
+    // then reset whichever it happened to hit. Soft-deleted rather than removed,
+    // the repo's convention; the real per-day history is SalesActivitySync, not
+    // these rows (monthly scoring reads it from there, see monthly-score.ts).
+    // Idempotent: once there is exactly one live row this is a no-op.
+    if (stale.length > 0) {
+      await prisma.workItem.updateMany({
+        where: { id: { in: stale.map((s) => s.id) } },
+        data: { deletedAt: new Date() },
+      });
+      logger.info("retired stale daily sales rows", { employeeId, metric, retired: stale.length });
+    }
 
     if (!existing) {
       const subUnitId = await ensureSalesContainer(args.departmentId);

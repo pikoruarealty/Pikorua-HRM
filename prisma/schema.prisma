@@ -350,6 +350,19 @@ model Employee {
   employmentType         EmploymentType @default(fulltime) @map("employment_type")
   requiredDaysPerWeek    Int?           @map("required_days_per_week") // 1-6 for parttime/intern; null for standard fulltime
   defaultWeeklyOffDay    Int?           @map("default_weekly_off_day") // 0=Sun..6=Sat; overrides Team.defaultWeeklyOffDay if set
+  // Admin switch (2026-09-30): may this person clock in from home? Defaults true
+  // so nobody loses the WFH option that existed before the switch; Admin turns
+  // it off per employee. Gates POST /attendance/clock-in (and hides the WFH
+  // buttons) — a session that is already open can still be clocked out.
+  wfhAllowed             Boolean        @default(true) @map("wfh_allowed")
+  // Admin-set WFH hours expected per week (part-time/intern). Null = no target.
+  // Tracked with a 60-day advance/late offset (lib/attendance/wfh-hours.ts);
+  // deliberately does NOT feed payroll.
+  expectedWfhHoursPerWeek Decimal?      @map("expected_wfh_hours_per_week") @db.Decimal(5, 2)
+  // The day that target was set/changed. The balance is measured only from the
+  // first full week after it, so turning a target on doesn't retroactively
+  // charge the employee for weeks that had none.
+  expectedWfhHoursSince   DateTime?     @map("expected_wfh_hours_since") @db.Date
   // Per-employee sales targets (2026-08-10). Null = fall back to the org-wide
   // SalesTargetConfig. Lead-set, so a senior rep can carry 150 calls/day while
   // a new joiner carries 60 without changing everyone's default.
@@ -377,7 +390,8 @@ model Employee {
   eventsAbout             Event[]                         @relation("EventSubject")
   eventInvitees           EventInvitee[]
   weeklyOffMoves          WeeklyOffMove[]
-  salesActivitySyncs      SalesActivitySync[]
+  unpaidDayDeclarations   UnpaidDayDeclaration[]
+  salesActivitySyncs     SalesActivitySync[]
   offlineClaims           OfflineActivityClaim[]          @relation("OfflineClaimSubject")
   offlineClaimsReviewed   OfflineActivityClaim[]          @relation("OfflineClaimReviewer")
   compensationCredits     CompensationCredit[]
@@ -794,6 +808,25 @@ model WeeklyOffMove {
 
   @@unique([employeeId, weekStart])
   @@map("weekly_off_moves")
+}
+
+// A day an employee has switched from an automatic weekly off to unpaid leave
+// themselves (2026-09-30, owner request). No approval step by design ("from
+// their side"): it only ever converts a day that would otherwise have been a
+// free weekly off into an unpaid one, which costs the employee, never the
+// company. Frees that week's off so it can be claimed on another day
+// (POST /attendance/weekly-off) or banked. Counted as an unpaid-leave day by
+// lib/attendance/monthly-breakdown.ts and redeemable by a compensation credit
+// like any other unpaid day. Refused once the month has a payslip.
+model UnpaidDayDeclaration {
+  id         String   @id @default(uuid()) @db.Uuid
+  employeeId String   @map("employee_id") @db.Uuid
+  employee   Employee @relation(fields: [employeeId], references: [id])
+  date       DateTime @db.Date
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@unique([employeeId, date])
+  @@map("unpaid_day_declarations")
 }
 
 // Comp-off ledger (2026-09-06, owner request): "if I come in on my weekoff,

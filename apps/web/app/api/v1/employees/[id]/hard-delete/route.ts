@@ -170,6 +170,7 @@ export async function DELETE(req: Request, { params }: { params: { id: string } 
       await tx.employeeDocument.deleteMany({ where: { employeeId: params.id } });
       await tx.eventInvitee.deleteMany({ where: { employeeId: params.id } });
       await tx.weeklyOffMove.deleteMany({ where: { employeeId: params.id } });
+      await tx.unpaidDayDeclaration.deleteMany({ where: { employeeId: params.id } });
 
       // Nullify references in asset and event
       await tx.event.updateMany({

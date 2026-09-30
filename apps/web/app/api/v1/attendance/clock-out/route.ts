@@ -4,6 +4,7 @@ import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { todayDateOnly, isImplausibleDuration } from "@/lib/attendance/time";
 import { findOpenSession, summariseSessions } from "@/lib/attendance/sessions";
 import { buildEodSummary } from "@/lib/eod/summary";
+import { ATTENDANCE_EXEMPT_MESSAGE, isAttendanceExemptRole } from "@/lib/attendance/tracking";
 import { pushNotification } from "@/lib/notifications/push";
 import { z } from "zod";
 
@@ -35,6 +36,9 @@ export async function POST(req: Request) {
     return failFor(ErrorCode.FORBIDDEN, "No employee record linked to this account.");
   }
   const employeeId = session.employeeId;
+  if (isAttendanceExemptRole(session.role)) {
+    return failFor(ErrorCode.FORBIDDEN, ATTENDANCE_EXEMPT_MESSAGE);
+  }
 
   let endOfDay = true;
   const raw = await req.text();

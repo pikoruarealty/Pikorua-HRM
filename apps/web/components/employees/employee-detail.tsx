@@ -11,6 +11,8 @@ import { DatePicker } from "@/components/ui/date-picker";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmployeeAttendancePanel } from "@/components/attendance/employee-attendance-panel";
+import { isAttendanceExemptRole } from "@/lib/attendance/tracking";
+import { EmployeeWfhControls } from "@/components/employees/employee-wfh-controls";
 import { EmployeeWorkPanel } from "@/components/employees/employee-work-panel";
 import { EmployeeTaskActivityPanel } from "@/components/employees/employee-task-activity-panel";
 import { EmployeePerformanceReviewPanel } from "@/components/employees/employee-performance-review-panel";
@@ -43,6 +45,8 @@ type Employee = {
   employmentType?: "fulltime" | "parttime" | "intern";
   requiredDaysPerWeek?: number | null;
   defaultWeeklyOffDay?: number | null;
+  wfhAllowed?: boolean;
+  expectedWfhHoursPerWeek?: string | null;
   departmentId: string | null;
   teamId: string | null;
   status: "active" | "inactive";
@@ -434,16 +438,20 @@ export function EmployeeDetail({
           ← Employees
         </Link>
       </div>
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
+      {/* Stacks on a phone: avatar + name on one row, badges under it. The old
+          single row was wider than a 360px screen and dragged the whole page
+          sideways. min-w-0 + break-words let a long name or email wrap instead
+          of forcing the row wider. */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 items-center gap-4">
           <EmployeeAvatar fullName={employee.fullName} photoUrl={employee.photoUrl} size="lg" />
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight">{employee.fullName}</h1>
-            <p className="text-sm text-muted-foreground">{employee.email}</p>
+          <div className="min-w-0">
+            <h1 className="break-words text-xl font-bold tracking-tight sm:text-2xl">{employee.fullName}</h1>
+            <p className="break-all text-sm text-muted-foreground">{employee.email}</p>
             {canManage && <PhotoReplaceControl employeeId={employee.id} onUploaded={load} />}
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           <Badge variant="outline">{humanizeEmploymentType(employee.employmentType)}</Badge>
           <Badge variant={employee.status === "active" ? "default" : "secondary"}>
             {employee.status}
@@ -476,6 +484,16 @@ export function EmployeeDetail({
               <span className="text-xs text-muted-foreground"> (team default)</span>
             )}
           </div>
+          {canManage && !isAttendanceExemptRole(employee.role) && (
+            <EmployeeWfhControls
+              employeeId={employee.id}
+              wfhAllowed={employee.wfhAllowed ?? true}
+              isFlexible={employee.employmentType !== "fulltime" && !!employee.requiredDaysPerWeek}
+              expectedWfhHoursPerWeek={employee.expectedWfhHoursPerWeek ?? null}
+              isAdmin={isAdmin}
+              onChanged={load}
+            />
+          )}
           <div>
             <span className="text-muted-foreground">Phone: </span>
             {employee.phone ?? "—"}
@@ -802,7 +820,7 @@ export function EmployeeDetail({
 
       {canManage && <EmployeeEventsPanel employeeId={employeeId} />}
 
-      {canViewAttendance && <EmployeeAttendancePanel employeeId={employeeId} />}
+      {canViewAttendance && !isAttendanceExemptRole(employee.role) && <EmployeeAttendancePanel employeeId={employeeId} canEditDays={isSelf} />}
 
       {canViewAttendance && <EmployeeWorkPanel employeeId={employeeId} isMetric={isMetric} />}
 

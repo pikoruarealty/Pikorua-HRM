@@ -44,6 +44,13 @@ jobs:
       - name: Apply migrations against a clean database
         run: bun run prisma:deploy
 
+      # A schema.prisma edit with no migration (or the reverse) only surfaces
+      # as a runtime Prisma error on the VM after deploy. Diffing the migrated
+      # database against the schema file fails the build here instead — added
+      # 2026-09-30 after a session that shipped two migrations.
+      - name: Migrations match schema.prisma (no drift)
+        run: bunx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --exit-code
+
       - name: Seed (validates seed script against the migrated schema)
         run: bun run db:seed
 

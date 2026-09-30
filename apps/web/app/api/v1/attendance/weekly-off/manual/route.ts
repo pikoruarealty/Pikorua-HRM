@@ -1,3 +1,4 @@
+import { syncCompensationCreditsForWeek } from "@/lib/attendance/compensation-credits";
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
@@ -82,6 +83,8 @@ export async function POST(req: Request) {
     create: { employeeId: d.employee_id, weekStart, date, active: true },
     update: { date, active: true, revertedById: null, revertedAt: null },
   });
+
+  await syncCompensationCreditsForWeek(d.employee_id, date).catch(() => {});
 
   await audit({
     action: existing ? "attendance.weekly_off_manual_override" : "attendance.weekly_off_manual_create",

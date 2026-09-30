@@ -1,3 +1,4 @@
+import { syncCompensationCreditsForRange } from "@/lib/attendance/compensation-credits";
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
@@ -229,6 +230,13 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     },
     ip: clientIp(req),
   });
+
+  // An approved leave changes which days of its weeks count as unexplained
+  // no-shows, which decides a week's weekly off and so any compensation credit
+  // for a worked default off day — re-derive them (lib/attendance/weekly-off.ts).
+  if (request.dateFrom && request.dateTo) {
+    await syncCompensationCreditsForRange(request.employeeId, request.dateFrom, request.dateTo).catch(() => {});
+  }
 
   return ok(updated);
 }

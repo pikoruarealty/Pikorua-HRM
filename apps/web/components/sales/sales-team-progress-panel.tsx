@@ -234,7 +234,9 @@ export function SalesTeamProgressPanel({ canSync }: { canSync: boolean }) {
                   </div>
                 </div>
 
-                {r.offToday && <Badge variant="outline">weekly off</Badge>}
+                {/* restingToday, not offToday: once a rep has clocked in on their
+                    off day their activity is live and the tag would contradict it. */}
+                {r.restingToday && <Badge variant="outline">weekly off</Badge>}
                 {r.pendingClaims > 0 && (
                   <Badge variant="secondary">
                     {r.pendingClaims} offline {r.pendingClaims === 1 ? "claim" : "claims"} pending

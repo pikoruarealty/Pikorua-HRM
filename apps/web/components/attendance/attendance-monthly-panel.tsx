@@ -114,6 +114,33 @@ export function AttendanceMonthlyPanel() {
               Sundays are treated as off unless an employee clocks in — that counts as a compensation
               day instead of a normal present day. Saturdays are regular working days.
             </p>
+            {/* Phones: a card per person with the counts as small chips. */}
+            <ul className="flex flex-col divide-y rounded-lg border md:hidden">
+              {overview.rows.map((r) => (
+                <li key={r.employeeId} className="flex flex-col gap-2 p-3">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <Link href={`/employees/${r.employeeId}`} className="min-w-0 truncate font-medium">
+                      {r.fullName}
+                    </Link>
+                    {r.team && <span className="shrink-0 text-xs text-muted-foreground">{r.team.name}</span>}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 text-xs">
+                    <span className="rounded-full border px-2 py-0.5">{r.presentDays} present</span>
+                    {r.halfDays > 0 && <span className="rounded-full border px-2 py-0.5">{r.halfDays} half</span>}
+                    {r.absentDays > 0 && (
+                      <span className="rounded-full border border-destructive/40 px-2 py-0.5 text-destructive">
+                        {r.absentDays} absent
+                      </span>
+                    )}
+                    {r.paidLeaveDays > 0 && <span className="rounded-full border px-2 py-0.5">{r.paidLeaveDays} paid leave</span>}
+                    {r.unpaidLeaveDays > 0 && <span className="rounded-full border px-2 py-0.5">{r.unpaidLeaveDays} unpaid</span>}
+                    {r.compensationDays > 0 && <span className="rounded-full border px-2 py-0.5">{r.compensationDays} comp</span>}
+                    {r.holidayDays > 0 && <span className="rounded-full border px-2 py-0.5">{r.holidayDays} holiday</span>}
+                  </div>
+                </li>
+              ))}
+            </ul>
+            <div className="hidden md:block">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -158,6 +185,7 @@ export function AttendanceMonthlyPanel() {
                 ))}
               </TableBody>
             </Table>
+            </div>
           </>
         ) : null}
       </CardContent>

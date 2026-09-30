@@ -144,7 +144,7 @@ export function RecognitionScreen() {
           Weekly / monthly leaderboard per department.{" "}
           {periodType === "monthly"
             ? "Monthly scores are a 0-100 composite of output, quality, attendance, timeliness and commitments kept — open a score to see the breakdown. "
-            : "Weekly scores are raw output only. "}
+            : "Weekly scores are raw output only — task points for Tech, and for Sales the week's calls, site visits and bookings against target (0-100). "}
           {isAdmin
             ? "Employee of the Week/Month is now an admin pick — publish a winner from the leaderboard below."
             : "Employee of the Week/Month is published by an admin."}

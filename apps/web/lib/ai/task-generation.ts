@@ -190,48 +190,108 @@ export async function generateTaskBreakdown(
   return { subUnits };
 }
 
-const selfLoggedEstimateSchema = z.object({ taskPoints: z.number().positive() });
+const selfLoggedEffortSchema = z.object({
+  hours: z.number().positive(),
+  overlap: z.boolean().optional(),
+  reason: z.string().optional(),
+});
 
-export type EstimateSelfLoggedPointsInput = {
+export type EstimateSelfLoggedInput = {
   title: string;
   description: string;
 };
 
-/**
- * Point-sizing for a free-text self-logged task (2026-08-14, owner request:
- * "set the points using groq only... understand it in the same way the
- * current auto generated tasks are given points, and cant wait for lead to
- * approve everytime"). Same story-point scale and same trust model as
- * `generateTaskBreakdown`'s taskPoints: the AI proposes a size, and the
- * existing tiered-review threshold (lib/work/review.ts) — not a blanket
- * "always review self-logged work" rule — decides whether a Lead has to sign
- * off before it's credited. A low, conservative estimate for a thin
- * description is the fairness backstop here, the same way it always was for
- * assigned work: nobody hand-verifies a 2-point task either.
- */
-export async function estimateSelfLoggedTaskPoints(
-  input: EstimateSelfLoggedPointsInput,
-): Promise<number> {
-  const system = [
-    `You are a senior engineering/ops lead sizing a task an employee logged themselves — work nobody assigned them.`,
-    `Estimate its effort the same way you would size a planned task: a "taskPoints" integer, story-point style, 1-13 (1 = trivial, a few minutes; 13 = a substantial multi-day effort).`,
-    `Be conservative and skeptical — most ad-hoc work is small (1-5). A vague, generic, or unconvincing description should score low regardless of what it claims; only give a high score when the description names concrete, specific work.`,
-    `Respond with a single JSON object ONLY (no prose, no markdown): { "taskPoints": number }`,
-  ].join("\n\n");
-  const user = [`Title: ${input.title}`, `Description: ${input.description}`].join("\n");
+/** What the employee has already logged today — the model sees it so that a
+ *  migration, a test pass or a UI for something already logged reads as part of
+ *  that work rather than a fresh job. */
+export type SelfLogDayContext = { earlierToday: { title: string; points: number }[] };
 
-  const raw = await groqChat({ system, user, json: true, temperature: 0.2 });
+export type SelfLoggedEffort = { hours: number; overlap: boolean; reason: string };
+
+const MAX_EFFORT_HOURS = 8;
+
+/**
+ * Effort sizing for a free-text self-logged task. Rewritten 2026-09-30 after
+ * production showed the previous prompt ("story points 1-13, be skeptical, vague
+ * scores low") rewarding dense technical wording and multiplying one feature's
+ * score across slices: 69 tasks / 409 points from one employee, 25 entries and
+ * 149 points in one day, while a plain "I will redesign the whole UI today" got
+ * 2. The model (gpt-oss-120b) was not the limit — the prompt asked it to reward
+ * specificity of *language* and gave it no anchor for size or sight of the rest
+ * of the day. So it now estimates HOURS (points are derived in code,
+ * lib/work/self-log-scoring.ts), is told outright that wording and length are
+ * not effort, and is shown the day's earlier entries.
+ */
+export function buildSelfLogEffortPrompt(
+  input: EstimateSelfLoggedInput,
+  ctx: SelfLogDayContext,
+): { system: string; user: string } {
+  const system = [
+    `You estimate how many HOURS of focused work one competent person needs for a task an employee logged themselves. The number is used for scoring, so be accurate — neither generous nor stingy.`,
+    [
+      `How to estimate:`,
+      `- Judge the amount of WORK, not the writing. Length, buzzwords, acronyms and lists of technical nouns add nothing: "updated DTOs, controllers, services, routes and schema" is still one modest change unless the description shows it was large. A plain sentence about a big job ("redesign the whole dashboard UI") counts at its real scope.`,
+      `- Work described as planned and work described as done are sized the same way: what one person could realistically do. Never more than ${MAX_EFFORT_HOURS} hours for one entry — a longer job is logged a day at a time.`,
+      `- If the description doesn't say what was actually produced, assume a modest amount (1-2h) unless the scope is obviously large, in which case size the scope.`,
+      `- Earlier entries from today are listed below. If this entry is a part, layer, step or follow-up of the same feature as one of them (its migration, its tests, its UI after its API, a fix to it), it is NOT separate work: size only what it adds — usually 0.5-1h — and set "overlap": true.`,
+    ].join("\n"),
+    [
+      `Calibration:`,
+      `- typo, copy, rename, config value, one-line fix: 0.25-0.5h`,
+      `- small bug fix, one small UI tweak, one query or endpoint change: 0.5-1.5h`,
+      `- refactor, typing, cleanup, lint or renaming with no new behaviour: 0.5-2h, unless the description gives a large, concrete scope (how many modules/files/screens)`,
+      `- a self-contained feature, screen, report or integration: 3-6h`,
+      `- a full working day of effort: 8h`,
+    ].join("\n"),
+    [
+      `Examples:`,
+      `- "Fixed button alignment on the settings page" -> 0.5h.`,
+      `- "Added site-visit migration: created the migration persisting parent-visit relationships and the schema for multi-project visit tracking" when "Updated site-visit APIs and schema" is already logged today -> 0.5h, overlap true.`,
+      `- "Redesign the whole dashboard UI" -> 8h (one day is the most an entry can claim).`,
+      `- "Built CSV export with filters for the leads table, with tests" -> 3h.`,
+    ].join("\n"),
+    `Respond with a single JSON object ONLY (no prose, no markdown): { "hours": number, "overlap": boolean, "reason": "at most 12 words" }`,
+  ].join("\n\n");
+
+  const earlier =
+    ctx.earlierToday.length === 0
+      ? "none"
+      : ctx.earlierToday.map((e) => `- ${e.title}`).join("\n");
+  const user = [
+    `Earlier entries logged today:\n${earlier}`,
+    `New entry:`,
+    `Title: ${input.title}`,
+    `Description: ${input.description}`,
+  ].join("\n");
+  return { system, user };
+}
+
+/** Parses the model's reply; throws GroqError if it isn't a usable estimate. */
+export function parseSelfLogEffort(raw: string): SelfLoggedEffort {
   let parsedJson: unknown;
   try {
     parsedJson = JSON.parse(raw);
   } catch {
     throw new GroqError("Groq returned a non-JSON response.");
   }
-  const result = selfLoggedEstimateSchema.safeParse(parsedJson);
+  const result = selfLoggedEffortSchema.safeParse(parsedJson);
   if (!result.success) {
-    throw new GroqError("Groq returned an unusable point estimate.");
+    throw new GroqError("Groq returned an unusable effort estimate.");
   }
-  return Math.min(13, Math.max(1, Math.round(result.data.taskPoints)));
+  return {
+    hours: Math.min(MAX_EFFORT_HOURS, Math.max(0.25, result.data.hours)),
+    overlap: result.data.overlap ?? false,
+    reason: (result.data.reason ?? "").slice(0, 160),
+  };
+}
+
+export async function estimateSelfLoggedEffort(
+  input: EstimateSelfLoggedInput,
+  ctx: SelfLogDayContext,
+): Promise<SelfLoggedEffort> {
+  const { system, user } = buildSelfLogEffortPrompt(input, ctx);
+  const raw = await groqChat({ system, user, json: true, temperature: 0.1 });
+  return parseSelfLogEffort(raw);
 }
 
 const MAX_OUTCOME_CHARS = 1500;

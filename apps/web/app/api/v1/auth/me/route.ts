@@ -19,6 +19,9 @@ export async function GET() {
           departmentId: true,
           teamId: true,
           role: true,
+          // Lets the UI hide the WFH clock-in buttons for someone Admin has
+          // switched WFH off for (2026-09-30).
+          wfhAllowed: true,
           department: { select: { typeKey: true } },
         },
       },

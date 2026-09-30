@@ -158,6 +158,35 @@ export function AttendanceOverviewPanel() {
                 </div>
               ))}
             </dl>
+            {/* Phones: one compact card per person instead of a 7-column table whose
+                Status/Clock/Hours columns sat behind a sideways scroll. */}
+            <ul className="flex flex-col divide-y rounded-lg border md:hidden">
+              {overview.rows.map((r) => (
+                <li key={r.employeeId} className="flex flex-col gap-1.5 p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <Link href={`/employees/${r.employeeId}`} className="flex min-w-0 items-center gap-2 font-medium">
+                      <EmployeeAvatar fullName={r.fullName} photoUrl={r.photoUrl} size="sm" />
+                      <span className="truncate">{r.fullName}</span>
+                    </Link>
+                    <span className="flex shrink-0 items-center gap-1.5">
+                      <Badge variant={STATUS_VARIANTS[r.status]}>{STATUS_LABELS[r.status]}</Badge>
+                      {r.late && <Badge variant="destructive">late</Badge>}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pl-9 text-xs text-muted-foreground">
+                    {r.team && <span>{r.team.name}</span>}
+                    {r.clockIn && (
+                      <span className="tabular-nums">
+                        {fmtTime(r.clockIn)} – {fmtTime(r.clockOut)}
+                      </span>
+                    )}
+                    {r.totalHours != null && <span className="tabular-nums">{r.totalHours}h</span>}
+                    {r.approvalStatus === "pending" && <span>pending approval</span>}
+                  </div>
+                </li>
+              ))}
+            </ul>
+            <div className="hidden md:block">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -222,6 +251,7 @@ export function AttendanceOverviewPanel() {
                 ))}
               </TableBody>
             </Table>
+            </div>
           </>
         ) : null}
       </CardContent>
