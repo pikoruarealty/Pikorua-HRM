@@ -966,15 +966,19 @@ model Payslip {
   otherDeductionAmount Decimal?      @map("other_deduction_amount") @db.Decimal(12, 2)
   otherDeductionReason String?       @map("other_deduction_reason")
   lateCount            Int           @default(0) @map("late_count") // from approved attendance only
-  unpaidLeaveCount     Int           @default(0) @map("unpaid_leave_count")
+  // unpaid/paid-leave/absent are Float, not Int (2026-10-01): a half-day leave is
+  // 0.5 of a day, and a part-timer's weekly-quota shortfall can be half a day too.
+  // Written as Int these would reject the payslip outright. Only ever whole or
+  // half days, so binary floating point holds them exactly.
+  unpaidLeaveCount     Float         @default(0) @map("unpaid_leave_count")
   halfDayCount         Int           @default(0) @map("half_day_count")
-  absentCount          Int           @default(0) @map("absent_count") // added 2026-07-17
+  absentCount          Float         @default(0) @map("absent_count") // added 2026-07-17
   // Added 2026-07-17 (earned-pay proration): every count that feeds
   // earned_base_pay, stored for audit reproducibility alongside the counts
   // above. Present/half-day/paid-leave/holiday/compensation days are paid;
   // unpaid-leave/absent days are simply excluded (no separate deduction).
   presentCount         Int           @default(0) @map("present_count")
-  paidLeaveCount       Int           @default(0) @map("paid_leave_count")
+  paidLeaveCount       Float         @default(0) @map("paid_leave_count")
   holidayCount         Int           @default(0) @map("holiday_count")
   compensationCount    Int           @default(0) @map("compensation_count")
   // earned_base_pay = (present + half*0.5 + paid_leave + holiday + compensation) * per_day_rate
@@ -1008,6 +1012,11 @@ model Request {
   status                      RequestStatus        @default(pending)
   dateFrom                    DateTime?            @map("date_from") @db.Date
   dateTo                      DateTime?            @map("date_to") @db.Date
+  // Half-day leave (2026-10-01): the row covers half of ONE day (dateFrom ==
+  // dateTo). Everything that counts leave days weights a half-day row 0.5 — see
+  // lib/requests/leave-math.ts. Admin/HR can also approve a full-day request as a
+  // half day, which rewrites this flag on the approved row.
+  halfDay                     Boolean              @default(false) @map("half_day")
   amount                      Decimal?             @db.Decimal(12, 2) // for reimbursement
   description                 String?
   attachmentUrl               String?              @map("attachment_url")

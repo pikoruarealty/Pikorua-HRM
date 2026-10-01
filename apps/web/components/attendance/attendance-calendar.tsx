@@ -24,6 +24,8 @@ export type CalendarDayStatus =
   | "holiday"
   | "weekly_off"
   | "no_record"
+  | "live"
+  | "today"
   | "pending";
 
 export type CalendarLocation = "office" | "wfh" | "mixed";
@@ -34,6 +36,8 @@ export type CalendarDay = {
   pending: boolean;
   location: CalendarLocation | null;
   hours: number | null;
+  /** Hours so far today, the open session included — only on a `live` day. */
+  liveHours?: number | null;
   officeHours: number;
   wfhHours: number;
   clockIn: string | null;
@@ -43,7 +47,23 @@ export type CalendarDay = {
   isCompensation: boolean;
   /** Why the day is what it is, where not obvious (automatic weekly off etc.). */
   note?: "auto_off" | "provisional_off" | "declared_unpaid" | null;
+  /** Leave covering part or all of the day, in days (half-day leave = 0.5). */
+  leavePaid?: number;
+  leaveUnpaid?: number;
+  /** The part of the day counted absent when only part of it is. */
+  absentPart?: number | null;
 };
+
+/** 0.5 -> "½", 1 -> "1". Leave is only ever whole or half days. */
+function fracDays(n: number): string {
+  return n === 0.5 ? "½" : String(n);
+}
+
+/** A leave that covers only part of the day (half-day leave). */
+function isPartialLeave(day: CalendarDay): boolean {
+  const total = (day.leavePaid ?? 0) + (day.leaveUnpaid ?? 0);
+  return total > 0 && total < 1;
+}
 
 /** True on a device with no hover (phones/tablets, and browser device
  *  emulation) or a phone-width window: there, hover tooltips can't work. */
@@ -131,6 +151,16 @@ const STATUS_STYLE: Record<Exclude<CalendarDayStatus, "present">, StatusStyle> =
     short: "Pending",
     cell: "border-dashed border-foreground/30 bg-transparent text-foreground",
   },
+  live: {
+    label: "Clocked in now",
+    short: "Live",
+    cell: "border-brand/60 bg-brand/10 text-foreground",
+  },
+  today: {
+    label: "Today",
+    short: "Today",
+    cell: "border-border bg-transparent text-muted-foreground",
+  },
 };
 
 /** "8h", "7h 30m", "45m" — worked time reads better than 7.5. */
@@ -190,15 +220,41 @@ const TINY_LABEL: Record<Exclude<CalendarDayStatus, "present">, string> = {
   weekly_off: "Off",
   no_record: "—",
   pending: "Pend",
+  live: "Live",
+  today: "Today",
 };
 
-/** `full` for ≥ sm, `tiny` for phones — the cell shows one or the other. */
+/** `full` for ≥ sm, `tiny` for phones — the cell shows one or the other. A leave
+ *  that covers only part of a day is marked (“+½ leave”, “Leave ½”) so a half-day
+ *  leave is visible on the cell itself, not only in the tooltip. */
 function cellLabel(day: CalendarDay): { full: string; tiny: string } {
   if (day.status === null) return { full: "", tiny: "" };
-  if (day.status === "present") return { full: formatHours(day.hours), tiny: formatHoursTiny(day.hours) };
-  if (day.status === "half_day" || day.status === "compensation" || day.status === "pending") {
-    if (day.hours != null) return { full: formatHours(day.hours), tiny: formatHoursTiny(day.hours) };
+  const partial = isPartialLeave(day);
+  const leaveTotal = (day.leavePaid ?? 0) + (day.leaveUnpaid ?? 0);
+  if (day.status === "present" || day.status === "half_day" || day.status === "compensation" || day.status === "pending") {
+    if (day.hours != null) {
+      // Which kind of leave fills the rest of the day: "4h +½ leave" / "4h +½ unpaid".
+      // On a phone there is no room for the word — the tap-for-details panel says it.
+      const leaveBits = [
+        (day.leavePaid ?? 0) > 0 ? `${fracDays(day.leavePaid!)} leave` : null,
+        (day.leaveUnpaid ?? 0) > 0 ? `${fracDays(day.leaveUnpaid!)} unpaid` : null,
+      ].filter(Boolean);
+      return {
+        full: `${formatHours(day.hours)}${leaveBits.length ? ` +${leaveBits.join(" +")}` : ""}`,
+        tiny: `${formatHoursTiny(day.hours)}${leaveTotal > 0 ? `+${fracDays(leaveTotal)}` : ""}`,
+      };
+    }
+    if (day.status === "present") return { full: "—", tiny: "—" };
     return { full: STATUS_STYLE[day.status].short, tiny: TINY_LABEL[day.status] };
+  }
+  if ((day.status === "paid_leave" || day.status === "unpaid_leave") && partial) {
+    return {
+      full: `${STATUS_STYLE[day.status].short} ${fracDays(leaveTotal)}`,
+      tiny: `${TINY_LABEL[day.status]} ${fracDays(leaveTotal)}`,
+    };
+  }
+  if (day.status === "live" && day.liveHours != null) {
+    return { full: `Live · ${formatHours(day.liveHours)}`, tiny: "Live" };
   }
   return { full: STATUS_STYLE[day.status].short, tiny: TINY_LABEL[day.status] };
 }
@@ -213,6 +269,8 @@ function DayTooltip({ day }: { day: CalendarDay }) {
         : STATUS_STYLE[status].label;
   const worked = day.clockIn !== null;
   const loc = day.location ? LOCATION_STYLE[day.location] : null;
+  const leavePaid = day.leavePaid ?? 0;
+  const leaveUnpaid = day.leaveUnpaid ?? 0;
 
   return (
     <div className="flex min-w-[11rem] flex-col gap-1.5">
@@ -231,6 +289,9 @@ function DayTooltip({ day }: { day: CalendarDay }) {
           <span className="tabular-nums">
             {formatTime(day.clockIn)} → {day.clockOut ? formatTime(day.clockOut) : "still open"}
           </span>
+          {status === "live" && day.liveHours != null && (
+            <span className="font-medium text-foreground">{formatHours(day.liveHours)} so far</span>
+          )}
           {day.hours != null && (
             <span className="font-medium text-foreground">
               {formatHours(day.hours)} worked
@@ -244,6 +305,7 @@ function DayTooltip({ day }: { day: CalendarDay }) {
           )}
           {day.sessionCount > 1 && <span>{day.sessionCount} sessions (breaks not counted)</span>}
           {day.isCompensation && status !== "compensation" && <span>Marked as a compensation day</span>}
+          {status === "live" && <span>Counted once you clock out.</span>}
           {day.pending && <span>Not approved yet — not counted in the totals</span>}
         </div>
       ) : (
@@ -261,11 +323,38 @@ function DayTooltip({ day }: { day: CalendarDay }) {
               : status === "holiday"
                 ? "Company holiday."
                 : status === "paid_leave"
-                  ? "Approved paid leave."
+                  ? leavePaid < 1
+                    ? `Approved paid leave for ${fracDays(leavePaid)} a day.`
+                    : "Approved paid leave."
                   : status === "unpaid_leave"
-                    ? "Approved unpaid leave."
-                    : "Nothing recorded."}
+                    ? leaveUnpaid < 1
+                      ? `Approved unpaid leave for ${fracDays(leaveUnpaid)} a day.`
+                      : "Approved unpaid leave."
+                    : status === "today"
+                      ? "Not clocked in yet today."
+                      : "Nothing recorded."}
         </p>
+      )}
+      {/* Leave on a day that also has work (or a half-day leave alone) — said
+          outright so a half-day leave never has to be inferred from the colours. */}
+      {(leavePaid > 0 || leaveUnpaid > 0) && (
+        <div className="flex flex-col gap-0.5 border-t pt-1.5 text-muted-foreground">
+          {leavePaid > 0 && (worked || leavePaid < 1) && (
+            <span>
+              <span className="font-medium text-foreground">{fracDays(leavePaid)} day</span> paid leave
+            </span>
+          )}
+          {leaveUnpaid > 0 && (worked || leaveUnpaid < 1) && (
+            <span>
+              <span className="font-medium text-foreground">{fracDays(leaveUnpaid)} day</span> unpaid leave
+            </span>
+          )}
+          {day.absentPart != null && day.absentPart > 0 && (
+            <span>
+              <span className="font-medium text-foreground">{fracDays(day.absentPart)} day</span> not covered — absent
+            </span>
+          )}
+        </div>
       )}
     </div>
   );
@@ -336,9 +425,16 @@ export function AttendanceCalendar({
               <div className="flex items-start justify-between">
                 <span className="text-xs font-semibold tabular-nums sm:text-sm">{dayNumber(day.date)}</span>
                 {day.location &&
-                  (day.status === "half_day" || day.status === "compensation" || day.status === "pending") && (
+                  (day.status === "half_day" ||
+                    day.status === "compensation" ||
+                    day.status === "pending" ||
+                    day.status === "live") && (
                     <span
-                      className={cn("mt-0.5 h-2 w-2 rounded-full", LOCATION_STYLE[day.location].dot)}
+                      className={cn(
+                        "mt-0.5 h-2 w-2 rounded-full",
+                        LOCATION_STYLE[day.location].dot,
+                        day.status === "live" && "animate-pulse",
+                      )}
                       aria-hidden
                     />
                   )}
@@ -410,6 +506,7 @@ const LEGEND: { key: string; label: string; swatch: string }[] = [
   { key: "holiday", label: "Holiday", swatch: STATUS_STYLE.holiday.cell },
   { key: "off", label: "Weekly off", swatch: STATUS_STYLE.weekly_off.cell },
   { key: "pending", label: "Pending approval", swatch: STATUS_STYLE.pending.cell },
+  { key: "live", label: "Clocked in now", swatch: STATUS_STYLE.live.cell },
 ];
 
 export function AttendanceLegend() {

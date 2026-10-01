@@ -296,6 +296,11 @@ export type AttendanceInput = {
   holidayDays: number;
   paidLeaveDays: number;
   workingDaysElapsed: number;
+  /** Days credited against `workingDaysElapsed`, from the attendance walk itself:
+   *  a part-timer's week is capped at their quota (days beyond it are compensation,
+   *  not a better attendance score). Preferred when present; the formula below is
+   *  the fallback and is identical for a fixed schedule. */
+  creditedWorkingDays?: number;
 };
 
 /**
@@ -307,6 +312,7 @@ export type AttendanceInput = {
  */
 export function attendanceToScore(b: AttendanceInput): number | null {
   if (b.workingDaysElapsed <= 0) return null;
-  const credited = b.presentDays + b.halfDays * 0.5 + b.holidayDays + b.paidLeaveDays;
+  const credited =
+    b.creditedWorkingDays ?? b.presentDays + b.halfDays * 0.5 + b.holidayDays + b.paidLeaveDays;
   return ratioToScore(credited, b.workingDaysElapsed);
 }

@@ -191,11 +191,12 @@ export async function GET(req: Request) {
     });
     for (const leave of leaves) {
       if (!leave.dateFrom || !leave.dateTo) continue;
-      const label = isPaidLeaveType(leave.type)
-        ? leave.type === RequestType.leave_casual
-          ? "Casual leave"
-          : "Sick leave"
-        : "Unpaid leave";
+      const label =
+        (isPaidLeaveType(leave.type)
+          ? leave.type === RequestType.leave_casual
+            ? "Casual leave"
+            : "Sick leave"
+          : "Unpaid leave") + (leave.halfDay ? " (half day)" : "");
       const rangeNote =
         isoDay(leave.dateFrom) === isoDay(leave.dateTo)
           ? label

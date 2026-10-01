@@ -46,6 +46,12 @@ A day is one `attendance_records` row **plus one or more `attendance_sessions`**
 - **WFH is an Admin switch per employee** (`employees.wfh_allowed`, gates clock-in, never clock-out). Expected WFH hours are tracking-only — they must not feed payroll without a new owner decision.
 - **Self-logged points are hours-based and capped per day** (`@/lib/work/self-log-scoring`). Don't put wording-sensitive scoring back into a prompt; A/B any prompt change on real production entries (see progress.md 2026-09-30).
 
+## Attendance counting is exact (2026-10-01) — pay is done by hand from these numbers
+- **A day is counted once, from one walk.** `classifyMonth` gives every day a `credit`; the tiles, the calendar and `payableDays` are all tallied from that walk (`payableDays` = Σ `days[].credit` = present + half×0.5 + paid leave + holiday + comp). Present/half/compensation/holiday are **whole numbers**; never re-derive a count elsewhere. `lib/attendance/monthly-breakdown-credit.test.ts` holds the invariants (incl. 500 random months vs an independent oracle) — keep it green and extend it with any change here.
+- **Half-day leave** (`requests.half_day`): a half row weighs 0.5 everywhere. **Leave fills only the part of a day not worked** (`applyLeave`) — half day worked + half-day leave = 1.0; never leave + work both counted in full. Half-days, the manual paid/unpaid split and the paid-leave caps go through ONE planner, `planLeaveParts` (`lib/requests/leave-math.ts`). Payslip paid-leave/unpaid-leave/absent counts are `Float` for this reason.
+- **Today is never "absent" while clocked in:** `live` (open session) / `today` (nothing yet) are not counted anywhere until the day closes — a device punch approves the day instantly with 0 hours, which used to read as absent.
+- **Attendance PDF** (`GET /attendance/export`, Admin only, audited) is built from the same walk (`lib/attendance/report.ts`); keep it one page per employee.
+
 ## Biometric / TeamOffice integration — IN SCOPE
 The office biometric punch system is part of this project (API docs PDF in the repo root, gitignored; corporate id/username/password in `.env`). Every punch opens or closes an `attendance_sessions` row, so a device day and a manual day are the same object — `source` becomes `device_sync` and `employees.device_uid` maps the employee. Still open: source-of-truth between HRMS and the TeamOffice DB, and the name-match autoselect for mapping new hires.
 

@@ -163,6 +163,11 @@ async function getUnpaidLeaveDaysInPeriod(
   employeeId: string,
   month: number,
   year: number,
+  /** The days the month's walk actually counts as a whole unpaid day. A request
+   *  can cover a day the walk does not count as unpaid (a weekly off, a holiday,
+   *  a day worked in full), and redeeming one of those would pay a day that was
+   *  never deducted. */
+  countedUnpaidDays: Set<string>,
 ): Promise<{ date: Date; requestId: string | null }[]> {
   const { start: periodStart, lastDay: periodLastDay } = periodBounds(month, year);
   const [requests, declared] = await Promise.all([
@@ -171,6 +176,10 @@ async function getUnpaidLeaveDaysInPeriod(
         employeeId,
         type: RequestType.leave_unpaid,
         status: RequestStatus.approved,
+        // A half-day unpaid leave is not redeemable: a credit covers whole days
+        // (2026-10-01). An unused credit isn't lost — it tops up the leave balance
+        // once it expires (see getExpiredUnusedCreditCount).
+        halfDay: false,
         dateFrom: { lte: periodLastDay },
         dateTo: { gte: periodStart },
       },
@@ -184,15 +193,19 @@ async function getUnpaidLeaveDaysInPeriod(
     }),
   ]);
 
-  const days: { date: Date; requestId: string | null }[] = declared.map((d) => ({
-    date: d.date,
-    requestId: null,
-  }));
+  const days: { date: Date; requestId: string | null }[] = declared
+    .filter((d) => countedUnpaidDays.has(d.date.toISOString().slice(0, 10)))
+    .map((d) => ({ date: d.date, requestId: null }));
+  const seen = new Set(days.map((d) => d.date.toISOString().slice(0, 10)));
   for (const r of requests) {
     if (!r.dateFrom || !r.dateTo) continue;
     const start = r.dateFrom < periodStart ? periodStart : r.dateFrom;
     const end = r.dateTo > periodLastDay ? periodLastDay : r.dateTo;
     for (let t = start.getTime(); t <= end.getTime(); t += MS_PER_DAY) {
+      const key = new Date(t).toISOString().slice(0, 10);
+      // One redeemable day per date, and only if the walk counted it unpaid.
+      if (!countedUnpaidDays.has(key) || seen.has(key)) continue;
+      seen.add(key);
       days.push({ date: new Date(t), requestId: r.id });
     }
   }
@@ -202,13 +215,15 @@ async function getUnpaidLeaveDaysInPeriod(
 /** Plain no-record absences (MonthlyBreakdown.absentDates) for the month —
  *  fixed-schedule employees only, same scope as automatic credit issuance
  *  (see point 3 above). */
-async function getAbsentDaysInPeriod(
-  employeeId: string,
-  month: number,
-  year: number,
-): Promise<{ date: Date }[]> {
-  const breakdown = await getMonthlyAttendanceBreakdown(employeeId, month, year);
+function absentDaysOf(breakdown: Awaited<ReturnType<typeof getMonthlyAttendanceBreakdown>>): { date: Date }[] {
   return breakdown.absentDates.map((date) => ({ date }));
+}
+
+/** The dates the month's walk counts as one whole unpaid-leave day. */
+function wholeUnpaidDaysOf(breakdown: Awaited<ReturnType<typeof getMonthlyAttendanceBreakdown>>): Set<string> {
+  return new Set(
+    breakdown.days.filter((d) => d.status === "unpaid_leave" && d.leaveUnpaid === 1).map((d) => d.date),
+  );
 }
 
 /** Pure allocator (unit-testable without a DB): greedily matches each day,
@@ -266,16 +281,16 @@ export async function computeCompensationRedemption(
   month: number,
   year: number,
 ): Promise<CompensationRedemption[]> {
-  const [absenceDays, unpaidDays, credits] = await Promise.all([
-    getAbsentDaysInPeriod(employeeId, month, year),
-    getUnpaidLeaveDaysInPeriod(employeeId, month, year),
+  const [breakdown, credits] = await Promise.all([
+    getMonthlyAttendanceBreakdown(employeeId, month, year),
     prisma.compensationCredit.findMany({
       where: { employeeId, consumedAt: null },
       select: { id: true, earnedDate: true, expiresAt: true },
     }),
   ]);
+  const unpaidDays = await getUnpaidLeaveDaysInPeriod(employeeId, month, year, wholeUnpaidDaysOf(breakdown));
 
-  return allocateCompensationCredits(absenceDays, unpaidDays, credits);
+  return allocateCompensationCredits(absentDaysOf(breakdown), unpaidDays, credits);
 }
 
 /** Commits a redemption list computed by computeCompensationRedemption —

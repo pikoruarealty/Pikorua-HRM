@@ -31,6 +31,8 @@ type OverviewRow = {
   status: "present" | "half_day" | "on_leave" | "absent" | "holiday" | "weekly_off";
   late: boolean;
   leaveType: string | null;
+  /** The leave covers only half the day (half-day leave). */
+  leaveHalf?: boolean;
   clockIn: string | null;
   clockOut: string | null;
   totalHours: string | null;
@@ -231,6 +233,7 @@ export function AttendanceOverviewPanel() {
                               : r.leaveType === "leave_sick"
                                 ? "sick"
                                 : "unpaid"}
+                            {r.leaveHalf ? " · half day" : ""}
                           </span>
                         )}
                       </span>

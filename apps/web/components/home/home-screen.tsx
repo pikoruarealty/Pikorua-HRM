@@ -62,6 +62,7 @@ type AttendanceRow = {
   photoUrl: string | null;
   status: "present" | "half_day" | "on_leave" | "absent" | "holiday" | "weekly_off";
   leaveType: string | null;
+  leaveHalf?: boolean;
   clockIn: string | null;
   clockOut: string | null;
 };
@@ -392,7 +393,9 @@ export function HomeScreen({
               count={attendance ? onLeaveRows.length : null}
               rows={onLeaveRows}
               subLabel={(r) =>
-                r.leaveType === "leave_casual" ? "Casual" : r.leaveType === "leave_sick" ? "Sick" : "Unpaid"
+                `${r.leaveType === "leave_casual" ? "Casual" : r.leaveType === "leave_sick" ? "Sick" : "Unpaid"}${
+                  r.leaveHalf ? " · half day" : ""
+                }`
               }
               emptyLabel="No one on leave today."
               href="/attendance"

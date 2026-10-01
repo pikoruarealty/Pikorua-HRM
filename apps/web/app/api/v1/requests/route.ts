@@ -66,6 +66,9 @@ const createSchema = z
     type: z.nativeEnum(RequestType),
     dateFrom: z.coerce.date().optional(),
     dateTo: z.coerce.date().optional(),
+    // Half-day leave (2026-10-01): half of ONE day, so dateTo defaults to dateFrom
+    // and may not differ from it.
+    halfDay: z.boolean().optional(),
     amount: z.number().positive().optional(),
     description: z.string().optional(),
   })
@@ -105,6 +108,7 @@ export async function POST(req: Request) {
       type: form.get("type") ?? undefined,
       dateFrom: form.get("dateFrom") || undefined,
       dateTo: form.get("dateTo") || undefined,
+      halfDay: form.get("halfDay") != null ? form.get("halfDay") === "true" : undefined,
       amount: form.get("amount") != null && form.get("amount") !== "" ? Number(form.get("amount")) : undefined,
       description: (form.get("description") as string) || undefined,
     };
@@ -120,14 +124,23 @@ export async function POST(req: Request) {
   if (!parsed.success) {
     return failFor(ErrorCode.VALIDATION, "Invalid request body.");
   }
-  const { type, dateFrom, dateTo, amount, description } = parsed.data;
+  const { type, dateFrom, amount, description } = parsed.data;
+  const halfDay = parsed.data.halfDay === true;
+  // A half-day leave is one day: if only dateFrom came, that is the day.
+  const dateTo = parsed.data.dateTo ?? (halfDay ? dateFrom : undefined);
 
+  if (halfDay && !LEAVE_TYPES.includes(type)) {
+    return failFor(ErrorCode.VALIDATION, "halfDay only applies to leave requests.");
+  }
   if (LEAVE_TYPES.includes(type)) {
     if (!dateFrom || !dateTo) {
       return failFor(ErrorCode.VALIDATION, "dateFrom and dateTo are required for leave requests.");
     }
     if (dateTo < dateFrom) {
       return failFor(ErrorCode.VALIDATION, "dateTo must be on or after dateFrom.");
+    }
+    if (halfDay && dateTo.getTime() !== dateFrom.getTime()) {
+      return failFor(ErrorCode.VALIDATION, "A half-day leave covers a single day — dateFrom and dateTo must match.");
     }
   } else if (type === RequestType.reimbursement) {
     if (amount === undefined) {
@@ -159,6 +172,7 @@ export async function POST(req: Request) {
       type,
       dateFrom: LEAVE_TYPES.includes(type) ? dateFrom : undefined,
       dateTo: LEAVE_TYPES.includes(type) ? dateTo : undefined,
+      halfDay,
       amount: type === RequestType.reimbursement ? amount : undefined,
       attachmentUrl: type === RequestType.reimbursement ? storedAttachment : undefined,
       description,

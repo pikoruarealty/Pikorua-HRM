@@ -127,3 +127,126 @@ describe("buildAttendanceCalendar", () => {
     expect(cal.hours).toEqual({ office: 5, wfh: 3, total: 8 });
   });
 });
+
+// 2026-10-01: today is never "absent" while someone is clocked in.
+describe("buildAttendanceCalendar — today", () => {
+  // Wed 17 June 2026, 14:00 local. The calendar reads "today" the way classifyMonth
+  // does (server-local calendar date).
+  const now = new Date(2026, 5, 17, 14, 0, 0);
+  const openSession = (clockIn: string, workLocation: WorkLocation) => ({ clockIn: at(clockIn), clockOut: null, workLocation });
+
+  test("an approved device day still open is live — with the hours worked so far", () => {
+    const cal = buildAttendanceCalendar({
+      month: 6,
+      year: 2026,
+      classified: [{ date: "2026-06-17", status: "live", credit: 0 }],
+      records: [
+        record("2026-06-17", {
+          totalHours: 0,
+          clockOutRaw: null,
+          sessions: [openSession(new Date(now.getTime() - 2.5 * 3_600_000).toISOString(), WorkLocation.office)],
+        }),
+      ],
+      now,
+    });
+    const d = cal.days.find((x) => x.date === "2026-06-17")!;
+    expect(d.status).toBe("live");
+    expect(d.liveHours).toBe(2.5);
+    expect(d.hours).toBeNull();
+    expect(d.clockOut).toBeNull();
+    expect(d.location).toBe("office");
+    expect(d.pending).toBe(false);
+    // Not finished, so in no total.
+    expect(cal.hours.total).toBe(0);
+    expect(cal.workedDays).toEqual({ office: 0, wfh: 0 });
+    expect(cal.pending.days).toBe(0);
+  });
+
+  test("a manual WFH clock-in (still pending approval) is promoted from absent to live", () => {
+    const cal = buildAttendanceCalendar({
+      month: 6,
+      year: 2026,
+      // The approved-only walk sees no record, so today is just 'today'.
+      classified: [{ date: "2026-06-17", status: "today", credit: 0 }],
+      records: [
+        record("2026-06-17", {
+          approvalStatus: AttendanceApprovalStatus.pending,
+          workLocation: WorkLocation.wfh,
+          totalHours: null,
+          clockOutRaw: null,
+          sessions: [openSession(new Date(now.getTime() - 3_600_000).toISOString(), WorkLocation.wfh)],
+        }),
+      ],
+      now,
+    });
+    const d = cal.days.find((x) => x.date === "2026-06-17")!;
+    expect(d.status).toBe("live");
+    expect(d.location).toBe("wfh");
+    expect(d.liveHours).toBe(1);
+    expect(cal.pending.days).toBe(0);
+  });
+
+  test("the same open record on a PAST day is not live — it stays what the walk said", () => {
+    const cal = buildAttendanceCalendar({
+      month: 6,
+      year: 2026,
+      classified: [{ date: "2026-06-10", status: "absent", credit: 0 }],
+      records: [record("2026-06-10", { totalHours: 0, clockOutRaw: null, sessions: [openSession("2026-06-10T05:30:00Z", WorkLocation.office)] })],
+      now,
+    });
+    expect(cal.days.find((x) => x.date === "2026-06-10")!.status).toBe("absent");
+  });
+
+  test("a day clocked out and still pending shows as pending, not live", () => {
+    const cal = buildAttendanceCalendar({
+      month: 6,
+      year: 2026,
+      classified: [{ date: "2026-06-17", status: "today", credit: 0 }],
+      records: [record("2026-06-17", { approvalStatus: AttendanceApprovalStatus.pending, totalHours: 5 })],
+      now,
+    });
+    expect(cal.days.find((x) => x.date === "2026-06-17")!.status).toBe("pending");
+  });
+
+  test("an open session adds its running time per place, so a mixed day is mixed", () => {
+    const cal = buildAttendanceCalendar({
+      month: 6,
+      year: 2026,
+      classified: [{ date: "2026-06-17", status: "live", credit: 0 }],
+      records: [
+        record("2026-06-17", {
+          totalHours: 0,
+          clockOutRaw: null,
+          sessions: [
+            { clockIn: new Date(now.getTime() - 5 * 3_600_000), clockOut: new Date(now.getTime() - 3 * 3_600_000), workLocation: WorkLocation.wfh },
+            openSession(new Date(now.getTime() - 1 * 3_600_000).toISOString(), WorkLocation.office),
+          ],
+        }),
+      ],
+      now,
+    });
+    const d = cal.days.find((x) => x.date === "2026-06-17")!;
+    expect(d.location).toBe("mixed");
+    expect(d.wfhHours).toBe(2);
+    expect(d.officeHours).toBe(1);
+    expect(d.liveHours).toBe(3);
+  });
+});
+
+describe("buildAttendanceCalendar — leave and credit come from the walk", () => {
+  test("a half-day leave and its credit reach the calendar day", () => {
+    const cal = buildAttendanceCalendar({
+      month: 8,
+      year: 2026,
+      classified: [{ date: "2026-08-03", status: "half_day", credit: 1, leavePaid: 0.5 }],
+      records: [record("2026-08-03", { totalHours: 4, isHalfDay: true })],
+    });
+    const d = cal.days.find((x) => x.date === "2026-08-03")!;
+    expect(d).toMatchObject({ credit: 1, leavePaid: 0.5, leaveUnpaid: 0, absentPart: null });
+  });
+
+  test("a day the walk did not list has no credit and no leave", () => {
+    const cal = buildAttendanceCalendar({ month: 8, year: 2026, classified: [], records: [] });
+    expect(cal.days[0]).toMatchObject({ status: null, credit: 0, leavePaid: 0, leaveUnpaid: 0 });
+  });
+});

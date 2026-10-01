@@ -26,6 +26,7 @@ import { formatDate, formatDateTime, formatTime } from "@/lib/format-date";
 import { MAX_PLAUSIBLE_SHIFT_HOURS } from "@/lib/attendance/time";
 import { isAttendanceExemptRole } from "@/lib/attendance/tracking";
 import { EmployeeAttendancePanel } from "@/components/attendance/employee-attendance-panel";
+import { AttendanceExportButton } from "@/components/attendance/attendance-export-button";
 
 type WorkLocationValue = "office" | "wfh";
 
@@ -104,15 +105,19 @@ export function AttendanceScreen({
   const showOwnOverview = employeeId !== null && !isAdmin;
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Attendance</h1>
-        <p className="text-sm text-muted-foreground">
-          {canReview ? "Review and approval." : "Your month at a glance."} Clock in/out from{" "}
-          <a href="/planning" className="underline">
-            Daily Planning
-          </a>
-          .
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Attendance</h1>
+          <p className="text-sm text-muted-foreground">
+            {canReview ? "Review and approval." : "Your month at a glance."} Clock in/out from{" "}
+            <a href="/planning" className="underline">
+              Daily Planning
+            </a>
+            .
+          </p>
+        </div>
+        {/* Admin-only (route enforces it too): a PDF of any month, per employee. */}
+        {isAdmin && <AttendanceExportButton />}
       </div>
 
       {/* Everyone who clocks in gets their own month: tiles (incl. office/WFH

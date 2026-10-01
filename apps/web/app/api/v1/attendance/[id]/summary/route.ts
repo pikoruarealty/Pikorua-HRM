@@ -96,6 +96,11 @@ export async function GET(
     compensation_days: breakdown.compensationDays,
     holiday_days: breakdown.holidayDays,
     working_days_elapsed: breakdown.workingDaysElapsed,
+    // 2026-10-01 — the days that count toward pay (present + half×0.5 + paid leave +
+    // holiday + compensation): the exact sum of the per-day `credit` in `days`, so
+    // it can be checked against the calendar. Leave days can be fractional now
+    // (half-day leave), as can absent for a part-timer's quota shortfall.
+    payable_days: breakdown.payableDays,
     // 2026-09-30 — in-office vs work-from-home. Hours and the worked-day split
     // use approved days only (same basis as every count above); a day that has a
     // record but isn't approved yet is listed in `pending` and shows on the

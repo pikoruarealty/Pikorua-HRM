@@ -56,7 +56,7 @@ export async function getApprovedUnpaidLeaveDays(
       dateFrom: { lte: periodLastDay },
       dateTo: { gte: periodStart },
     },
-    select: { dateFrom: true, dateTo: true },
+    select: { dateFrom: true, dateTo: true, halfDay: true },
   });
 
   let totalDays = 0;
@@ -64,7 +64,8 @@ export async function getApprovedUnpaidLeaveDays(
     // Leave requests always carry both dates (enforced at POST /requests);
     // skip defensively if somehow missing rather than throwing.
     if (!r.dateFrom || !r.dateTo) continue;
-    totalDays += countDaysClippedToPeriod(r.dateFrom, r.dateTo, month, year);
+    // A half-day row counts 0.5 (2026-10-01), so this can be fractional.
+    totalDays += countDaysClippedToPeriod(r.dateFrom, r.dateTo, month, year, r.halfDay);
   }
 
   return totalDays;
@@ -92,13 +93,13 @@ export async function getApprovedPaidLeaveDays(
       dateFrom: { lte: periodLastDay },
       dateTo: { gte: periodStart },
     },
-    select: { dateFrom: true, dateTo: true },
+    select: { dateFrom: true, dateTo: true, halfDay: true },
   });
 
   let totalDays = 0;
   for (const r of requests) {
     if (!r.dateFrom || !r.dateTo) continue;
-    totalDays += countDaysClippedToPeriod(r.dateFrom, r.dateTo, month, year);
+    totalDays += countDaysClippedToPeriod(r.dateFrom, r.dateTo, month, year, r.halfDay);
   }
   return totalDays;
 }
@@ -116,13 +117,13 @@ export async function getApprovedPaidLeaveDaysForYear(employeeId: string, year: 
       dateFrom: { lte: yearLastDay },
       dateTo: { gte: yearStart },
     },
-    select: { dateFrom: true, dateTo: true },
+    select: { dateFrom: true, dateTo: true, halfDay: true },
   });
 
   let totalDays = 0;
   for (const r of requests) {
     if (!r.dateFrom || !r.dateTo) continue;
-    totalDays += countDaysClippedToYear(r.dateFrom, r.dateTo, year);
+    totalDays += countDaysClippedToYear(r.dateFrom, r.dateTo, year, r.halfDay);
   }
   return totalDays;
 }

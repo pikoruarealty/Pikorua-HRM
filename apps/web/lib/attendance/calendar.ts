@@ -23,13 +23,17 @@ export type CalendarDayStatus = DayStatus | "pending";
 export type CalendarDay = {
   /** YYYY-MM-DD */
   date: string;
-  /** null = not evaluated: before the employee joined, or still in the future. */
+  /** null = not evaluated: before the employee joined, or still in the future.
+   *  `live` = clocked in right now (today only); `today` = today, nothing yet. */
   status: CalendarDayStatus | null;
   /** A record exists for the day but has not been approved yet. */
   pending: boolean;
   location: CalendarLocation | null;
   /** Worked hours; null when there is no record or the day is still open. */
   hours: number | null;
+  /** Hours worked so far today, including the session that is still open. Only
+   *  set on a `live` day; it is not in any total until the day closes. */
+  liveHours: number | null;
   officeHours: number;
   wfhHours: number;
   clockIn: string | null;
@@ -39,7 +43,18 @@ export type CalendarDay = {
   isCompensation: boolean;
   /** Why the day is what it is, where not obvious — see ClassifiedDay.note. */
   note: ClassifiedDay["note"] | null;
+  /** What the day is worth toward pay, in days — same figure the totals use. */
+  credit: number;
+  /** Leave covering part or all of the day, in days (half-day leave = 0.5). */
+  leavePaid: number;
+  leaveUnpaid: number;
+  /** The part of the day counted absent when only part of it is (see ClassifiedDay). */
+  absentPart: number | null;
 };
+
+/** What buildAttendanceCalendar reads from the walk; only date and status are required. */
+export type ClassifiedDayInput = Pick<ClassifiedDay, "date" | "status"> &
+  Partial<Omit<ClassifiedDay, "date" | "status">>;
 
 export type HoursByLocation = { office: number; wfh: number; total: number };
 
@@ -126,20 +141,53 @@ function key(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
+/** Hours worked so far across every session, the open one counted up to `now`. Not
+ *  scaled to anything: a live day has no approved total to scale to yet. */
+export function liveHoursByLocation(sessions: CalendarSession[], now: Date): { office: number; wfh: number } {
+  let officeMs = 0;
+  let wfhMs = 0;
+  for (const s of sessions) {
+    const end = s.clockOut ?? now;
+    const ms = Math.max(0, end.getTime() - s.clockIn.getTime());
+    if (s.workLocation === WorkLocation.wfh) wfhMs += ms;
+    else officeMs += ms;
+  }
+  return { office: round2(officeMs / MS_PER_HOUR), wfh: round2(wfhMs / MS_PER_HOUR) };
+}
+
+/** Is this record's day still being worked — clocked in with nothing closed yet? */
+function isOpenRecord(r: CalendarRecord): boolean {
+  if (r.sessions.length > 0) return r.sessions.some((s) => !s.clockOut);
+  // A session-less (manual) record is open until it has a clock-out.
+  return !!(r.clockInApproved ?? r.clockInRaw) && !(r.clockOutApproved ?? r.clockOutRaw);
+}
+
 /**
  * Pure: day statuses (from classifyMonth) + the month's records -> the calendar.
  * A day classifyMonth did not evaluate (before joining, or in the future) keeps
  * `status: null`.
+ *
+ * Today is special (2026-10-01): a day still being worked shows as `live`, never
+ * as absent. The walk already does this for an approved (device) day, which the
+ * biometric sync approves the moment someone punches in; a manual WFH clock-in is
+ * *pending* until approved, so the walk sees no record at all and the calendar
+ * promotes it here.
  */
 export function buildAttendanceCalendar(args: {
   month: number;
   year: number;
-  classified: ClassifiedDay[];
+  classified: ClassifiedDayInput[];
   records: CalendarRecord[];
+  /** Overrides "now" (tests); defaults to the real time. */
+  now?: Date;
 }): AttendanceCalendar {
   const { month, year, classified, records } = args;
+  const now = args.now ?? new Date();
+  // Same notion of "today" as classifyMonth: the server-local calendar date.
+  const todayKey = key(new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())));
   const statusByDate = new Map(classified.map((d) => [d.date, d.status]));
   const noteByDate = new Map(classified.map((d) => [d.date, d.note ?? null]));
+  const classifiedByDate = new Map(classified.map((d) => [d.date, d]));
   const recordByDate = new Map(records.map((r) => [key(r.date), r]));
   const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
 
@@ -171,9 +219,18 @@ export function buildAttendanceCalendar(args: {
     // something else (absent / weekly off / not evaluated). It never overrides
     // an approved classification.
     let status: CalendarDayStatus | null = classifiedStatus;
-    if (isPendingRecord && (status === null || status === "absent" || status === "weekly_off" || status === "no_record")) {
+    const liveNow = date === todayKey && !!record && isOpenRecord(record) && !!(record.clockInApproved ?? record.clockInRaw);
+    if (liveNow && (status === null || status === "absent" || status === "weekly_off" || status === "no_record" || status === "today")) {
+      // Clocked in right now: not absent, whether or not anyone has approved it yet.
+      status = "live";
+    } else if (
+      isPendingRecord &&
+      (status === null || status === "absent" || status === "weekly_off" || status === "no_record" || status === "today")
+    ) {
       status = "pending";
     }
+    const live = status === "live";
+    const liveSplit = live && record ? liveHoursByLocation(record.sessions, now) : null;
 
     const worked = status === "present" || status === "half_day" || status === "compensation";
     if (worked && record && record.approvalStatus === AttendanceApprovalStatus.approved) {
@@ -188,20 +245,33 @@ export function buildAttendanceCalendar(args: {
       pending.hours += split.office + split.wfh;
     }
 
+    const walked = classifiedByDate.get(date);
     days.push({
       date,
       status,
-      pending: isPendingRecord,
-      location: record && (worked || status === "pending") ? locationOf(split.office, split.wfh, record.workLocation) : null,
-      hours: record && record.totalHours != null ? Number(record.totalHours) : null,
-      officeHours: split.office,
-      wfhHours: split.wfh,
+      // A day being worked now is not "awaiting approval" in any useful sense —
+      // it is simply not finished.
+      pending: isPendingRecord && !live,
+      location:
+        record && (worked || status === "pending")
+          ? locationOf(split.office, split.wfh, record.workLocation)
+          : live && record && liveSplit
+            ? locationOf(liveSplit.office, liveSplit.wfh, record.workLocation)
+            : null,
+      hours: record && record.totalHours != null && !live ? Number(record.totalHours) : null,
+      liveHours: liveSplit ? round2(liveSplit.office + liveSplit.wfh) : null,
+      officeHours: liveSplit ? liveSplit.office : split.office,
+      wfhHours: liveSplit ? liveSplit.wfh : split.wfh,
       clockIn: record ? (record.clockInApproved ?? record.clockInRaw)?.toISOString() ?? null : null,
-      clockOut: record ? (record.clockOutApproved ?? record.clockOutRaw)?.toISOString() ?? null : null,
+      clockOut: live ? null : record ? (record.clockOutApproved ?? record.clockOutRaw)?.toISOString() ?? null : null,
       sessionCount: record?.sessions.length ?? 0,
       isHalfDay: record?.isHalfDay ?? false,
       isCompensation: record?.isCompensation ?? false,
       note: noteByDate.get(date) ?? null,
+      credit: walked?.credit ?? 0,
+      leavePaid: walked?.leavePaid ?? 0,
+      leaveUnpaid: walked?.leaveUnpaid ?? 0,
+      absentPart: walked?.absentPart ?? null,
     });
   }
 

@@ -62,6 +62,7 @@ const patchSchema = z.object({
   type: z.nativeEnum(RequestType).optional(),
   dateFrom: z.coerce.date().optional(),
   dateTo: z.coerce.date().optional(),
+  halfDay: z.boolean().optional(),
   amount: z.number().positive().optional(),
   description: z.string().optional(),
 });
@@ -89,9 +90,13 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   }
   const parsed = patchSchema.safeParse(body);
   if (!parsed.success) return failFor(ErrorCode.VALIDATION, "Invalid request body.");
-  const { type, dateFrom, dateTo, amount, description } = parsed.data;
+  const { type, dateFrom, amount, description } = parsed.data;
 
   const effectiveType = type ?? existing.type;
+  const effectiveHalf = LEAVE_TYPES.includes(effectiveType) ? (parsed.data.halfDay ?? existing.halfDay) : false;
+  // A half-day request is the one day it is for: switching to half-day, or moving
+  // its date, carries dateTo along.
+  const dateTo = parsed.data.dateTo ?? (effectiveHalf ? (dateFrom ?? existing.dateFrom ?? undefined) : undefined);
   if (LEAVE_TYPES.includes(effectiveType)) {
     const effectiveFrom = dateFrom ?? existing.dateFrom;
     const effectiveTo = dateTo ?? existing.dateTo;
@@ -100,6 +105,9 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     }
     if (effectiveTo < effectiveFrom) {
       return failFor(ErrorCode.VALIDATION, "dateTo must be on or after dateFrom.");
+    }
+    if (effectiveHalf && effectiveTo.getTime() !== effectiveFrom.getTime()) {
+      return failFor(ErrorCode.VALIDATION, "A half-day leave covers a single day — dateFrom and dateTo must match.");
     }
   } else if (effectiveType === RequestType.reimbursement) {
     const effectiveAmount = amount ?? (existing.amount ? Number(existing.amount) : undefined);
@@ -114,6 +122,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       ...(type !== undefined ? { type } : {}),
       ...(dateFrom !== undefined ? { dateFrom } : {}),
       ...(dateTo !== undefined ? { dateTo } : {}),
+      ...(parsed.data.halfDay !== undefined || !LEAVE_TYPES.includes(effectiveType) ? { halfDay: effectiveHalf } : {}),
       ...(amount !== undefined ? { amount } : {}),
       ...(description !== undefined ? { description } : {}),
     },

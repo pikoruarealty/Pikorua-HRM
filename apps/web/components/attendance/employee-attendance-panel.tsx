@@ -28,6 +28,8 @@ type Summary = {
   compensation_days: number;
   holiday_days: number;
   working_days_elapsed: number;
+  /** Days that count toward pay: present + ½ × half-days + paid leave + holidays + compensation. */
+  payable_days: number;
   hours: { office: number; wfh: number; total: number };
   expected_hours: { month: number; weekly: number | null; wfhWeekly: number | null } | null;
   worked_days: Split;
@@ -212,7 +214,7 @@ export function EmployeeAttendancePanel({
               <Stat label="Holidays" value={summary.holiday_days} />
             </div>
 
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 sm:gap-3">
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-3">
               <HoursTile
                 label="Hours in office"
                 value={summary.hours.office}
@@ -231,12 +233,18 @@ export function EmployeeAttendancePanel({
                 }
               />
               <HoursTile
-                className="col-span-2 sm:col-span-1"
                 label="Total hours worked"
                 value={summary.hours.total}
                 days={summary.worked_days.office + summary.worked_days.wfh}
                 hint={summary.expected_hours ? `of ${summary.expected_hours.month}h expected` : undefined}
               />
+              <div className="rounded-lg border p-3">
+                <div className="text-xs text-muted-foreground">Payable days</div>
+                <div className="mt-1 text-xl font-semibold tabular-nums sm:text-2xl">{summary.payable_days}</div>
+                <div className="mt-0.5 text-[11px] text-muted-foreground">
+                  present + ½ half-days + leave + holidays + comp
+                </div>
+              </div>
             </div>
 
             {wfh?.enabled && <WfhLine plan={wfh} />}

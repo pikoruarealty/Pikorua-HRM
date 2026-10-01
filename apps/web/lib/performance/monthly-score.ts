@@ -387,7 +387,9 @@ export function scoreEmployee(
   components.attendance = raw.attendance
     ? {
         value: attendanceToScore(raw.attendance),
-        detail: `${raw.attendance.presentDays + raw.attendance.halfDays * 0.5} of ${raw.attendance.workingDaysElapsed} days`,
+        // The same credited days the score above is computed from (it used to omit
+        // holidays and paid leave from this line while the score counted them).
+        detail: `${raw.attendance.creditedWorkingDays} of ${raw.attendance.workingDaysElapsed} days`,
       }
     : { value: null };
 

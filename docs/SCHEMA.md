@@ -258,11 +258,11 @@ application code (`lib/payroll/calc.ts`), not stored here.
 | other_deduction_amount | numeric(12,2)? | manual, ad-hoc one-off negative line item |
 | other_deduction_reason | text? | |
 | late_count | integer | auto-computed from **approved** attendance records only |
-| unpaid_leave_count | integer | auto-computed (holiday/Sunday-aware, `lib/attendance/monthly-breakdown.ts`) — informational; excluded from earned_base_pay, not separately deducted |
+| unpaid_leave_count | **float** | auto-computed (holiday/Sunday-aware, `lib/attendance/monthly-breakdown.ts`) — informational; excluded from earned_base_pay, not separately deducted. **Float since 2026-10-01**: a half-day unpaid leave is 0.5 |
 | half_day_count | integer | auto-computed; contributes 0.5 day to earned_base_pay |
-| absent_count | integer | auto-computed (added 2026-07-17) — days with no clock-in, no approved leave, no holiday; excluded from earned_base_pay, same treatment as unpaid leave. A Sunday clock-in never counts here (it's a compensation day instead) |
+| absent_count | **float** | auto-computed (added 2026-07-17) — days with no clock-in, no approved leave, no holiday; excluded from earned_base_pay, same treatment as unpaid leave. A Sunday clock-in never counts here (it's a compensation day instead). **Float since 2026-10-01**: the half of a day a half-day leave doesn't cover, or a part-timer's half-day quota shortfall, is 0.5 |
 | present_count | integer | auto-computed (added 2026-07-17) — contributes 1 full day to earned_base_pay |
-| paid_leave_count | integer | auto-computed (added 2026-07-17) — contributes 1 full day to earned_base_pay |
+| paid_leave_count | **float** | auto-computed (added 2026-07-17) — contributes 1 full day to earned_base_pay (0.5 for a half-day leave). **Float since 2026-10-01** |
 | holiday_count | integer | auto-computed (added 2026-07-17) — contributes 1 full day to earned_base_pay |
 | compensation_count | integer | auto-computed (added 2026-07-17) — a Sunday clocked in; contributes 1 full day to earned_base_pay (no overtime premium) |
 | earned_base_pay | numeric(12,2) | auto-computed (added 2026-07-17, renamed formula): `(present_count + half_day_count×0.5 + paid_leave_count + holiday_count + compensation_count) × (base_salary ÷ 30)` — what the employee actually earned for the period |
@@ -287,6 +287,7 @@ application code (`lib/payroll/calc.ts`), not stored here.
 | status | enum | `pending`, `approved`, `rejected` |
 | date_from | date? | for leave/WFH |
 | date_to | date? | for leave/WFH |
+| half_day | boolean | **Added 2026-10-01.** Default `false`. A leave row that covers **half of one day** (`date_from` = `date_to`); every leave count weights it 0.5. Admin/HR can also approve a full-day request as a half day, which sets this on the approved row (see `PATCH /requests/:id/approve`). |
 | amount | numeric(12,2)? | for reimbursement |
 | description | text? | |
 | attachment_url | text? | e.g. reimbursement receipt |

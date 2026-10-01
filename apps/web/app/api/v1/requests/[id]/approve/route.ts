@@ -8,9 +8,10 @@ import { pushNotification } from "@/lib/notifications/push";
 import { RequestStatus, RequestType } from "@prisma/client";
 import { audit, clientIp } from "@/lib/audit";
 import {
-  splitLeaveRangeByOverrides,
-  allocateLeaveDaysAgainstCaps,
+  planLeaveParts,
+  partsToSegments,
   isPaidLeaveType,
+  type LeaveCaps,
   type LeaveDayType,
 } from "@/lib/requests/leave-math";
 import { getApprovedPaidLeaveDaysByMonthsInRange, getApprovedPaidLeaveDaysForYear } from "@/lib/requests/leave";
@@ -39,6 +40,13 @@ import { getEffectivePaidLeaveCaps } from "@/lib/leave/balance";
 // override_monthly_cap + a reason, e.g. a genuine one-off exception; that
 // path is audited distinctly (admin_override: true) and does NOT touch the
 // day_overrides / manual-split path above, which still wins whenever supplied.
+//
+// Half-day leave (owner request, 2026-10-01): a request can itself be a half day
+// (Request.halfDay), and the approver can approve any day of a full-day request as
+// a half day via `half_day_dates`. Half-days feed the same planner as the caps and
+// the manual split (lib/requests/leave-math.ts planLeaveParts), so a half day that
+// no longer fits the paid allowance — or a full day with only half an allowance
+// left — is handled by the same rule rather than a second code path.
 const approveSchema = z
   .object({
     day_overrides: z
@@ -48,6 +56,9 @@ const approveSchema = z
           type: z.nativeEnum(RequestType),
         }),
       )
+      .optional(),
+    half_day_dates: z
+      .array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date must be YYYY-MM-DD"))
       .optional(),
     override_monthly_cap: z.boolean().optional(),
     reason: z.string().min(3, "A reason is required to override the monthly cap.").optional(),
@@ -83,6 +94,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     return failFor(ErrorCode.VALIDATION, parsedBody.error.issues[0]?.message ?? "Invalid approval body.");
   }
   const dayOverrides = parsedBody.data?.day_overrides ?? [];
+  const halfDayDates = [...new Set(parsedBody.data?.half_day_dates ?? [])];
   const overrideMonthlyCap = parsedBody.data?.override_monthly_cap ?? false;
   const overrideReason = parsedBody.data?.reason;
 
@@ -105,17 +117,20 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     return failFor(ErrorCode.FORBIDDEN, "Cannot approve your own request.");
   }
 
-  if (dayOverrides.length > 0) {
-    if (!LEAVE_TYPES.includes(request.type) || !request.dateFrom || !request.dateTo) {
-      return failFor(ErrorCode.VALIDATION, "day_overrides only applies to leave requests.");
+  const isLeaveRequest = LEAVE_TYPES.includes(request.type) && !!request.dateFrom && !!request.dateTo;
+  if (dayOverrides.length > 0 || halfDayDates.length > 0) {
+    if (!isLeaveRequest) {
+      return failFor(ErrorCode.VALIDATION, "day_overrides and half_day_dates only apply to leave requests.");
     }
     for (const o of dayOverrides) {
       if (!LEAVE_TYPES.includes(o.type)) {
         return failFor(ErrorCode.VALIDATION, "day_overrides type must be leave_casual, leave_sick, or leave_unpaid.");
       }
-      const d = new Date(`${o.date}T00:00:00.000Z`);
-      if (d < request.dateFrom || d > request.dateTo) {
-        return failFor(ErrorCode.VALIDATION, `${o.date} is outside this request's date range.`);
+    }
+    for (const date of [...dayOverrides.map((o) => o.date), ...halfDayDates]) {
+      const d = new Date(`${date}T00:00:00.000Z`);
+      if (d < request.dateFrom! || d > request.dateTo!) {
+        return failFor(ErrorCode.VALIDATION, `${date} is outside this request's date range.`);
       }
     }
   }
@@ -128,59 +143,60 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   // Auto-overflow: only kicks in for a paid-leave request approved WITHOUT a
   // manual day_overrides split, and only when Admin hasn't explicitly
   // overridden the cap for this approval.
-  let autoOverrideMap: Map<string, LeaveDayType> | null = null;
-  if (
-    dayOverrides.length === 0 &&
-    !overrideMonthlyCap &&
-    isPaidLeaveType(request.type) &&
-    request.dateFrom &&
-    request.dateTo
-  ) {
-    const dateFrom = request.dateFrom;
-    const dateTo = request.dateTo;
-    const [{ monthlyCap, yearlyCap }, approvedByMonth, approvedThisYear] = await Promise.all([
+  let caps: LeaveCaps | null = null;
+  if (isLeaveRequest && dayOverrides.length === 0 && !overrideMonthlyCap && isPaidLeaveType(request.type)) {
+    const dateFrom = request.dateFrom!;
+    const dateTo = request.dateTo!;
+    const [{ monthlyCap, yearlyCap }, approvedPaidByMonthKey, approvedPaidThisYear] = await Promise.all([
       getEffectivePaidLeaveCaps(request.employeeId, dateFrom.getUTCMonth() + 1, dateFrom.getUTCFullYear()),
       getApprovedPaidLeaveDaysByMonthsInRange(request.employeeId, dateFrom, dateTo),
       getApprovedPaidLeaveDaysForYear(request.employeeId, dateFrom.getUTCFullYear()),
     ]);
-    const overrides = allocateLeaveDaysAgainstCaps(
-      dateFrom,
-      dateTo,
-      approvedByMonth,
-      approvedThisYear,
-      monthlyCap,
-      yearlyCap,
-    );
-    if (overrides.size > 0) {
-      autoOverrideMap = overrides;
-      autoCapped = true;
-    }
+    caps = { approvedPaidByMonthKey, approvedPaidThisYear, monthlyCap, yearlyCap };
   }
 
-  if (dayOverrides.length === 0 && !autoOverrideMap) {
+  const segments = isLeaveRequest
+    ? partsToSegments(
+        planLeaveParts({
+          dateFrom: request.dateFrom!,
+          dateTo: request.dateTo!,
+          baseType: request.type as LeaveDayType,
+          baseHalf: request.halfDay,
+          halfDates: new Set(halfDayDates),
+          typeOverrides: new Map<string, LeaveDayType>(dayOverrides.map((o) => [o.date, o.type as LeaveDayType])),
+          caps,
+        }),
+      )
+    : [];
+  // The request is rewritten only when the plan differs from what was filed — a
+  // plain approval of an in-allowance request stays a one-row status change.
+  const first = segments[0];
+  const unchanged =
+    segments.length === 1 &&
+    first !== undefined &&
+    first.type === request.type &&
+    first.dateFrom.getTime() === request.dateFrom!.getTime() &&
+    first.dateTo.getTime() === request.dateTo!.getTime() &&
+    (first.halfDay ?? false) === request.halfDay;
+  // `caps` is only set when there are no manual overrides, so in that mode any
+  // unpaid segment of a paid request can only have come from the allowance.
+  autoCapped = caps !== null && segments.some((s) => s.type === "leave_unpaid");
+  const madeHalf = segments.some((s) => s.halfDay) && halfDayDates.length > 0;
+
+  if (!isLeaveRequest || unchanged) {
     updated = await prisma.request.update({
       where: { id: params.id },
       data: { status: RequestStatus.approved, approverId: session!.userId, approvedAt: now },
     });
   } else {
-    const overrideMap =
-      dayOverrides.length > 0
-        ? new Map<string, LeaveDayType>(dayOverrides.map((o) => [o.date, o.type as LeaveDayType]))
-        : autoOverrideMap!;
-    const segments = splitLeaveRangeByOverrides(
-      request.dateFrom!,
-      request.dateTo!,
-      request.type as LeaveDayType,
-      overrideMap,
-    );
-
-    const [first, ...rest] = segments;
+    const [head, ...rest] = segments;
     updated = await prisma.request.update({
       where: { id: params.id },
       data: {
-        type: first.type as RequestType,
-        dateFrom: first.dateFrom,
-        dateTo: first.dateTo,
+        type: head!.type as RequestType,
+        dateFrom: head!.dateFrom,
+        dateTo: head!.dateTo,
+        halfDay: head!.halfDay === true,
         status: RequestStatus.approved,
         approverId: session!.userId,
         approvedAt: now,
@@ -194,6 +210,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
           type: seg.type as RequestType,
           dateFrom: seg.dateFrom,
           dateTo: seg.dateTo,
+          halfDay: seg.halfDay === true,
           description: request.description,
           status: RequestStatus.approved,
           approverId: session!.userId,
@@ -210,7 +227,9 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
         ? `Your ${request.type} request has been approved with some days changed to a different leave type — check Requests for the split.`
         : autoCapped
           ? `Your ${request.type} request has been approved — some days exceeded your monthly/yearly paid-leave limit and were marked unpaid.`
-          : `Your ${request.type} request has been approved.`;
+          : madeHalf
+            ? `Your ${request.type} request has been approved with some days counted as half days — check Requests for the split.`
+            : `Your ${request.type} request has been approved.`;
     await pushNotification(requester.id, `${request.type}_approved`, message);
   }
 
@@ -226,6 +245,8 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       ...(request.amount != null ? { amount: Number(request.amount) } : {}),
       ...(dayOverrides.length > 0 ? { day_overrides: dayOverrides, split_request_ids: createdIds } : {}),
       ...(autoCapped ? { auto_capped: true, split_request_ids: createdIds } : {}),
+      ...(halfDayDates.length > 0 ? { half_day_dates: halfDayDates, split_request_ids: createdIds } : {}),
+      ...(request.halfDay ? { half_day_request: true } : {}),
       ...(overrideMonthlyCap ? { admin_override: true, override_monthly_cap: true, reason: overrideReason } : {}),
     },
     ip: clientIp(req),

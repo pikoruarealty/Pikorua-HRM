@@ -7,6 +7,7 @@ import { getLatestPayrollConfig } from "@/lib/payroll/config";
 import { EmployeeStatus, RequestStatus, RequestType } from "@prisma/client";
 import { isOffDay, weekStartOf, buildMovedOffDateByWeek, resolveDefaultOffDay } from "@/lib/attendance/week";
 import { loadWeekOffs } from "@/lib/attendance/weekly-off";
+import { addLeaveToDay, isPaidLeaveType, type LeaveDayEntry } from "@/lib/requests/leave-math";
 
 // Track A (2026-07-15). GET /api/v1/attendance/overview?date=YYYY-MM-DD —
 // Admin/HR only. The "glance" view of a single day: present / half-day /
@@ -68,7 +69,7 @@ export async function GET(req: Request) {
         dateFrom: { lte: date },
         dateTo: { gte: date },
       },
-      select: { employeeId: true, type: true },
+      select: { employeeId: true, type: true, halfDay: true },
     }),
     prisma.holiday.findUnique({ where: { date } }),
     // Active weekly-off moves for the week containing this date. Keyed per
@@ -83,7 +84,22 @@ export async function GET(req: Request) {
   const lateGraceMinutes = (await getLatestPayrollConfig())?.lateGraceMinutes ?? 0;
 
   const recordByEmployee = new Map(records.map((r) => [r.employeeId, r]));
-  const leaveByEmployee = new Map(leaves.map((l) => [l.employeeId, l.type]));
+  // One entry per employee: the leave type to label them with (paid wins over
+  // unpaid) and whether it only covers half the day (2026-10-01). Several rows on
+  // the same day add up, capped at one whole day.
+  const leaveByEmployee = new Map<string, { type: RequestType; half: boolean }>();
+  {
+    const days = new Map<string, LeaveDayEntry>();
+    const typeOf = new Map<string, RequestType>();
+    for (const l of leaves) {
+      addLeaveToDay(days, l.employeeId, l.type, l.halfDay);
+      const cur = typeOf.get(l.employeeId);
+      if (!cur || (!isPaidLeaveType(cur) && isPaidLeaveType(l.type))) typeOf.set(l.employeeId, l.type);
+    }
+    for (const [employeeId, entry] of days) {
+      leaveByEmployee.set(employeeId, { type: typeOf.get(employeeId)!, half: entry.paid + entry.unpaid < 1 });
+    }
+  }
   // Per-employee map of weekStart-key -> off-date-key for active moves this week.
   const movesByEmployee = new Map<string, Map<string, string>>();
   for (const m of moves) {
@@ -101,7 +117,8 @@ export async function GET(req: Request) {
 
   const rows = employees.map((e) => {
     const record = recordByEmployee.get(e.id);
-    const leaveType = leaveByEmployee.get(e.id);
+    const leave = leaveByEmployee.get(e.id);
+    const leaveType = leave?.type;
 
     let status: EmployeeDayStatus;
     let late = false;
@@ -139,6 +156,7 @@ export async function GET(req: Request) {
       status,
       late,
       leaveType: leaveType ?? null,
+      leaveHalf: leave?.half ?? false,
       clockIn: record?.clockInApproved ?? record?.clockInRaw ?? null,
       clockOut: record?.clockOutApproved ?? record?.clockOutRaw ?? null,
       totalHours: record?.totalHours ?? null,

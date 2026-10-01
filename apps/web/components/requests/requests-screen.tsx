@@ -8,9 +8,10 @@ import { Label } from "@/components/ui/label";
 import { DatePicker } from "@/components/ui/date-picker";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { IconActionButton } from "@/components/ui/icon-action-button";
-import { Pencil, Trash2, Check, ShieldCheck, X, RotateCcw, ShieldAlert } from "lucide-react";
+import { Pencil, Trash2, Check, ShieldCheck, X, RotateCcw, ShieldAlert, SquareSplitHorizontal } from "lucide-react";
 import { apiFetch } from "@/components/_lib/api";
 import { isPaidLeaveType, type LeaveDayType } from "@/lib/requests/leave-math";
 
@@ -29,6 +30,8 @@ type RequestRow = {
   status: string;
   dateFrom?: string | null;
   dateTo?: string | null;
+  /** A half-day leave: half of the one day in dateFrom. */
+  halfDay?: boolean;
   amount?: string | null;
   description?: string | null;
   createdAt: string;
@@ -83,6 +86,7 @@ export function RequestsScreen() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDateFrom, setEditDateFrom] = useState("");
   const [editDateTo, setEditDateTo] = useState("");
+  const [editHalf, setEditHalf] = useState(false);
   const [editAmount, setEditAmount] = useState("");
   const [editDescription, setEditDescription] = useState("");
   const [editSubmitting, setEditSubmitting] = useState(false);
@@ -91,6 +95,7 @@ export function RequestsScreen() {
   const [type, setType] = useState("leave_casual");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [halfDay, setHalfDay] = useState(false);
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
   const [bill, setBill] = useState<File | null>(null);
@@ -175,7 +180,9 @@ export function RequestsScreen() {
       const body: Record<string, unknown> = { type, description: description || undefined };
       if (isLeave) {
         body.dateFrom = dateFrom;
-        body.dateTo = dateTo;
+        // A half day is one day: it has no separate end date.
+        body.dateTo = halfDay ? dateFrom : dateTo;
+        if (halfDay) body.halfDay = true;
       }
       res = await apiFetch("/requests", { method: "POST", body: JSON.stringify(body) });
     }
@@ -187,6 +194,7 @@ export function RequestsScreen() {
     }
     setDateFrom("");
     setDateTo("");
+    setHalfDay(false);
     setAmount("");
     setDescription("");
     setBill(null);
@@ -208,6 +216,8 @@ export function RequestsScreen() {
   // type before confirming, instead of only all-or-nothing approval.
   const [splittingId, setSplittingId] = useState<string | null>(null);
   const [dayTypes, setDayTypes] = useState<Record<string, LeaveDayType>>({});
+  // Days the approver is approving as a half day (owner request, 2026-10-01).
+  const [dayHalves, setDayHalves] = useState<Record<string, boolean>>({});
 
   function datesInRange(from: string, to: string): string[] {
     const dates: string[] = [];
@@ -224,7 +234,12 @@ export function RequestsScreen() {
     const dates = datesInRange(r.dateFrom, r.dateTo);
     const base = r.type as LeaveDayType;
     setDayTypes(Object.fromEntries(dates.map((d) => [d, base])));
+    setDayHalves({});
     setSplittingId(r.id);
+  }
+
+  function toggleDayHalf(date: string) {
+    setDayHalves((prev) => ({ ...prev, [date]: !prev[date] }));
   }
 
   // Toggling flips a day between the request's own base type (casual/sick)
@@ -241,8 +256,23 @@ export function RequestsScreen() {
     const overrides = Object.entries(dayTypes)
       .filter(([, t]) => t !== r.type)
       .map(([date, type]) => ({ date, type }));
-    await decide(r.id, "approve", overrides.length > 0 ? { day_overrides: overrides } : undefined);
+    const halves = Object.entries(dayHalves)
+      .filter(([, on]) => on)
+      .map(([date]) => date);
+    const body: Record<string, unknown> = {};
+    if (overrides.length > 0) body.day_overrides = overrides;
+    if (halves.length > 0) body.half_day_dates = halves;
+    await decide(r.id, "approve", Object.keys(body).length > 0 ? body : undefined);
     setSplittingId(null);
+  }
+
+  // One click: approve a single-day, full-day leave as only half a day (the other
+  // half the employee is expected to work). Multi-day requests do this per day in
+  // the split panel instead.
+  async function approveAsHalfDay(r: RequestRow) {
+    if (!r.dateFrom) return;
+    if (!confirm("Approve this leave as a half day only? The employee will be expected to work the other half.")) return;
+    await decide(r.id, "approve", { half_day_dates: [r.dateFrom.slice(0, 10)] });
   }
 
   // Admin-only escape hatch (2026-09-06, owner request): normal approval
@@ -274,6 +304,7 @@ export function RequestsScreen() {
     setEditingId(r.id);
     setEditDateFrom(r.dateFrom ? r.dateFrom.slice(0, 10) : "");
     setEditDateTo(r.dateTo ? r.dateTo.slice(0, 10) : "");
+    setEditHalf(!!r.halfDay);
     setEditAmount(r.amount != null ? String(r.amount) : "");
     setEditDescription(r.description ?? "");
     setActionError(null);
@@ -290,7 +321,8 @@ export function RequestsScreen() {
     const body: Record<string, unknown> = { description: editDescription || undefined };
     if (isLeaveRow) {
       body.dateFrom = editDateFrom;
-      body.dateTo = editDateTo;
+      body.dateTo = editHalf ? editDateFrom : editDateTo;
+      body.halfDay = editHalf;
     } else if (r.type === "reimbursement") {
       body.amount = editAmount ? Number(editAmount) : undefined;
     }
@@ -410,12 +442,23 @@ export function RequestsScreen() {
               {isLeave ? (
                 <>
                   <div className="flex flex-col gap-1.5">
-                    <Label>Date from</Label>
+                    <Label>{halfDay ? "Date" : "Date from"}</Label>
                     <DatePicker value={dateFrom} onChange={setDateFrom} required />
                   </div>
-                  <div className="flex flex-col gap-1.5">
-                    <Label>Date to</Label>
-                    <DatePicker value={dateTo} onChange={setDateTo} required />
+                  {!halfDay && (
+                    <div className="flex flex-col gap-1.5">
+                      <Label>Date to</Label>
+                      <DatePicker value={dateTo} onChange={setDateTo} required />
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2 sm:col-span-2">
+                    <Switch id="half-day" checked={halfDay} onCheckedChange={setHalfDay} />
+                    <Label htmlFor="half-day" className="cursor-pointer">
+                      Half day only
+                    </Label>
+                    <span className="text-xs text-muted-foreground">
+                      {halfDay ? "Half of one day — you work the other half." : "Turn on to take just half of a single day."}
+                    </span>
                   </div>
                 </>
               ) : (
@@ -515,6 +558,7 @@ export function RequestsScreen() {
                   <div className="flex flex-col gap-0.5">
                     <div className="flex items-center gap-2">
                       <span className="font-medium">{TYPE_LABELS[r.type] ?? r.type}</span>
+                      {r.halfDay && <Badge variant="outline">Half day</Badge>}
                       <Badge variant={STATUS_VARIANT[r.status] ?? "outline"}>{r.status}</Badge>
                     </div>
                     {r.employee && (
@@ -533,12 +577,20 @@ export function RequestsScreen() {
                     {(isPaidLeaveType(r.type) || r.type === "leave_unpaid") ? (
                       <>
                         <div className="flex flex-col gap-1.5">
-                          <Label className="text-xs">Date from</Label>
+                          <Label className="text-xs">{editHalf ? "Date" : "Date from"}</Label>
                           <DatePicker value={editDateFrom} onChange={setEditDateFrom} />
                         </div>
-                        <div className="flex flex-col gap-1.5">
-                          <Label className="text-xs">Date to</Label>
-                          <DatePicker value={editDateTo} onChange={setEditDateTo} />
+                        {!editHalf && (
+                          <div className="flex flex-col gap-1.5">
+                            <Label className="text-xs">Date to</Label>
+                            <DatePicker value={editDateTo} onChange={setEditDateTo} />
+                          </div>
+                        )}
+                        <div className="flex items-center gap-2 pb-2">
+                          <Switch id={`edit-half-${r.id}`} checked={editHalf} onCheckedChange={setEditHalf} />
+                          <Label htmlFor={`edit-half-${r.id}`} className="cursor-pointer text-xs">
+                            Half day only
+                          </Label>
                         </div>
                       </>
                     ) : r.type === "reimbursement" ? (
@@ -568,7 +620,15 @@ export function RequestsScreen() {
                   <div className="flex flex-wrap gap-x-6 gap-y-1 text-muted-foreground">
                     {r.dateFrom && (
                       <span>
-                        <span className="text-foreground">Dates:</span> {fmtDate(r.dateFrom)} → {fmtDate(r.dateTo)}
+                        {r.halfDay ? (
+                          <>
+                            <span className="text-foreground">Date:</span> {fmtDate(r.dateFrom)} (half day)
+                          </>
+                        ) : (
+                          <>
+                            <span className="text-foreground">Dates:</span> {fmtDate(r.dateFrom)} → {fmtDate(r.dateTo)}
+                          </>
+                        )}
                       </span>
                     )}
                     {r.type === "reimbursement" && (
@@ -595,24 +655,41 @@ export function RequestsScreen() {
                     <p className="text-xs text-muted-foreground">
                       Click a day to toggle it between {dayTypeLabel(r.type).toLowerCase()} and unpaid before
                       approving. Unpaid days are deducted from pay; {dayTypeLabel(r.type).toLowerCase()} days
-                      are not.
+                      are not. Use ½ to approve a day as a half day only — the employee works the other half.
                     </p>
                     <div className="flex flex-wrap gap-1.5">
                       {datesInRange(r.dateFrom, r.dateTo).map((date) => {
                         const dType = (dayTypes[date] ?? r.type) as LeaveDayType;
+                        const isHalf = !!dayHalves[date];
                         return (
-                          <button
-                            type="button"
+                          <span
                             key={date}
-                            onClick={() => toggleDayType(date, r.type as LeaveDayType)}
-                            className={`rounded-md border px-2 py-1 text-xs ${
+                            className={`inline-flex items-stretch overflow-hidden rounded-md border text-xs ${
                               dType !== "leave_unpaid"
                                 ? "border-emerald-600 bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
                                 : "border-amber-600 bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
                             }`}
                           >
-                            {fmtDate(date)} · {dayTypeLabel(dType)}
-                          </button>
+                            <button
+                              type="button"
+                              onClick={() => toggleDayType(date, r.type as LeaveDayType)}
+                              className="px-2 py-1"
+                            >
+                              {fmtDate(date)} · {dayTypeLabel(dType)}
+                              {isHalf ? " · ½ day" : ""}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => toggleDayHalf(date)}
+                              aria-pressed={isHalf}
+                              aria-label={`${isHalf ? "Make" : "Approve"} ${fmtDate(date)} ${isHalf ? "a full day" : "as a half day"}`}
+                              className={`border-l border-black/15 px-1.5 py-1 font-semibold dark:border-white/25 ${
+                                isHalf ? "bg-black/15 dark:bg-white/20" : ""
+                              }`}
+                            >
+                              ½
+                            </button>
+                          </span>
                         );
                       })}
                     </div>
@@ -663,6 +740,21 @@ export function RequestsScreen() {
                             else decide(r.id, "approve");
                           }}
                         />
+                        {/* Approve a single full day as a half day. A request that is
+                            already half a day, or spans several days, has nothing to
+                            halve here (multi-day requests use the ½ per day instead). */}
+                        {(isPaidLeaveType(r.type) || r.type === "leave_unpaid") &&
+                          !r.halfDay &&
+                          r.dateFrom &&
+                          r.dateTo &&
+                          r.dateFrom.slice(0, 10) === r.dateTo.slice(0, 10) && (
+                            <IconActionButton
+                              icon={SquareSplitHorizontal}
+                              variant="ghost"
+                              label="Approve as a half day only"
+                              onClick={() => approveAsHalfDay(r)}
+                            />
+                          )}
                         {isAdmin && isPaidLeaveType(r.type) && (
                           <IconActionButton
                             icon={ShieldCheck}

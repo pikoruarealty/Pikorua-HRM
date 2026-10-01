@@ -2,7 +2,7 @@ import { AttendanceApprovalStatus, EmploymentType, RequestStatus, RequestType } 
 import { prisma } from "@/lib/db/prisma";
 import { addDays, buildMovedOffDateByWeek, isOffDay, resolveDefaultOffDay, weekStartOf } from "@/lib/attendance/week";
 import { dayCredit } from "@/lib/attendance/time";
-import { isPaidLeaveType } from "@/lib/requests/leave-math";
+import { addLeaveToDay, isPaidLeaveType, type LeaveDayEntry } from "@/lib/requests/leave-math";
 import { ATTENDANCE_EXEMPT_ROLES } from "@/lib/attendance/tracking";
 import { resolveWeekOff, type WeekOff } from "@/lib/attendance/weekly-off";
 
@@ -26,22 +26,51 @@ const ALL_LEAVE_TYPES: RequestType[] = [RequestType.leave_casual, RequestType.le
 //    week, the extra days count as compensation days! If they clock in fewer
 //    days in a completed week, the missing days count as absences. Compensation
 //    days add to earnings and naturally offset past absences.
+//
+// Rewritten 2026-10-01 around ONE rule: every day is walked once and carries its
+// own `credit` (what it is worth toward pay, in days); the counts below are tallied
+// from that same walk, so tiles, calendar and pay cannot disagree. What changed:
+//  - Whole-day counts. A part-timer's week over quota used to move a *fraction* of
+//    a day from "present" to "compensation" (1.5), while the calendar could only
+//    relabel whole days — so the tiles read 6 present / 7 compensation over a
+//    calendar of 7 / 6. Present and compensation are paid identically, so the
+//    relabelling is now done on whole worked days and the counts are whole.
+//  - Half-day leave. A leave day is worth 1 or 0.5. It fills only the part of the
+//    day the employee did not work (`1 - worked`), so a half-day of work plus a
+//    half-day leave is one full day — neither lost (the old walk ignored leave on
+//    any day with a record) nor counted twice.
+//  - Today is not final. A day still open (clocked in, not out) or not started yet
+//    is `live` / `today`, never "absent". A device punch auto-approves the day at
+//    once with 0 hours until the session closes, which used to read as absent.
 
 export type MonthlyBreakdown = {
   presentDays: number;
   halfDays: number;
   holidayDays: number;
+  /** Paid leave in days — fractional when half-day leave is involved. */
   paidLeaveDays: number;
+  /** Unpaid leave in days — fractional when half-day leave is involved. */
   unpaidLeaveDays: number;
+  /** Absent in days. Fractional for half a day of leave with the rest unworked, and
+   *  for a part-timer's weekly-quota shortfall. */
   absentDays: number;
   compensationDays: number;
   /** Expected working days considered so far (present+half+holiday+paidLeave+unpaidLeave+absent). */
   workingDaysElapsed: number;
+  /** Days that count toward pay: present + half×0.5 + paid leave + holiday +
+   *  compensation — the exact sum of `days[].credit` and the numerator of
+   *  lib/payroll/calc.ts's earned-pay formula. */
+  payableDays: number;
+  /** Days credited against `workingDaysElapsed` for the performance score:
+   *  present + half×0.5 + holiday + paid leave, with a part-timer's weeks capped at
+   *  their quota (extra days are compensation, not a better attendance score). */
+  creditedWorkingDays: number;
   /** The actual dates behind absentDays — fixed-schedule employees only (see
    *  isFlexible below); a flexible employee's absences are a weekly-aggregate
    *  shortfall with no single date to anchor to, so this stays empty for
    *  them. Added 2026-09-18 so lib/attendance/compensation-credits.ts can
-   *  redeem a credit against a specific absent day, not just a count. */
+   *  redeem a credit against a specific absent day, not just a count. Only whole
+   *  absent days are listed (a half-absent day is not redeemable). */
   absentDates: Date[];
   /** One entry per day that was actually evaluated (joining date..today), in date
    *  order — the same walk that produced the counts above, so a calendar built
@@ -52,7 +81,8 @@ export type MonthlyBreakdown = {
 
 /** What one evaluated day turned out to be. `no_record` is the flexible-schedule
  *  (part-time / intern) "didn't work this day" — their shortfall is a weekly
- *  aggregate, so no single date is an absence. */
+ *  aggregate, so no single date is an absence. `live` and `today` are only ever
+ *  today: still being worked / not started — not counted anywhere yet. */
 export type DayStatus =
   | "present"
   | "half_day"
@@ -62,7 +92,9 @@ export type DayStatus =
   | "unpaid_leave"
   | "holiday"
   | "weekly_off"
-  | "no_record";
+  | "no_record"
+  | "live"
+  | "today";
 
 export type ClassifiedDay = {
   date: string;
@@ -73,6 +105,15 @@ export type ClassifiedDay = {
    *    come, so it can flip back to absent;
    *  - declared_unpaid: the employee switched an automatic weekly off to unpaid. */
   note?: "auto_off" | "provisional_off" | "declared_unpaid";
+  /** What the day is worth toward pay, in days (0, 0.5, 1). */
+  credit: number;
+  /** Leave applied to this day, in days — present only when > 0. A half-day leave
+   *  on a half-day worked is {leavePaid: 0.5}: 0.5 worked + 0.5 leave = a full day. */
+  leavePaid?: number;
+  leaveUnpaid?: number;
+  /** The part of the day counted absent, when it is only part of it (a half-day
+   *  leave and nothing else that day). Absent on a plain `absent` day (= 1). */
+  absentPart?: number;
 };
 
 type DayAttendance = {
@@ -81,11 +122,19 @@ type DayAttendance = {
   isCompensation: boolean;
   /** null while the day is still open (clocked in, not yet out). */
   totalHours: number | null;
+  /** Clocked in with no clock-out yet. Only decides what *today* is (see `live`);
+   *  a past day that was never closed is judged by its hours as before. */
+  isOpen?: boolean;
 };
 
 type MonthLookups = {
   attendanceByDate: Map<string, DayAttendance>;
-  leaveTypeByDate: Map<string, RequestType>;
+  /** Leave per date, in days by kind. Preferred; built from the approved leave rows
+   *  (half-day rows count 0.5) by the loaders below. */
+  leaveByDate?: Map<string, LeaveDayEntry>;
+  /** Legacy shape: a date -> whole-day leave type. Used only when `leaveByDate`
+   *  is not given. */
+  leaveTypeByDate?: Map<string, RequestType>;
   holidayDates: Set<string>;
   /** 0=Sunday..6=Saturday — the employee's effective default off day. */
   defaultOffDay: number;
@@ -138,6 +187,23 @@ function lastElapsedDay(month: number, year: number, now: Date = new Date()): nu
   return new Date(todayUTC).getUTCDate();
 }
 
+/** What a day's work is worth on its own: 1 for a full day, 0.5 for a short one,
+ *  0 for no record or a zero-hour one. */
+function workedCredit(attendance: DayAttendance | undefined): number {
+  return attendance?.hasClockIn ? dayCredit(attendance.totalHours, attendance.isHalfDay) : 0;
+}
+
+/** Leave fills only the part of the day that was not worked: a whole-day leave on
+ *  a day worked half is half a day of leave, and a day worked in full needs none.
+ *  Paid is applied before unpaid. This is what stops a day being counted as more
+ *  than one day however many things touch it. */
+function applyLeave(worked: number, leave: LeaveDayEntry | undefined): { paid: number; unpaid: number } {
+  const room = Math.max(0, 1 - worked);
+  const paid = Math.min(leave?.paid ?? 0, room);
+  const unpaid = Math.min(leave?.unpaid ?? 0, room - paid);
+  return { paid, unpaid };
+}
+
 export function classifyMonth(month: number, year: number, lookups: MonthLookups): MonthlyBreakdown {
   const result: MonthlyBreakdown = {
     presentDays: 0,
@@ -148,6 +214,8 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
     absentDays: 0,
     compensationDays: 0,
     workingDaysElapsed: 0,
+    payableDays: 0,
+    creditedWorkingDays: 0,
     absentDates: [],
     days: [],
   };
@@ -158,6 +226,18 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
   if (through === 0) return result;
   const todayKey = dateKey(new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())));
   const declaredUnpaid = lookups.declaredUnpaidDates ?? new Set<string>();
+
+  const leaveFor = (key: string): LeaveDayEntry | undefined => {
+    const entry = lookups.leaveByDate?.get(key);
+    if (entry) return entry;
+    const legacy = lookups.leaveTypeByDate?.get(key);
+    if (!legacy) return undefined;
+    return isPaidLeaveType(legacy) ? { paid: 1, unpaid: 0 } : { paid: 0, unpaid: 1 };
+  };
+  const hasLeave = (key: string) => {
+    const e = leaveFor(key);
+    return !!e && e.paid + e.unpaid > 0;
+  };
 
   // This week's weekly off, resolved once per week and reused (see
   // lib/attendance/weekly-off.ts for the rule). The lookups carry whole weeks,
@@ -174,7 +254,7 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
     for (let n = 0; n < 7; n++) {
       const k = dateKey(addDays(weekStart, n));
       if (lookups.attendanceByDate.get(k)?.hasClockIn) workedDates.add(k);
-      if (lookups.leaveTypeByDate.has(k)) leaveDates.add(k);
+      if (hasLeave(k)) leaveDates.add(k);
     }
     const resolved = resolveWeekOff({
       weekStart,
@@ -197,6 +277,9 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
     lookups.requiredDaysPerWeek > 0 &&
     lookups.requiredDaysPerWeek < 7;
 
+  const isLiveDay = (key: string, attendance: DayAttendance | undefined) =>
+    key === todayKey && !!attendance?.hasClockIn && !!attendance.isOpen;
+
   if (!isFlexible) {
     // Standard full-time (or fixed schedule) day-by-day classification
     for (let day = 1; day <= through; day++) {
@@ -208,6 +291,7 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
       // worked (an approved record exists) is still attendance.
       if (day < from && !attendance?.hasClockIn) continue;
 
+      const live = isLiveDay(key, attendance);
       const weekOff = weekOffFor(date);
       if (weekOff.date === key) {
         // The week's off (claimed, automatic, or the default day): skipped
@@ -215,15 +299,27 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
         // compensation day. An automatic off is a no-show by construction, so
         // it can never be a comp day.
         if (attendance?.hasClockIn) {
-          result.compensationDays += 1;
-          result.days.push({ date: key, status: "compensation" });
+          if (live) {
+            result.days.push({ date: key, status: "live", credit: 0 });
+          } else {
+            result.compensationDays += 1;
+            result.days.push({ date: key, status: "compensation", credit: 1 });
+          }
         } else {
           result.days.push({
             date: key,
             status: "weekly_off",
+            credit: 0,
             ...(weekOff.kind === "auto" ? { note: weekOff.provisional ? "provisional_off" : "auto_off" } : {}),
           } as ClassifiedDay);
         }
+        continue;
+      }
+
+      // Still being worked today: counted once the session closes, not before.
+      if (live && !lookups.holidayDates.has(key)) {
+        result.workingDaysElapsed += 1;
+        result.days.push({ date: key, status: "live", credit: 0 });
         continue;
       }
 
@@ -231,7 +327,7 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
         // Manually flagged compensation day — same treatment as an
         // off-day comp day: paid, but not counted as a regular working day.
         result.compensationDays += 1;
-        result.days.push({ date: key, status: "compensation" });
+        result.days.push({ date: key, status: "compensation", credit: 1 });
         continue;
       }
 
@@ -239,43 +335,67 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
 
       if (lookups.holidayDates.has(key)) {
         result.holidayDays += 1;
-        result.days.push({ date: key, status: "holiday" });
-      } else if (attendance?.hasClockIn) {
-        // A recorded day of zero hours is not attendance — it lands in the
-        // same bucket as not turning up.
-        const credit = dayCredit(attendance.totalHours, attendance.isHalfDay);
-        if (credit === 1) {
-          result.presentDays += 1;
-          result.days.push({ date: key, status: "present" });
-        } else if (credit === 0.5) {
-          result.halfDays += 1;
-          result.days.push({ date: key, status: "half_day" });
-        } else {
-          result.absentDays += 1;
-          result.absentDates.push(date);
-          result.days.push({ date: key, status: "absent" });
-        }
+        result.days.push({ date: key, status: "holiday", credit: 1 });
+        continue;
+      }
+
+      const worked = workedCredit(attendance);
+      const declared = declaredUnpaid.has(key);
+      // A day the employee switched from an automatic weekly off to unpaid is an
+      // unpaid day like any other — unless real leave already covers it.
+      const leave = leaveFor(key) ?? (declared ? { paid: 0, unpaid: 1 } : undefined);
+      const { paid, unpaid } = applyLeave(worked, leave);
+      // Only a day with nothing worked can be absent; a short day is a half-day,
+      // not "half absent".
+      let absent = worked === 0 ? 1 - paid - unpaid : 0;
+      // Today isn't over: what would be absent is still to be earned.
+      const pendingToday = key === todayKey && absent > 0;
+      if (pendingToday) absent = 0;
+
+      result.paidLeaveDays += paid;
+      result.unpaidLeaveDays += unpaid;
+      result.absentDays += absent;
+      const leaveFields = {
+        ...(paid > 0 ? { leavePaid: paid } : {}),
+        ...(unpaid > 0 ? { leaveUnpaid: unpaid } : {}),
+      };
+
+      if (worked === 1) {
+        result.presentDays += 1;
+        result.days.push({ date: key, status: "present", credit: 1 + paid, ...leaveFields });
+      } else if (worked === 0.5) {
+        result.halfDays += 1;
+        result.days.push({ date: key, status: "half_day", credit: 0.5 + paid, ...leaveFields });
+      } else if (paid > 0) {
+        result.days.push({
+          date: key,
+          status: "paid_leave",
+          credit: paid,
+          ...leaveFields,
+          ...(absent > 0 ? { absentPart: absent } : {}),
+        });
+      } else if (unpaid > 0) {
+        result.days.push({
+          date: key,
+          status: "unpaid_leave",
+          credit: 0,
+          ...leaveFields,
+          ...(absent > 0 ? { absentPart: absent } : {}),
+          ...(declared && !leaveFor(key) ? { note: "declared_unpaid" as const } : {}),
+        });
+      } else if (pendingToday) {
+        result.days.push({ date: key, status: "today", credit: 0 });
       } else {
-        const leaveType = lookups.leaveTypeByDate.get(key);
-        if (leaveType && isPaidLeaveType(leaveType)) {
-          result.paidLeaveDays += 1;
-          result.days.push({ date: key, status: "paid_leave" });
-        } else if (leaveType === RequestType.leave_unpaid) {
-          result.unpaidLeaveDays += 1;
-          result.days.push({ date: key, status: "unpaid_leave" });
-        } else if (declaredUnpaid.has(key)) {
-          // Switched from an automatic weekly off to unpaid by the employee.
-          result.unpaidLeaveDays += 1;
-          result.days.push({ date: key, status: "unpaid_leave", note: "declared_unpaid" });
-        } else {
-          result.absentDays += 1;
-          result.absentDates.push(date);
-          result.days.push({ date: key, status: "absent" });
-        }
+        // Nothing worked and nothing covering it: a whole absent day. (A day that is
+        // only half absent — half-day leave, nothing worked — is counted in
+        // absentDays through its leave branch above and is deliberately not listed
+        // in absentDates: a compensation credit covers whole days.)
+        result.absentDates.push(date);
+        result.days.push({ date: key, status: "absent", credit: 0 });
       }
     }
 
-    return result;
+    return finish(result, isFlexible, 0);
   }
 
   // Flexible schedule (part-time / flexible intern):
@@ -305,6 +425,8 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
     }
   }
 
+  let creditedWorkingDays = 0;
+
   for (const week of weeksMap.values()) {
     if (week.elapsedDays.length === 0) continue;
 
@@ -323,39 +445,48 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
       const key = dateKey(date);
       const attendance = lookups.attendanceByDate.get(key);
 
+      // Still being worked today: counted once the session closes.
+      if (isLiveDay(key, attendance) && !lookups.holidayDates.has(key)) {
+        weekDays.push({ date: key, status: "live", credit: 0 });
+        continue;
+      }
+
       if (attendance?.isCompensation) {
         result.compensationDays += 1;
-        weekDays.push({ date: key, status: "compensation" });
+        weekDays.push({ date: key, status: "compensation", credit: 1 });
         continue;
       }
 
       if (lookups.holidayDates.has(key)) {
         weekHoliday += 1;
-        weekDays.push({ date: key, status: "holiday" });
-      } else if (attendance?.hasClockIn) {
-        const credit = dayCredit(attendance.totalHours, attendance.isHalfDay);
-        if (credit === 1) {
-          weekPresent += 1;
-          weekDays.push({ date: key, status: "present" });
-        } else if (credit === 0.5) {
-          weekHalf += 1;
-          weekDays.push({ date: key, status: "half_day" });
-        } else {
-          // credit 0: nothing worked, so it counts toward neither — the week's
-          // quota shortfall picks it up as an absence below.
-          weekDays.push({ date: key, status: "no_record" });
-        }
+        weekDays.push({ date: key, status: "holiday", credit: 1 });
+        continue;
+      }
+
+      const worked = workedCredit(attendance);
+      const { paid, unpaid } = applyLeave(worked, leaveFor(key));
+      weekPaidLeave += paid;
+      weekUnpaidLeave += unpaid;
+      const leaveFields = {
+        ...(paid > 0 ? { leavePaid: paid } : {}),
+        ...(unpaid > 0 ? { leaveUnpaid: unpaid } : {}),
+      };
+
+      if (worked === 1) {
+        weekPresent += 1;
+        weekDays.push({ date: key, status: "present", credit: 1 + paid, ...leaveFields });
+      } else if (worked === 0.5) {
+        weekHalf += 1;
+        weekDays.push({ date: key, status: "half_day", credit: 0.5 + paid, ...leaveFields });
+      } else if (paid > 0) {
+        weekDays.push({ date: key, status: "paid_leave", credit: paid, ...leaveFields });
+      } else if (unpaid > 0) {
+        weekDays.push({ date: key, status: "unpaid_leave", credit: 0, ...leaveFields });
       } else {
-        const leaveType = lookups.leaveTypeByDate.get(key);
-        if (leaveType && isPaidLeaveType(leaveType)) {
-          weekPaidLeave += 1;
-          weekDays.push({ date: key, status: "paid_leave" });
-        } else if (leaveType === RequestType.leave_unpaid) {
-          weekUnpaidLeave += 1;
-          weekDays.push({ date: key, status: "unpaid_leave" });
-        } else {
-          weekDays.push({ date: key, status: "no_record" });
-        }
+        // Nothing worked, nothing covering it: a day that counts toward neither —
+        // the week's quota shortfall picks it up below. (A zero-hour record lands
+        // here too.)
+        weekDays.push({ date: key, status: key === todayKey ? "today" : "no_record", credit: 0 });
       }
     }
 
@@ -365,15 +496,26 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
     result.paidLeaveDays += weekPaidLeave;
     result.unpaidLeaveDays += weekUnpaidLeave;
     result.holidayDays += weekHoliday;
+    creditedWorkingDays += Math.min(creditedDays, targetForChunk);
+
+    // Shortfall days that an unpaid leave already explains are not also absences:
+    // counting both showed one missed day twice (absent *and* unpaid leave). Pay is
+    // unaffected — neither is paid.
+    const absentShortfall = (shortfall: number) => shortfall - Math.min(shortfall, weekUnpaidLeave);
 
     if (creditedDays > targetForChunk) {
+      // Over quota. Present and compensation are paid identically, so whole worked
+      // days beyond the quota are relabelled compensation — the latest ones, as the
+      // overflow has no single "extra" day. A half-day of overflow stays what it
+      // was (a half-day); relabelling is capped at the full days there are, so
+      // leave or half-days alone can never conjure a compensation day (that used to
+      // double-count them). Present + compensation always equals the full days
+      // worked, so nothing is added or lost.
       const extra = creditedDays - targetForChunk;
-      result.compensationDays += extra;
-      result.presentDays += Math.max(0, weekPresent - extra);
+      let toRelabel = Math.min(Math.floor(extra), weekPresent);
+      result.compensationDays += toRelabel;
+      result.presentDays += weekPresent - toRelabel;
       result.workingDaysElapsed += targetForChunk;
-      // The week's overflow has no single "extra" day, so the calendar shows the
-      // latest worked days of the week as the compensation ones.
-      let toRelabel = Math.floor(extra);
       for (let i = weekDays.length - 1; i >= 0 && toRelabel > 0; i--) {
         if (weekDays[i]!.status === "present") {
           weekDays[i]!.status = "compensation";
@@ -388,10 +530,13 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
 
       if (isWeekPast) {
         const missing = Math.max(0, targetForChunk - creditedDays);
-        result.absentDays += missing;
+        result.absentDays += absentShortfall(missing);
         result.workingDaysElapsed += targetForChunk;
       } else {
-        let daysLeftInWeek = 0;
+        // The week is still running: only count a shortfall that can no longer be
+        // made up. Today still can be, if it hasn't been worked yet.
+        const todayOpen = weekDays.some((d) => d.date === todayKey && (d.status === "live" || d.status === "today"));
+        let daysLeftInWeek = todayOpen ? 1 : 0;
         for (let i = 0; i < 7; i++) {
           const d = addDays(week.weekStart, i);
           if (d.getTime() > todayUTC) daysLeftInWeek += 1;
@@ -399,7 +544,7 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
         const maxPossible = creditedDays + daysLeftInWeek;
         if (maxPossible < targetForChunk) {
           const unavoidableAbsent = targetForChunk - maxPossible;
-          result.absentDays += unavoidableAbsent;
+          result.absentDays += absentShortfall(unavoidableAbsent);
           result.workingDaysElapsed += creditedDays + unavoidableAbsent;
         } else {
           result.workingDaysElapsed += creditedDays;
@@ -411,6 +556,16 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
   }
 
   result.days.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  return finish(result, isFlexible, creditedWorkingDays);
+}
+
+/** Derives the two totals that are defined from the finished walk — and nothing
+ *  else, so they cannot drift from the days they summarise. */
+function finish(result: MonthlyBreakdown, isFlexible: boolean, flexibleCredited: number): MonthlyBreakdown {
+  result.payableDays = result.days.reduce((sum, d) => sum + d.credit, 0);
+  result.creditedWorkingDays = isFlexible
+    ? flexibleCredited
+    : result.presentDays + result.halfDays * 0.5 + result.holidayDays + result.paidLeaveDays;
   return result;
 }
 
@@ -439,6 +594,22 @@ function expandLeaveIntoRange(
   for (let t = start.getTime(); t <= end.getTime(); t += MS_PER_DAY) {
     onDate(dateKey(new Date(t)), type);
   }
+}
+
+/** Folds approved leave rows into per-date leave entries (half-day rows count 0.5;
+ *  several rows on one date add up, capped at one whole day). */
+function buildLeaveByDate(
+  leaves: { dateFrom: Date | null; dateTo: Date | null; type: RequestType; halfDay: boolean }[],
+  span: { start: Date; endExclusive: Date },
+): Map<string, LeaveDayEntry> {
+  const map = new Map<string, LeaveDayEntry>();
+  for (const l of leaves) {
+    if (!l.dateFrom || !l.dateTo) continue;
+    expandLeaveIntoRange(l.dateFrom, l.dateTo, l.type, span.start, span.endExclusive, (key, type) => {
+      addLeaveToDay(map, key, type, l.halfDay);
+    });
+  }
+  return map;
 }
 
 /**
@@ -522,6 +693,31 @@ export async function getOffDayContext(
   };
 }
 
+/** One approved attendance row -> what the walk needs to know about its day. */
+function toDayAttendance(r: {
+  clockInApproved: Date | null;
+  clockInRaw: Date | null;
+  clockOutApproved: Date | null;
+  clockOutRaw: Date | null;
+  isHalfDay: boolean;
+  isCompensation: boolean;
+  totalHours: unknown;
+}): DayAttendance {
+  const hasClockIn = !!(r.clockInApproved ?? r.clockInRaw);
+  return {
+    // A device-synced day is never hand-approved (clockInApproved stays
+    // null forever — see lib/integrations/teamoffice/reconcile.ts), so it was
+    // silently landing in "absent" here even though approvalStatus is
+    // already `approved`. Fall back to clockInRaw, same as
+    // attendance/overview's live dashboard read already does.
+    hasClockIn,
+    isHalfDay: r.isHalfDay,
+    isCompensation: r.isCompensation,
+    totalHours: r.totalHours === null ? null : Number(r.totalHours),
+    isOpen: hasClockIn && !(r.clockOutApproved ?? r.clockOutRaw),
+  };
+}
+
 export async function getMonthlyAttendanceBreakdown(
   employeeId: string,
   month: number,
@@ -542,6 +738,8 @@ export async function getMonthlyAttendanceBreakdown(
         date: true,
         clockInApproved: true,
         clockInRaw: true,
+        clockOutApproved: true,
+        clockOutRaw: true,
         isHalfDay: true,
         isCompensation: true,
         totalHours: true,
@@ -555,7 +753,7 @@ export async function getMonthlyAttendanceBreakdown(
         dateFrom: { lt: span.endExclusive },
         dateTo: { gte: span.start },
       },
-      select: { dateFrom: true, dateTo: true, type: true },
+      select: { dateFrom: true, dateTo: true, type: true, halfDay: true },
     }),
     prisma.holiday.findMany({
       where: { date: { gte: span.start, lt: span.endExclusive } },
@@ -569,34 +767,14 @@ export async function getMonthlyAttendanceBreakdown(
   ]);
 
   const attendanceByDate = new Map<string, DayAttendance>();
-  for (const r of records) {
-    attendanceByDate.set(dateKey(r.date), {
-      // A device-synced day is never hand-approved (clockInApproved stays
-      // null forever — see lib/integrations/teamoffice/reconcile.ts), so it
-      // was silently landing in "absent" here even though approvalStatus is
-      // already `approved`. Fall back to clockInRaw, same as
-      // attendance/overview's live dashboard read already does.
-      hasClockIn: !!(r.clockInApproved ?? r.clockInRaw),
-      isHalfDay: r.isHalfDay,
-      isCompensation: r.isCompensation,
-      totalHours: r.totalHours === null ? null : Number(r.totalHours),
-    });
-  }
-
-  const leaveTypeByDate = new Map<string, RequestType>();
-  for (const l of leaves) {
-    if (!l.dateFrom || !l.dateTo) continue;
-    expandLeaveIntoRange(l.dateFrom, l.dateTo, l.type, span.start, span.endExclusive, (key, type) => {
-      leaveTypeByDate.set(key, type);
-    });
-  }
+  for (const r of records) attendanceByDate.set(dateKey(r.date), toDayAttendance(r));
 
   const holidayDates = new Set(holidays.map((h) => dateKey(h.date)));
   const declaredUnpaidDates = new Set(declared.map((d) => dateKey(d.date)));
 
   return classifyMonth(month, year, {
     attendanceByDate,
-    leaveTypeByDate,
+    leaveByDate: buildLeaveByDate(leaves, span),
     holidayDates,
     declaredUnpaidDates,
     ...offDayContext,
@@ -650,6 +828,8 @@ export async function getMonthlyAttendanceBreakdownForAllEmployees(
         date: true,
         clockInApproved: true,
         clockInRaw: true,
+        clockOutApproved: true,
+        clockOutRaw: true,
         isHalfDay: true,
         isCompensation: true,
         totalHours: true,
@@ -662,7 +842,7 @@ export async function getMonthlyAttendanceBreakdownForAllEmployees(
         dateFrom: { lt: span.endExclusive },
         dateTo: { gte: span.start },
       },
-      select: { employeeId: true, dateFrom: true, dateTo: true, type: true },
+      select: { employeeId: true, dateFrom: true, dateTo: true, type: true, halfDay: true },
     }),
     prisma.holiday.findMany({
       where: { date: { gte: span.start, lt: span.endExclusive } },
@@ -703,33 +883,20 @@ export async function getMonthlyAttendanceBreakdownForAllEmployees(
       m = new Map();
       attendanceByEmployee.set(r.employeeId, m);
     }
-    m.set(dateKey(r.date), {
-      // See the single-employee query above: device-synced days never set
-      // clockInApproved, so this must fall back to clockInRaw too.
-      hasClockIn: !!(r.clockInApproved ?? r.clockInRaw),
-      isHalfDay: r.isHalfDay,
-      isCompensation: r.isCompensation,
-      totalHours: r.totalHours === null ? null : Number(r.totalHours),
-    });
+    m.set(dateKey(r.date), toDayAttendance(r));
   }
 
-  const leaveByEmployee = new Map<string, Map<string, RequestType>>();
+  const leavesByEmployee = new Map<string, typeof leaves>();
   for (const l of leaves) {
-    if (!l.dateFrom || !l.dateTo) continue;
-    let m = leaveByEmployee.get(l.employeeId);
-    if (!m) {
-      m = new Map();
-      leaveByEmployee.set(l.employeeId, m);
-    }
-    expandLeaveIntoRange(l.dateFrom, l.dateTo, l.type, span.start, span.endExclusive, (key, type) => {
-      m!.set(key, type);
-    });
+    const list = leavesByEmployee.get(l.employeeId);
+    if (list) list.push(l);
+    else leavesByEmployee.set(l.employeeId, [l]);
   }
 
   return employees.map((e) => {
     const breakdown = classifyMonth(month, year, {
       attendanceByDate: attendanceByEmployee.get(e.id) ?? new Map(),
-      leaveTypeByDate: leaveByEmployee.get(e.id) ?? new Map(),
+      leaveByDate: buildLeaveByDate(leavesByEmployee.get(e.id) ?? [], span),
       holidayDates,
       defaultOffDay: resolveDefaultOffDay(e.defaultWeeklyOffDay, e.team?.defaultWeeklyOffDay),
       movedOffDateByWeek: buildMovedOffDateByWeek(movesByEmployee.get(e.id) ?? []),
