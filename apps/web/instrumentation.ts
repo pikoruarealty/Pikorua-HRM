@@ -11,7 +11,11 @@ export async function register() {
     const { refreshRoleRegistry } = await import("@/lib/rbac");
     await refreshRoleRegistry();
 
-    const { startScheduler } = await import("@/lib/cron/scheduler");
-    startScheduler();
+    // Blue/green containers overlap briefly. The VPS uses one host cron caller
+    // for both slots, so neither container may schedule jobs independently.
+    if (process.env.SCHEDULER_ENABLED !== "false") {
+      const { startScheduler } = await import("@/lib/cron/scheduler");
+      startScheduler();
+    }
   }
 }

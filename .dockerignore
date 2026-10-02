@@ -1,0 +1,14 @@
+.git
+.github
+node_modules
+**/node_modules
+**/.next
+**/.env
+.env
+.env.*
+apps/web/uploads
+*.log
+*.tsbuildinfo
+docs
+progress.md
+teamoffice_API_documentation.pdf

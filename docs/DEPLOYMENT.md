@@ -1,255 +1,82 @@
-# Pikorua HRM — GCP VM Deployment Guide
+# Production deployment: GCP to Hostinger VPS
 
-> Companion to [README.md](../README.md) (local dev) and [API_SPEC.md](API_SPEC.md).
-> Target: a single GCP Compute Engine VM running Postgres + the Next.js app behind nginx,
-> matching the assumptions already baked into the codebase — see the callouts below.
+The current GCP VM is the source of truth until the one-time data migration and DNS cutover finish. Its former installation guide is preserved in [DEPLOYMENT_GCP_LEGACY.md](DEPLOYMENT_GCP_LEGACY.md). This guide describes the target: one Hostinger Ubuntu VPS, host PostgreSQL 16, host nginx and cron, and one Dockerized Next.js app. GitHub Actions builds and tests the image; the VPS only loads and runs it.
 
-**Read this first — two load-bearing assumptions in the code:**
-1. **Single running server instance.** The in-process cron scheduler (`apps/web/instrumentation.ts`) and the login rate limiter (`lib/security/rate-limit.ts`) both hold state in memory. This guide deploys exactly one app process. If you ever horizontally scale, see the "Scaling beyond one instance" note at the end — don't just add a second VM/process without reading it.
-2. **Local disk file storage.** Employee documents and profile photos live under `apps/web/uploads/` on the VM's disk (`lib/storage/local.ts`), not S3. Back this directory up (step 9).
+## Why this layout
 
----
+- App slots use ports 3001 (blue) and 3002 (green), bound to host loopback. Nginx reads `/opt/pikorua-hrm/proxy.conf`; the deploy script changes that file and reloads nginx only after the candidate passes `/api/health`. It retains the old container until a check through nginx passes. A failed candidate is removed and traffic stays on, or returns to, the old slot.
+- Both containers set `SCHEDULER_ENABLED=false`. Host cron calls the `CRON_SECRET` routes against **only the active port**. This avoids duplicate TeamOffice, CRM, attendance, reminder and rollover jobs while slots overlap. The login rate limiter remains in memory; its short window resets on a deployment.
+- PostgreSQL is installed on the host, not in another Docker image. The upload directory is a persistent bind mount shared across slots. The image contains code, dependencies and Prisma migrations, but no production secrets or user data.
+- `deploy/hostinger-preflight.sh` removes an unused candidate image before the next transfer. The successful deploy removes the old container and image. Thus the VPS keeps at most the active and candidate **application** images during a deployment, then one. Docker's base layers are shared. The database and uploads are separate persistent storage.
 
-## 1. Provision the VM
+## 1. Prepare Hostinger before any cutover
 
-- **Machine**: e2-small or e2-medium is plenty for an internal HR tool (2 vCPU / 4GB RAM comfortably runs Postgres + Next.js for a small company).
-- **OS**: Ubuntu 22.04 LTS.
-- **Firewall**: allow inbound `80` and `443` (HTTP/HTTPS) from `0.0.0.0/0`, and `22` (SSH) restricted to your IP or via GCP's IAP tunnel. Do **not** expose `5432` (Postgres) or the app's raw port (`3000`) externally — everything public goes through nginx.
-- **Static IP**: reserve an external static IP (GCP Console → VPC network → IP addresses) so DNS doesn't break on VM restart.
-- **DNS**: point your domain (e.g. `hrm.pikorua.com`) at that static IP (an `A` record) before step 7 — certbot needs it resolvable.
+Use an Ubuntu VPS with enough free disk for two ~362 MB app images, PostgreSQL, uploads and backups. Install Docker Engine, PostgreSQL 16, nginx, cron and certbot. Set DNS TTL low on the existing HRM record in advance. Open 80/443 and a restricted SSH port; block 3001, 3002 and 5432 externally. Keep the current GCP deployment running until the data copy and validation.
 
-SSH in for everything below:
-```bash
-gcloud compute ssh <instance-name> --zone <zone>
+Create a deploy user named `pikorua` with Docker access and limited passwordless sudo for `nginx -t` and `systemctl reload nginx`. Docker group membership grants root-equivalent host access, so protect this account and its SSH key. Create `/opt/pikorua-hrm`, owned by that user, with `/opt/pikorua-hrm/uploads` owned by UID 1000 (the image's `bun` user), mode 750. Keep `/opt/pikorua-hrm/app.env` mode 600. Use ordinary unquoted `KEY=value` lines because Docker `--env-file` reads them literally; do not copy `.env.example` with quoted values directly. Include at least:
+
+```text
+DATABASE_URL=postgresql://pikorua:...@127.0.0.1:5432/pikorua_hrm?schema=public
+AUTH_SECRET=...
+CRON_SECRET=...
+APP_BASE_URL=https://hrm.pikorua.com
+GROQ_API_KEY=...
+GROQ_MODEL=...
+CRM_API_BASE_URL=...
+CRM_API_KEY=...
+BREVO_API_KEY=...
+FIREBASE_ADMIN_PROJECT_ID=...
+FIREBASE_ADMIN_CLIENT_EMAIL=...
+FIREBASE_ADMIN_PRIVATE_KEY=...
+TEAM_OFFICE_CORPORATE_ID=...
+TEAM_OFFICE_USERNAME=...
+TEAM_OFFICE_PASSWORD=...
 ```
 
----
+Copy all other used production variables from GCP, particularly CRM credentials and email settings. Preserve the **same** `AUTH_SECRET` through the move so existing sessions can validate. Rotate credentials only as a separate planned step. Put public `NEXT_PUBLIC_*` values in GitHub Actions repository **variables**, since Next embeds these at image build time. A changed public value needs a new image. The server-only values stay solely in `app.env` on the VPS.
 
-## 2. Install system dependencies
+Create the `pikorua_hrm` database and `pikorua` role on host PostgreSQL 16. PostgreSQL can listen on localhost because containers use `--network host`; require password auth for that role. Do not seed this production database. The image migration command uses the same `DATABASE_URL` and `prisma migrate deploy` as CI.
 
-```bash
-sudo apt-get update && sudo apt-get upgrade -y
+Install `deploy/hostinger-nginx.conf` as the nginx site (edit `server_name` if the real HRM domain differs) and set `/opt/pikorua-hrm/proxy.conf` initially to `proxy_pass http://127.0.0.1:3001;`. Run `nginx -t`. The site will return 502 until the first app deploy. Obtain a Let's Encrypt certificate after DNS points to the VPS; use certbot's nginx integration and verify renewal. Nginx must overwrite `X-Forwarded-For` as this config does, because audit and login throttling use it.
 
-# Node.js 20 (engines requires >=18.18.0; use 20 LTS)
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt-get install -y nodejs
+Install `deploy/hostinger.cron` at `/etc/cron.d/pikorua-hrm` (root owned, mode 644); ensure the `pikorua` user has `/opt/pikorua-hrm/hostinger-cron.sh` executable. Cron uses UTC for daily jobs, matching the former in-process scheduler, and checks Asia/Kolkata hours for TeamOffice. **Install cron only once the first container is active.**
 
-# Bun (this repo's package manager/runner — see root package.json scripts)
-curl -fsSL https://bun.sh/install | bash
-echo 'export PATH="$HOME/.bun/bin:$PATH"' >> ~/.bashrc
-source ~/.bashrc
-bun --version   # sanity check
+## 2. Configure GitHub Actions
 
-# Postgres 16
-sudo apt-get install -y postgresql postgresql-contrib
+The existing CI workflow still runs migrations, seed, typecheck, lint, tests and a Next production build on GitHub. After a successful **push to main**, `deploy.yml` checks out that exact commit, builds the final image, applies migrations from the image to a temporary PostgreSQL service, starts the image and checks `/api/health`. It then copies only the deployment scripts and `docker save` stream over SSH. No checkout, package install, Docker build or test runs on the VPS.
 
-# nginx (reverse proxy + TLS termination)
-sudo apt-get install -y nginx
+The repository variable `DEPLOY_TARGET` selects exactly one path after successful main CI: `gcp` invokes the existing VM deploy script with the existing `DEPLOY_*` secrets; `hostinger` builds/tests/transfers the Docker image. An unset or different value deploys nowhere. Keep `DEPLOY_TARGET=gcp` while the GCP VM is live; change it to `hostinger` only after the VPS is prepared and production data is restored.
 
-# git, build tools
-sudo apt-get install -y git build-essential
+For Hostinger, set GitHub Actions secrets `DEPLOY_HOST` (VPS address), `DEPLOY_USER` (`pikorua`), `DEPLOY_SSH_KEY` (dedicated key), and `DEPLOY_SSH_KNOWN_HOSTS` (the VPS public SSH host key line, verified out of band). Set `NEXT_PUBLIC_APP_NAME` and Firebase `NEXT_PUBLIC_*` repository variables if those features are enabled. The deploy account must own `/opt/pikorua-hrm` and have the sudo permissions above. The workflow intentionally does not deploy a PR or an unrelated repository's run.
 
-# PM2 (process manager — keeps the app running, restarts on crash/reboot)
-sudo npm install -g pm2
-```
+## 3. One-time production data move
 
----
-
-## 3. Set up Postgres
+Schedule a maintenance window. First take a fresh **off-VM** backup of GCP PostgreSQL and `apps/web/uploads`, and verify the archive can be listed/read. Stop writes on GCP (`sudo systemctl stop hrm`, after confirming the service name), then make a final PostgreSQL custom-format dump and copy the upload tree. The current GCP deploy script uses `/home/pruthvirajsinh_biz/pikorua-hrm`; verify the real `WorkingDirectory` in `systemctl cat hrm` before copying. One workable sequence, run on GCP then transferring the two files over authenticated SSH, is:
 
 ```bash
-sudo -u postgres psql
-```
-```sql
-CREATE DATABASE pikorua_hrm;
-CREATE USER pikorua WITH ENCRYPTED PASSWORD 'a-real-generated-password';
-GRANT ALL PRIVILEGES ON DATABASE pikorua_hrm TO pikorua;
-\q
+sudo -u postgres pg_dump -Fc -d pikorua_hrm > /tmp/pikorua-final.dump
+tar -C /home/pruthvirajsinh_biz/pikorua-hrm/apps/web -czf /tmp/pikorua-uploads.tar.gz uploads
+sha256sum /tmp/pikorua-final.dump /tmp/pikorua-uploads.tar.gz
 ```
 
-Generate the password with `openssl rand -base64 24` — don't hand-type something guessable.
-
-By default Postgres only listens on `localhost`, which is correct here (the app and DB run on the same VM). Leave `pg_hba.conf`/`postgresql.conf` at their defaults unless you have a specific reason to change them.
-
----
-
-## 4. Clone the repo and install dependencies
+On Hostinger, compare the hashes and restore into an **empty** database before the first image deployment:
 
 ```bash
-sudo mkdir -p /opt/pikorua-hrm
-sudo chown $USER:$USER /opt/pikorua-hrm
-git clone https://github.com/<your-org>/<your-repo>.git /opt/pikorua-hrm
-cd /opt/pikorua-hrm
-
-bun install   # runs the root postinstall (`prisma generate`) automatically
+sudo -u postgres pg_restore --no-owner --no-acl --role=pikorua -d pikorua_hrm < /tmp/pikorua-final.dump
+tar -C /opt/pikorua-hrm -xzf /tmp/pikorua-uploads.tar.gz
+sudo chown -R 1000:1000 /opt/pikorua-hrm/uploads
 ```
 
----
+If writes resume on GCP after the final dump, repeat the final copy; otherwise the two sites will diverge. Do not pass these archives through GitHub Actions or the Docker image.
 
-## 5. Configure environment variables
+Verify row counts for users, employees, work items, attendance records, point ledger and audit logs against GCP; compare upload file counts and representative hashes. Keep the source backup until the move is accepted. Run the first image deployment, which applies only pending committed Prisma migrations and checks the new app. Test login, attendance, task logging, payslip/PDF, document/photo reads, TeamOffice and CRM sync, cron, and a fresh backup on Hostinger before changing DNS. The CRM currently allowlists the GCP VM IP, so add the Hostinger outbound IP before testing CRM sync. Test through a temporary hosts-file entry or the VPS IP with the correct Host header. Then point DNS to Hostinger, issue/verify TLS, monitor errors and keep the old GCP app stopped to avoid diverging writes. Retain GCP data until its backups and the new site have been verified.
 
-```bash
-cp .env.example .env
-nano .env   # or vim/your editor of choice
-```
+The first data move needs a write freeze because this project has one writable PostgreSQL database and local uploads, with no replication or dual-write path. Subsequent blue-green **app** releases do not need that freeze. Prisma migrations in app releases must be backward compatible with the old app during the overlap; destructive migrations need a separate staged release.
 
-Fill in **at minimum**:
+## 4. Routine release and rollback
 
-| Variable | Value |
-|---|---|
-| `DATABASE_URL` | `postgresql://pikorua:<password>@localhost:5432/pikorua_hrm?schema=public` |
-| `AUTH_SECRET` | `openssl rand -base64 48` — long random string, **not** a placeholder. The server **refuses to boot in production** if this is missing, short, or contains a word like "change-me"/"example" (`lib/env.ts`) — this is intentional, don't try to bypass it. |
-| `AUTH_SESSION_MAX_AGE` | `604800` (7 days) is a reasonable default |
-| `CRON_SECRET` | `openssl rand -base64 32` — only matters if you later disable the in-process scheduler and call `/api/v1/cron/*` externally (see the "Scaling" note); still set it to something non-placeholder to silence the boot warning |
-| `NEXT_PUBLIC_APP_NAME` | `"Pikorua HRM"` or your preferred display name |
+On every successful main CI run, GitHub builds/tests/transfers the new image. `hostinger-deploy.sh` migrates, starts the inactive slot, waits for a healthy DB response, switches nginx, checks the response through nginx, then removes the old slot and image. A failed candidate leaves the old slot serving. The active image tag is the exact 40-character commit SHA in `/opt/pikorua-hrm/active-slot` and `docker inspect`; `docker ps --filter name=pikorua-` shows the current slot.
 
-**Optional** (leave blank to disable the feature — nothing else breaks):
-- `GROQ_API_KEY` / `GROQ_MODEL` — AI task-generation feature. Get a key at console.groq.com.
-- `NEXT_PUBLIC_FIREBASE_*`, `FIREBASE_ADMIN_*` — push notifications. See [README.md § Push notifications](../README.md) for the Firebase Console setup steps; all values are safe as `NEXT_PUBLIC_*` client config plus a service-account key for the `FIREBASE_ADMIN_*` ones. Missing values just mean push silently stays off — in-app notifications keep working regardless.
-- `S3_*` — **unused**, left over from an earlier design (file storage was switched to local disk, see `lib/storage/local.ts`). Ignore these.
+For an application rollback after a successful deploy, re-run the workflow for the desired known-good commit or transfer its image and call `hostinger-deploy.sh` with its immutable tag. The VPS deliberately does not retain a third old image; GitHub or an external image archive must supply it. **Database schema changes are not reversed automatically.** Restore a DB backup only for a separately planned data rollback.
 
-Lock down the file:
-```bash
-chmod 600 .env
-```
-
----
-
-## 6. Run migrations, seed, and build
-
-```bash
-export PATH="$HOME/.bun/bin:$PATH"
-cd /opt/pikorua-hrm
-
-bun run prisma:deploy     # applies all committed migrations (prisma migrate deploy — safe for prod, no schema drift prompts)
-bun run db:seed           # OPTIONAL — only if you want the seeded demo accounts (admin@pikorua.test etc., password "Password123!"). Skip this for a real company deployment and create real accounts by hand once the app is up (see step 10), or write a one-off script.
-bun run build              # full production build (apps/web/.next)
-```
-
-If you skip seeding, you'll need at least one Admin account to log in and create everyone else — see step 10.
-
----
-
-## 7. Configure nginx + HTTPS (Let's Encrypt)
-
-Create `/etc/nginx/sites-available/pikorua-hrm`:
-```nginx
-server {
-    listen 80;
-    server_name hrm.pikorua.com;
-
-    location / {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_cache_bypass $http_upgrade;
-    }
-}
-```
-
-`X-Forwarded-For` matters here specifically: `lib/audit/index.ts`'s `clientIp()` and the login rate limiter both trust the first hop of this header for the real client IP — this is safe *only* because nginx is the sole entry point and sets it itself, overwriting anything a client tries to spoof.
-
-```bash
-sudo ln -s /etc/nginx/sites-available/pikorua-hrm /etc/nginx/sites-enabled/
-sudo rm -f /etc/nginx/sites-enabled/default   # remove the default nginx welcome page
-sudo nginx -t   # test config
-sudo systemctl reload nginx
-```
-
-Now get a real certificate:
-```bash
-sudo apt-get install -y certbot python3-certbot-nginx
-sudo certbot --nginx -d hrm.pikorua.com
-```
-
-Certbot rewrites the nginx config to add the `443` server block and redirect `80 → 443` automatically, and installs a systemd timer for auto-renewal. Confirm the timer exists:
-```bash
-systemctl list-timers | grep certbot
-```
-
-This is also the fix for the LAN self-signed-cert service-worker issue we hit earlier during push notification testing — a real Let's Encrypt cert is trusted by every browser out of the box, so push notifications will register cleanly here with no workarounds needed.
-
----
-
-## 8. Run the app with PM2
-
-```bash
-cd /opt/pikorua-hrm/apps/web
-pm2 start "bun run start" --name pikorua-hrm --cwd /opt/pikorua-hrm/apps/web
-pm2 save
-pm2 startup   # prints a command — copy/paste and run it to enable boot-time startup
-```
-
-`bun run start` runs `next start`, which serves the build from step 6 and boots `instrumentation.ts` — the in-process cron scheduler starts automatically, no separate cron setup needed (see the assumption at the top of this doc).
-
-Useful PM2 commands:
-```bash
-pm2 logs pikorua-hrm       # tail logs — this is where the verbose [http]/[api]/[audit]/[fcm]/[cron] lines from lib/log land
-pm2 restart pikorua-hrm    # after a deploy
-pm2 status
-```
-
----
-
-## 9. Verify it's live
-
-```bash
-curl https://hrm.pikorua.com/api/health
-# {"status":"ok","db":"up"}
-```
-
-Then in a browser: log in, confirm the dashboard loads, and check `pm2 logs` shows the `[cron] in-process scheduler started` line and no `[env] warning` about placeholder secrets.
-
-**Back up regularly, both of these — losing either loses real data:**
-- **Database**: `pg_dump pikorua_hrm | gzip > backup-$(date +%F).sql.gz`, cron this nightly to off-VM storage (GCS bucket, etc.). This is flagged as a known follow-up in `progress.md` — automate it, don't rely on remembering.
-- **Uploads directory**: `/opt/pikorua-hrm/apps/web/uploads/` — employee documents and profile photos live here on local disk, not in the database or any cloud bucket. Include it in the same backup job.
-
----
-
-## 10. First login / creating real accounts
-
-If you skipped seeding (recommended for a real deployment), the `users` table is empty — you can't log in yet. Two ways to get a first Admin account:
-
-**Option A — reuse the seed script's account, once, then delete the rest:**
-```bash
-bun run db:seed
-```
-Log in as `admin@pikorua.test` / `Password123!`, immediately change the password (Account Security → Change password), then either delete the other seeded demo employees from the UI or leave them if you want reference data — your call.
-
-**Option B — insert one Admin row directly**, then create everyone else through the app's own "New employee" flow (Admin/HR only, requires a profile photo — see `docs/API_SPEC.md` §2):
-```bash
-cd /opt/pikorua-hrm
-bunx prisma studio   # opens a local GUI on a random port — tunnel it or run this on your own machine against DATABASE_URL temporarily
-```
-Manually insert a `users` row with a bcrypt hash of your chosen password (`bcryptjs`, cost 10, matching `lib/auth/password.ts`) and `role = admin`. This is fiddlier than Option A but avoids any seeded demo data ever touching production.
-
----
-
-## 11. Deploying updates
-
-```bash
-cd /opt/pikorua-hrm
-git pull
-bun install
-bun run prisma:deploy   # applies any new migrations — safe, no-ops if there are none
-bun run build
-pm2 restart pikorua-hrm
-```
-
-Consider wiring this into the existing GitHub Actions CI (`.github/workflows/ci.yml`, which already runs migrate+seed+typecheck+lint+test+build on every push) as a deploy step later — e.g. an SSH action that runs the block above after CI passes on `main`. Not set up yet; this doc covers the manual path.
-
----
-
-## Scaling beyond one instance
-
-Don't do this without changing code first. Two in-memory assumptions break silently if you run more than one app process (a second VM, a second PM2 instance, a load balancer with >1 backend):
-
-1. **Cron scheduler** (`instrumentation.ts` → `lib/cron/scheduler.ts`) — every instance would independently fire recognition snapshots, birthday checks, and meeting reminders, producing duplicate notifications. Fix: disable the in-process scheduler and instead hit the `CRON_SECRET`-gated routes from **one** external crontab (`POST /api/v1/cron/{recognition-snapshot,birthday-check,meeting-reminders}` with `Authorization: Bearer $CRON_SECRET`) — this path already exists and is documented in `README.md`.
-2. **Login rate limiter** (`lib/security/rate-limit.ts`) — in-memory sliding window, so limits reset per-instance instead of being shared. Fix: swap for a Redis-backed limiter behind the same interface (the file's header comment flags this explicitly).
-
-Neither is hard, but both need to happen together before you add a second instance — do it as one change, not incrementally.
+Back up PostgreSQL and `/opt/pikorua-hrm/uploads` nightly to off-VPS storage, encrypt the backup, and test restore periodically. Monitor `/api/health`, nginx, `docker logs pikorua-blue|green`, and cron output. Never run two in-process schedulers or expose the raw app ports publicly.

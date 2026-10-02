@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Runs ON THE VM (invoked by .github/workflows/deploy.yml over SSH, or by
-# hand). Mirrors docs/DEPLOYMENT.md § 11 with the fixes found doing this
+# Runs ON THE GCP VM when DEPLOY_TARGET=gcp (or by hand).
+# Based on docs/DEPLOYMENT_GCP_LEGACY.md § 11, with the fixes found doing this
 # manually:
 #   - `bun install`'s postinstall (`prisma generate`) hangs on this VM ->
 #     run it separately via npx after install instead.

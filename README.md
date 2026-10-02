@@ -2,7 +2,7 @@
 
 Internal HR management system for the Pikorua firm — org hierarchy, attendance, project/task tracking, payroll, requests, recognition, and events, in one system.
 
-Built with **Next.js (App Router) + TypeScript + PostgreSQL + Prisma + Tailwind + shadcn/ui**, by two developers working in parallel feature tracks.
+Built with **Next.js (App Router) + TypeScript + PostgreSQL + Prisma + Tailwind + shadcn/ui**. The former two-developer feature-track split is historical; this repo now has one developer.
 
 ## Documentation (read these first)
 
@@ -12,7 +12,7 @@ Full context lives in [docs/](docs/):
 2. [SCHEMA.md](docs/SCHEMA.md) — database schema.
 3. [IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) — architecture + the 2-dev track split.
 4. [API_SPEC.md](docs/API_SPEC.md) — endpoints + roles per endpoint.
-5. [DEPLOYMENT.md](docs/DEPLOYMENT.md) — deploying to a GCP VM (Postgres, nginx, HTTPS, PM2).
+5. [DEPLOYMENT.md](docs/DEPLOYMENT.md) — Docker image delivery to the Hostinger VPS, blue-green releases, and GCP data migration.
 
 Live status: [progress.md](progress.md).
 
@@ -85,7 +85,7 @@ Every notification the system already generates (leave approved/rejected, admin 
 
 ## Scheduled jobs (recognition, birthdays, meeting reminders)
 
-The server runs an **in-process scheduler** (node-cron, started from `apps/web/instrumentation.ts` on boot) that fires the recognition snapshot, birthday/anniversary check, and meeting reminders. No external cron setup is needed — but this **assumes a single running server instance** (the GCP-VM deployment target). If the app is ever horizontally scaled, disable the scheduler and instead hit the CRON_SECRET-gated routes from one external crontab: `POST /api/v1/cron/{recognition-snapshot,birthday-check,meeting-reminders}` with `Authorization: Bearer $CRON_SECRET`.
+Local development runs the **in-process scheduler** (node-cron, started from `apps/web/instrumentation.ts`). Production Docker containers set `SCHEDULER_ENABLED=false`; one VPS cron calls the `CRON_SECRET`-gated `/api/v1/cron/*` routes for the active blue/green slot. See [deployment](docs/DEPLOYMENT.md).
 
 ## Track ownership
 

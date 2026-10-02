@@ -1,9 +1,5 @@
-# Deploys to the GCP VM after CI passes on main. SSHes in and runs the same
-# steps documented in docs/DEPLOYMENT.md § 11 ("Deploying updates"), plus the
-# two VM-specific fixes we hit doing this by hand:
-#   - `prisma generate` hangs under Bun on this VM -> use npx instead
-#     (see deploy/vm-deploy.sh)
-#   - restart via systemd (deploy/pikorua-hrm.service), not PM2
+# CI must pass on main before deploying to either target.
+# DEPLOY_TARGET=gcp keeps the existing VM path; hostinger ships a tested image.
 name: Deploy
 
 on:
@@ -11,17 +7,24 @@ on:
     workflows: ["CI"]
     types: [completed]
     branches: [main]
-  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
 
 jobs:
-  deploy:
-    # workflow_run only fires this job on a successful CI run; workflow_dispatch
-    # is a manual "redeploy the current main as-is" escape hatch and has no
-    # workflow_run context to check, so it's allowed through unconditionally.
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+  deploy-gcp:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.event == 'push' &&
+      vars.DEPLOY_TARGET == 'gcp'
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy over SSH
+      - name: Deploy current production GCP VM over SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DEPLOY_HOST }}
@@ -30,3 +33,91 @@ jobs:
           script_stop: true
           script: |
             bash /home/pruthvirajsinh_biz/pikorua-hrm/deploy/vm-deploy.sh
+
+  deploy-hostinger:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.event == 'push' &&
+      vars.DEPLOY_TARGET == 'hostinger'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: pikorua_hrm_image_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      IMAGE: pikorua-hrm:${{ github.event.workflow_run.head_sha }}
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/pikorua_hrm_image_test?schema=public
+      AUTH_SECRET: github-image-test-secret-01234567890123456789
+      CRON_SECRET: github-image-test-cron-secret
+      NEXT_PUBLIC_APP_NAME: ${{ vars.NEXT_PUBLIC_APP_NAME }}
+      NEXT_PUBLIC_FIREBASE_API_KEY: ${{ vars.NEXT_PUBLIC_FIREBASE_API_KEY }}
+      NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: ${{ vars.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN }}
+      NEXT_PUBLIC_FIREBASE_PROJECT_ID: ${{ vars.NEXT_PUBLIC_FIREBASE_PROJECT_ID }}
+      NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: ${{ vars.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID }}
+      NEXT_PUBLIC_FIREBASE_APP_ID: ${{ vars.NEXT_PUBLIC_FIREBASE_APP_ID }}
+      NEXT_PUBLIC_FIREBASE_VAPID_KEY: ${{ vars.NEXT_PUBLIC_FIREBASE_VAPID_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Build production image on GitHub
+        run: |
+          docker build --tag "$IMAGE" \
+            --build-arg "NEXT_PUBLIC_APP_NAME=$NEXT_PUBLIC_APP_NAME" \
+            --build-arg "NEXT_PUBLIC_FIREBASE_API_KEY=$NEXT_PUBLIC_FIREBASE_API_KEY" \
+            --build-arg "NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=$NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN" \
+            --build-arg "NEXT_PUBLIC_FIREBASE_PROJECT_ID=$NEXT_PUBLIC_FIREBASE_PROJECT_ID" \
+            --build-arg "NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=$NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID" \
+            --build-arg "NEXT_PUBLIC_FIREBASE_APP_ID=$NEXT_PUBLIC_FIREBASE_APP_ID" \
+            --build-arg "NEXT_PUBLIC_FIREBASE_VAPID_KEY=$NEXT_PUBLIC_FIREBASE_VAPID_KEY" .
+
+      - name: Test migrations from the final image
+        run: |
+          docker run --rm --network host -e DATABASE_URL --entrypoint bun "$IMAGE" \
+            /app/node_modules/prisma/build/index.js migrate deploy --schema /app/prisma/schema.prisma
+
+      - name: Smoke test final image against PostgreSQL
+        run: |
+          docker run -d --name pikorua-image-test --network host \
+            -e DATABASE_URL -e AUTH_SECRET -e CRON_SECRET \
+            -e PORT=3001 -e SCHEDULER_ENABLED=false "$IMAGE"
+          trap 'docker logs --tail 100 pikorua-image-test; docker rm -f pikorua-image-test' EXIT
+          for i in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:3001/api/health | grep -q '"status":"ok"'; then exit 0; fi
+            sleep 2
+          done
+          exit 1
+
+      - name: Configure pinned SSH host key
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Send scripts and final image to Hostinger
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          target="$DEPLOY_USER@$DEPLOY_HOST"
+          scp deploy/hostinger-deploy.sh deploy/hostinger-preflight.sh deploy/hostinger-cron.sh "$target:/opt/pikorua-hrm/"
+          ssh "$target" 'chmod 755 /opt/pikorua-hrm/hostinger-*.sh && bash /opt/pikorua-hrm/hostinger-preflight.sh'
+          docker save "$IMAGE" | ssh "$target" 'docker load'
+          ssh "$target" "bash /opt/pikorua-hrm/hostinger-deploy.sh '$IMAGE'"

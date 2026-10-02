@@ -1,0 +1,7 @@
+*/2 * * * * pikorua /opt/pikorua-hrm/hostinger-cron.sh device-sync
+*/5 * * * * pikorua /opt/pikorua-hrm/hostinger-cron.sh meeting-reminders
+1 0 * * * pikorua /opt/pikorua-hrm/hostinger-cron.sh attendance-eod
+5 0 * * * pikorua /opt/pikorua-hrm/hostinger-cron.sh birthday-check
+10 0 * * * pikorua /opt/pikorua-hrm/hostinger-cron.sh daily-rollover
+15 * * * * pikorua /opt/pikorua-hrm/hostinger-cron.sh crm-sync
+*/15 * * * * pikorua /opt/pikorua-hrm/hostinger-cron.sh task-reminders

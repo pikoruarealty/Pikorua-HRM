@@ -8,8 +8,8 @@ import { isClockedInNow } from "@/lib/attendance/status";
 import { todayDateOnly } from "@/lib/attendance/time";
 import { createSelfLoggedTask, createFreeTextSelfLoggedTask } from "@/lib/work/adhoc";
 import { estimateSelfLoggedEffort, GroqError, type SelfLoggedEffort } from "@/lib/ai/task-generation";
-import { dailyCapHours, fitToDailyCap, hoursClaimed, pointsToHours } from "@/lib/work/self-log-scoring";
-import { shiftHoursFor } from "@/lib/attendance/expected-hours";
+import { hoursToPoints } from "@/lib/work/self-log-scoring";
+import { checkRateLimit } from "@/lib/security/rate-limit";
 
 // POST /api/v1/work-items/self-log (2026-08-10) — an employee logs work nobody
 // assigned them. Owner request: "for the tech employees if no tasks assigned,
@@ -25,9 +25,9 @@ import { shiftHoursFor } from "@/lib/attendance/expected-hours";
 
 // typeKey omitted = free-text mode: "did something that doesn't fit the
 // catalog" (2026-08-14, owner request). There is no priced type to lean on,
-// so the Lead has to actually read what happened before crediting anything —
-// the description is the whole basis for that judgement, hence the higher
-// minimum length than the catalog path's optional one.
+// so the description is the basis for AI sizing and, for larger entries,
+// Lead review. It therefore has a higher minimum length than the catalog
+// path's optional description.
 const createSchema = z
   .object({
     // The catalog key, not an id — keys are stable and readable ("bug_fix"),
@@ -68,9 +68,7 @@ export async function POST(req: Request) {
     where: { id: session.employeeId },
     select: {
       id: true,
-      fullName: true,
       departmentId: true,
-      team: { select: { expectedStartTime: true, expectedEndTime: true } },
     },
   });
   if (!employee?.departmentId) {
@@ -94,10 +92,8 @@ export async function POST(req: Request) {
     return fail(ErrorCode.VALIDATION, "You must be clocked in to log a task.", 422);
   }
 
-  // One working day can only carry so much effort (lib/work/self-log-scoring.ts):
-  // production had 25 entries / 149 points from one person in a day, each a
-  // slice of the same feature. Today's earlier entries — catalog or free-text —
-  // use up the ceiling, whatever they were worth.
+  // Keep the day's entries in the model's context so splitting one feature
+  // into several descriptions does not multiply its estimated effort.
   const earlierToday = (
     await prisma.dailyTaskSelection.findMany({
       where: {
@@ -105,15 +101,20 @@ export async function POST(req: Request) {
         date: todayDateOnly(),
         workItem: { selfLogged: true, deletedAt: null, taskPoints: { not: null } },
       },
+      orderBy: { createdAt: "asc" },
       select: { workItem: { select: { title: true, taskPoints: true } } },
     })
   ).map((s) => ({ title: s.workItem.title, points: s.workItem.taskPoints ?? 0 }));
-  const capHours = dailyCapHours(shiftHoursFor(employee.team?.expectedStartTime, employee.team?.expectedEndTime));
-  const remainingHours = capHours - hoursClaimed(earlierToday.map((e) => e.points));
-  const limitMessage = (left: number) =>
-    left < 0.5
-      ? `You've already logged about ${capHours}h of work today, the most one day can carry.`
-      : `Only about ${left}h of today's ${capHours}h limit is left — too little for that task.`;
+  const normalizeTitle = (title: string) => title.trim().replace(/\s+/g, " ").toLowerCase();
+  if (earlierToday.some((entry) => normalizeTitle(entry.title) === normalizeTitle(parsed.data.title))) {
+    return fail(ErrorCode.CONFLICT, "You already logged a task with this title today. Edit that task or use a distinct title.", 409);
+  }
+  // A burst guard protects the AI endpoint and accidental rapid submissions.
+  // It resets after ten minutes; estimated hours never prevent logging work.
+  const limit = checkRateLimit(`self-log:${employee.id}`, { max: 12, windowMs: 10 * 60 * 1000 });
+  if (!limit.allowed) {
+    return fail("RATE_LIMITED", `Too many task logs in a short time. Try again in ${limit.retryAfterSeconds} seconds.`, 429);
+  }
 
   let created: { id: string } | null;
   let auditMetadata: {
@@ -123,17 +124,13 @@ export async function POST(req: Request) {
     aiEstimated?: boolean;
     hours?: number;
     overlap?: boolean;
-    clamped?: boolean;
   };
-  let sizing: { hours: number | null; overlap: boolean; clamped: boolean; remainingHours: number } | null = null;
+  let sizing: { hours: number | null; overlap: boolean } | null = null;
 
   if (parsed.data.typeKey) {
     const type = await prisma.adhocTaskType.findUnique({ where: { key: parsed.data.typeKey } });
     if (!type || !type.active) {
       return failFor(ErrorCode.VALIDATION, "typeKey does not match an active ad-hoc task type.");
-    }
-    if (pointsToHours(type.points) > remainingHours) {
-      return fail(ErrorCode.VALIDATION, limitMessage(remainingHours), 422);
     }
     created = await createSelfLoggedTask({
       employeeId: employee.id,
@@ -149,8 +146,6 @@ export async function POST(req: Request) {
     sizing = {
       hours: null,
       overlap: false,
-      clamped: false,
-      remainingHours: Math.round((remainingHours - pointsToHours(type.points)) * 10) / 10,
     };
   } else {
     // Free-text: no longer capped at one open claim at a time (2026-08-16,
@@ -159,12 +154,12 @@ export async function POST(req: Request) {
     // bug more than a guardrail). Aggregate self-logged points are still
     // bounded by performance_config.self_logged_cap_percent.
     const description = parsed.data.description!.trim();
-    if (remainingHours < 0.5) {
-      return fail(ErrorCode.VALIDATION, limitMessage(remainingHours), 422);
-    }
     let effort: SelfLoggedEffort;
     try {
-      effort = await estimateSelfLoggedEffort({ title: parsed.data.title, description }, { earlierToday });
+      effort = await estimateSelfLoggedEffort(
+        { title: parsed.data.title, description },
+        { earlierToday: earlierToday.slice(-30) },
+      );
     } catch (err) {
       if (err instanceof GroqError) {
         return failFor(
@@ -174,11 +169,7 @@ export async function POST(req: Request) {
       }
       throw err;
     }
-    const fit = fitToDailyCap(effort.hours, remainingHours);
-    if (!fit.allowed) {
-      return fail(ErrorCode.VALIDATION, limitMessage(fit.remainingHours), 422);
-    }
-    const points = fit.points;
+    const points = hoursToPoints(effort.hours);
     created = await createFreeTextSelfLoggedTask({
       employeeId: employee.id,
       departmentId: employee.departmentId,
@@ -191,15 +182,12 @@ export async function POST(req: Request) {
       title: parsed.data.title,
       points,
       aiEstimated: true,
-      hours: fit.hours,
+      hours: effort.hours,
       overlap: effort.overlap,
-      clamped: fit.clamped,
     };
     sizing = {
-      hours: fit.hours,
+      hours: effort.hours,
       overlap: effort.overlap,
-      clamped: fit.clamped,
-      remainingHours: Math.round((remainingHours - pointsToHours(points)) * 10) / 10,
     };
   }
   if (!created) {
