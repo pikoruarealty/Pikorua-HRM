@@ -1,6 +1,6 @@
 # Production deployment: GCP to Hostinger VPS
 
-The current GCP VM is the source of truth until the one-time data migration and DNS cutover finish. Its former installation guide is preserved in [DEPLOYMENT_GCP_LEGACY.md](DEPLOYMENT_GCP_LEGACY.md). This guide describes the target: one Hostinger Ubuntu VPS, host PostgreSQL 16, host nginx and cron, and one Dockerized Next.js app. GitHub Actions builds and tests the image; the VPS only loads and runs it.
+The current GCP VM is the source of truth until the one-time data migration and DNS cutover finish. Its former installation guide is preserved in [DEPLOYMENT_GCP_LEGACY.md](DEPLOYMENT_GCP_LEGACY.md). This guide describes the target: one Hostinger Ubuntu VPS, host PostgreSQL 17, host nginx and cron, and one Dockerized Next.js app. GitHub Actions builds and tests the image; the VPS only loads and runs it.
 
 ## Why this layout
 
@@ -11,9 +11,9 @@ The current GCP VM is the source of truth until the one-time data migration and 
 
 ## 1. Prepare Hostinger before any cutover
 
-Use an Ubuntu VPS with enough free disk for two ~362 MB app images, PostgreSQL, uploads and backups. Install Docker Engine, PostgreSQL 16, nginx, cron and certbot. Set DNS TTL low on the existing HRM record in advance. Open 80/443 and a restricted SSH port; block 3001, 3002 and 5432 externally. Keep the current GCP deployment running until the data copy and validation.
+Use an Ubuntu VPS with enough free disk for two ~362 MB app images, PostgreSQL, uploads and backups. Install Docker Engine, PostgreSQL 17 (from the PGDG apt repo; Ubuntu 26.04 does not ship 16, and the GCP source is 17.11 — a dump cannot be restored into an older major), nginx, cron and certbot. Set DNS TTL low on the existing HRM record in advance. Open 80/443 and a restricted SSH port; block 3001, 3002 and 5432 externally. Keep the current GCP deployment running until the data copy and validation.
 
-Create a deploy user named `pikorua` with Docker access and limited passwordless sudo for `nginx -t` and `systemctl reload nginx`. Docker group membership grants root-equivalent host access, so protect this account and its SSH key. Create `/opt/pikorua-hrm`, owned by that user, with `/opt/pikorua-hrm/uploads` owned by UID 1000 (the image's `bun` user), mode 750. Keep `/opt/pikorua-hrm/app.env` mode 600. Use ordinary unquoted `KEY=value` lines because Docker `--env-file` reads them literally; do not copy `.env.example` with quoted values directly. Include at least:
+Create a deploy user named `deploy_hrm` with Docker access and limited passwordless sudo for `nginx -t` and `systemctl reload nginx`. Docker group membership grants root-equivalent host access, so protect this account and its SSH key. Create `/opt/pikorua-hrm`, owned by that user, with `/opt/pikorua-hrm/uploads` owned by UID 1000 (the image's `bun` user), mode 750. Keep `/opt/pikorua-hrm/app.env` mode 600. Use ordinary unquoted `KEY=value` lines because Docker `--env-file` reads them literally; do not copy `.env.example` with quoted values directly. Include at least:
 
 ```text
 DATABASE_URL=postgresql://pikorua:...@127.0.0.1:5432/pikorua_hrm?schema=public
@@ -35,11 +35,11 @@ TEAM_OFFICE_PASSWORD=...
 
 Copy all other used production variables from GCP, particularly CRM credentials and email settings. Preserve the **same** `AUTH_SECRET` through the move so existing sessions can validate. Rotate credentials only as a separate planned step. Put public `NEXT_PUBLIC_*` values in GitHub Actions repository **variables**, since Next embeds these at image build time. A changed public value needs a new image. The server-only values stay solely in `app.env` on the VPS.
 
-Create the `pikorua_hrm` database and `pikorua` role on host PostgreSQL 16. PostgreSQL can listen on localhost because containers use `--network host`; require password auth for that role. Do not seed this production database. The image migration command uses the same `DATABASE_URL` and `prisma migrate deploy` as CI.
+Create the `pikorua_hrm` database and `pikorua` role on host PostgreSQL 17. PostgreSQL can listen on localhost because containers use `--network host`; require password auth for that role. Do not seed this production database. The image migration command uses the same `DATABASE_URL` and `prisma migrate deploy` as CI.
 
 Install `deploy/hostinger-nginx.conf` as the nginx site (edit `server_name` if the real HRM domain differs) and set `/opt/pikorua-hrm/proxy.conf` initially to `proxy_pass http://127.0.0.1:3001;`. Run `nginx -t`. The site will return 502 until the first app deploy. Obtain a Let's Encrypt certificate after DNS points to the VPS; use certbot's nginx integration and verify renewal. Nginx must overwrite `X-Forwarded-For` as this config does, because audit and login throttling use it.
 
-Install `deploy/hostinger.cron` at `/etc/cron.d/pikorua-hrm` (root owned, mode 644); ensure the `pikorua` user has `/opt/pikorua-hrm/hostinger-cron.sh` executable. Cron uses UTC for daily jobs, matching the former in-process scheduler, and checks Asia/Kolkata hours for TeamOffice. **Install cron only once the first container is active.**
+Install `deploy/hostinger.cron` at `/etc/cron.d/pikorua-hrm` (root owned, mode 644); ensure the `deploy_hrm` user has `/opt/pikorua-hrm/hostinger-cron.sh` executable. Cron uses UTC for daily jobs, matching the former in-process scheduler, and checks Asia/Kolkata hours for TeamOffice. **Install cron only once the first container is active.**
 
 ## 2. Configure GitHub Actions
 
@@ -47,7 +47,7 @@ The existing CI workflow still runs migrations, seed, typecheck, lint, tests and
 
 The repository variable `DEPLOY_TARGET` selects exactly one path after successful main CI: `gcp` invokes the existing VM deploy script with the existing `DEPLOY_*` secrets; `hostinger` builds/tests/transfers the Docker image. An unset or different value deploys nowhere. Keep `DEPLOY_TARGET=gcp` while the GCP VM is live; change it to `hostinger` only after the VPS is prepared and production data is restored.
 
-For Hostinger, set GitHub Actions secrets `DEPLOY_HOST` (VPS address), `DEPLOY_USER` (`pikorua`), `DEPLOY_SSH_KEY` (dedicated key), and `DEPLOY_SSH_KNOWN_HOSTS` (the VPS public SSH host key line, verified out of band). Set `NEXT_PUBLIC_APP_NAME` and Firebase `NEXT_PUBLIC_*` repository variables if those features are enabled. The deploy account must own `/opt/pikorua-hrm` and have the sudo permissions above. The workflow intentionally does not deploy a PR or an unrelated repository's run.
+For Hostinger, set GitHub Actions secrets `DEPLOY_HOST` (VPS address), `DEPLOY_USER` (`deploy_hrm`), `DEPLOY_SSH_KEY` (dedicated key), and `DEPLOY_SSH_KNOWN_HOSTS` (the VPS public SSH host key line, verified out of band). Set `NEXT_PUBLIC_APP_NAME` and Firebase `NEXT_PUBLIC_*` repository variables if those features are enabled. The deploy account must own `/opt/pikorua-hrm` and have the sudo permissions above. The workflow intentionally does not deploy a PR or an unrelated repository's run.
 
 ## 3. One-time production data move
 
