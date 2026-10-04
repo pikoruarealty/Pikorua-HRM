@@ -19,7 +19,7 @@ Create a deploy user named `deploy_hrm` with Docker access and limited passwordl
 DATABASE_URL=postgresql://pikorua:...@127.0.0.1:5432/pikorua_hrm?schema=public
 AUTH_SECRET=...
 CRON_SECRET=...
-APP_BASE_URL=https://hrm.pikorua.com
+APP_BASE_URL=https://hrm.pikoruarealty.com
 GROQ_API_KEY=...
 GROQ_MODEL=...
 CRM_API_BASE_URL=...
@@ -69,7 +69,7 @@ sudo chown -R 1000:1000 /opt/pikorua-hrm/uploads
 
 If writes resume on GCP after the final dump, repeat the final copy; otherwise the two sites will diverge. Do not pass these archives through GitHub Actions or the Docker image.
 
-Verify row counts for users, employees, work items, attendance records, point ledger and audit logs against GCP; compare upload file counts and representative hashes. Keep the source backup until the move is accepted. Run the first image deployment, which applies only pending committed Prisma migrations and checks the new app. Test login, attendance, task logging, payslip/PDF, document/photo reads, TeamOffice and CRM sync, cron, and a fresh backup on Hostinger before changing DNS. The CRM currently allowlists the GCP VM IP, so add the Hostinger outbound IP before testing CRM sync. Test through a temporary hosts-file entry or the VPS IP with the correct Host header. Then point DNS to Hostinger, issue/verify TLS, monitor errors and keep the old GCP app stopped to avoid diverging writes. Retain GCP data until its backups and the new site have been verified.
+Verify row counts for users, employees, work items, attendance records, point ledger and audit logs against GCP; compare upload file counts and representative hashes. Keep the source backup until the move is accepted. Run the first image deployment, which applies only pending committed Prisma migrations and checks the new app. Test login, attendance, task logging, payslip/PDF, document/photo reads, TeamOffice and CRM sync, cron, and a fresh backup on Hostinger before changing DNS. The CRM currently allowlists the GCP VM IP, so add the Hostinger outbound IP before testing CRM sync. Test through an SSH tunnel (`ssh -L 3001:127.0.0.1:3001 <user>@<vps>`, then browse `http://localhost:3001`): the session cookie is `Secure` in production, so login over plain HTTP to the VPS IP fails, but browsers accept Secure cookies on `localhost`. Port 3001 is the blue slot; use 3002 if green is active (`cat /opt/pikorua-hrm/active-slot`). Because DNS still points at GCP, a certificate cannot be issued over HTTP before cutover: run `certbot --nginx -d hrm.pikoruarealty.com` immediately after the DNS change (expect a short certificate-warning window), or issue it beforehand with a DNS-01 challenge. Then point DNS to Hostinger, issue/verify TLS, monitor errors and keep the old GCP app stopped to avoid diverging writes. Retain GCP data until its backups and the new site have been verified.
 
 The first data move needs a write freeze because this project has one writable PostgreSQL database and local uploads, with no replication or dual-write path. Subsequent blue-green **app** releases do not need that freeze. Prisma migrations in app releases must be backward compatible with the old app during the overlap; destructive migrations need a separate staged release.
 
