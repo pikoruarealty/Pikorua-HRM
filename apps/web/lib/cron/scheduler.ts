@@ -8,10 +8,14 @@ import { runDeviceSync } from "@/lib/integrations/teamoffice/sync";
 import { runTaskReminders } from "@/lib/cron/task-reminders";
 
 // In-process scheduler (PRD §6 — "a lightweight scheduled-jobs mechanism").
-// Registered once at server boot from instrumentation.ts. Assumes a single
-// running server instance (the GCP-VM deployment target); if the app is ever
-// horizontally scaled, move these to an external crontab hitting the
-// CRON_SECRET-gated HTTP routes instead (which still exist and are unchanged).
+// Registered once at server boot from instrumentation.ts when
+// SCHEDULER_ENABLED != "false" — i.e. local dev. Production (Hostinger VPS
+// since 2026-10-04) runs the containers with SCHEDULER_ENABLED=false and uses
+// host cron (deploy/hostinger.cron) to call the CRON_SECRET-gated HTTP routes
+// on the active blue/green slot only. Keep the two schedules in step: a job
+// added or re-timed here needs the same change in deploy/hostinger.cron and
+// deploy/hostinger-cron.sh's allow-list. Note the boot-time catch-up runs
+// below (birthday, attendance EOD, CRM) do NOT happen in production.
 
 let started = false;
 
@@ -67,7 +71,7 @@ export function startScheduler(): void {
   // day tries to write into it. Runs at boot too: a redeploy mid-morning
   // should not leave the dashboard showing yesterday until the next hour.
   //
-  // NOTE: the CRM is IP-allowlisted to the production VM, so on a dev machine
+  // NOTE: the CRM allowlists caller IPs (HRM_ALLOWED_IPS on its side), so on a dev machine
   // this job logs a 401 every hour and does nothing. That is expected, not a
   // misconfigured key — see lib/sales/crm-client.ts.
   cron.schedule("15 * * * *", () => {

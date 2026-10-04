@@ -900,6 +900,12 @@ function ManualRecordForm() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [longDurationError, setLongDurationError] = useState(false);
+  // The day was already reconciled from the biometric device. Writing over it is
+  // allowed for Admin/HR but must be an explicit second step (the server refuses
+  // a plain entry so a device day is never clobbered by accident). Once
+  // confirmed it stays confirmed for any further retry of the same entry.
+  const [deviceConflict, setDeviceConflict] = useState(false);
+  const [overrideConfirmed, setOverrideConfirmed] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -909,7 +915,7 @@ function ManualRecordForm() {
     })();
   }, []);
 
-  async function save(confirmLongDuration = false) {
+  async function save(confirmLongDuration = false, override = overrideConfirmed) {
     setBusy(true);
     setError(null);
     setMessage(null);
@@ -925,14 +931,18 @@ function ManualRecordForm() {
           reason,
           work_location: workLocation,
           confirm_long_duration: confirmLongDuration || undefined,
+          override: override || undefined,
         }),
       });
       const json = await res.json();
       if (json.error) {
         setLongDurationError(/beyond a normal shift/.test(json.error.message));
+        setDeviceConflict(/already synced from the biometric device/.test(json.error.message));
         throw new Error(json.error.message);
       }
       setLongDurationError(false);
+      setDeviceConflict(false);
+      setOverrideConfirmed(false);
       setMessage("Record saved (pre-approved). Refresh the table below to see it.");
       setReason("");
     } catch (err) {
@@ -951,7 +961,14 @@ function ManualRecordForm() {
     <form onSubmit={submit} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="manual_employee">Employee</Label>
-        <Select value={employeeId || "__none__"} onValueChange={(v) => setEmployeeId(v === "__none__" ? "" : v)}>
+        <Select
+          value={employeeId || "__none__"}
+          onValueChange={(v) => {
+            setEmployeeId(v === "__none__" ? "" : v);
+            setOverrideConfirmed(false);
+            setDeviceConflict(false);
+          }}
+        >
           <SelectTrigger id="manual_employee">
             <SelectValue placeholder="Select employee" />
           </SelectTrigger>
@@ -967,7 +984,16 @@ function ManualRecordForm() {
       </div>
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="manual_date">Date</Label>
-        <DatePicker id="manual_date" value={date} onChange={setDate} required />
+        <DatePicker
+          id="manual_date"
+          value={date}
+          onChange={(v) => {
+            setDate(v);
+            setOverrideConfirmed(false);
+            setDeviceConflict(false);
+          }}
+          required
+        />
       </div>
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="manual_in">Clock in</Label>
@@ -994,6 +1020,21 @@ function ManualRecordForm() {
       {error && (
         <div className="flex flex-col gap-1.5 sm:col-span-2 lg:col-span-3">
           <p className="text-sm text-destructive">{error}</p>
+          {deviceConflict && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="w-fit"
+              disabled={busy}
+              onClick={() => {
+                setOverrideConfirmed(true);
+                save(false, true);
+              }}
+            >
+              Overwrite the device record with these times
+            </Button>
+          )}
           {longDurationError && (
             <Button
               type="button"
@@ -1058,6 +1099,12 @@ function BulkManualRecordForm() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [longDurationRows, setLongDurationRows] = useState<BulkRow[]>([]);
+  // Rows whose day was already reconciled from the biometric device — skipped by
+  // the server until Admin/HR confirms the overwrite. `overrideKeys` remembers the
+  // confirmed ones so a later retry (e.g. a long-duration confirm) keeps them.
+  const [deviceConflictRows, setDeviceConflictRows] = useState<BulkRow[]>([]);
+  const [overrideKeys, setOverrideKeys] = useState<string[]>([]);
+  const [otherFailures, setOtherFailures] = useState<string[]>([]);
 
   useEffect(() => {
     (async () => {
@@ -1088,6 +1135,9 @@ function BulkManualRecordForm() {
     setMessage(null);
     setError(null);
     setLongDurationRows([]);
+    setDeviceConflictRows([]);
+    setOverrideKeys([]);
+    setOtherFailures([]);
   }
 
   function updateRow(key: string, field: "clockIn" | "clockOut" | "workLocation", value: string) {
@@ -1098,13 +1148,17 @@ function BulkManualRecordForm() {
     setRows((prev) => (prev ? prev.filter((r) => r.key !== key) : prev));
   }
 
-  async function submitRows(rowsToSubmit: BulkRow[], confirmLongDuration: boolean) {
+  async function submitRows(
+    rowsToSubmit: BulkRow[],
+    confirmLongDuration: boolean,
+    confirmedOverrideKeys: string[] = overrideKeys,
+  ) {
     setBusy(true);
     setError(null);
-    if (!confirmLongDuration) {
-      setMessage(null);
-      setLongDurationRows([]);
-    }
+    setMessage(null);
+    // The follow-up lists below are merged per submitted row (not replaced), so
+    // retrying one group never forgets a row still waiting in the other.
+    const settled = (prev: BulkRow[]) => prev.filter((p) => !rowsToSubmit.some((r) => r.key === p.key));
     try {
       const res = await fetch("/api/v1/attendance/manual/bulk", {
         method: "POST",
@@ -1118,6 +1172,7 @@ function BulkManualRecordForm() {
             clock_out: r.clockOut ? new Date(`${r.date}T${r.clockOut}`).toISOString() : undefined,
             work_location: r.workLocation,
             confirm_long_duration: confirmLongDuration || undefined,
+            override: confirmedOverrideKeys.includes(r.key) || undefined,
           })),
         }),
       });
@@ -1133,15 +1188,32 @@ function BulkManualRecordForm() {
       const flaggedRows = rowsToSubmit.filter((row) =>
         stillLongDuration.some((r) => r.employee_id === row.employeeId && r.date === row.date),
       );
-      setLongDurationRows(flaggedRows);
+      setLongDurationRows((prev) => [...settled(prev), ...flaggedRows]);
+      const rowFor = (r: { employee_id: string; date: string }) =>
+        rowsToSubmit.find((row) => row.employeeId === r.employee_id && row.date === r.date);
+      const conflictRows = results
+        .filter((r) => !r.ok && /already device-synced/i.test(r.error ?? ""))
+        .map(rowFor)
+        .filter((row): row is BulkRow => !!row);
+      setDeviceConflictRows((prev) => [...settled(prev), ...conflictRows]);
+      // Anything else that failed used to be only a count — say which row and why.
+      const newFailures = results
+        .filter((r) => !r.ok && !/beyond a normal shift|already device-synced/i.test(r.error ?? ""))
+        .map((r) => `${rowFor(r)?.employeeName ?? r.employee_id} — ${r.date}: ${r.error ?? "failed"}`);
+      setOtherFailures((prev) => [...new Set([...prev, ...newFailures])]);
       setMessage(
         `${created} created, ${updated} updated${failed ? `, ${failed} failed` : ""}` +
           (flaggedRows.length > 0
             ? ` — ${flaggedRows.length} flagged below for an unusually long duration.`
-            : ". Refresh the table below to see them."),
+            : conflictRows.length > 0
+              ? ` — ${conflictRows.length} already synced from the biometric device (see below).`
+              : ". Refresh the table below to see them."),
       );
       setRows(null);
-      if (flaggedRows.length === 0) setReason("");
+      // The reason is reused by any retry, so keep it until nothing is waiting.
+      const stillWaiting =
+        settled(longDurationRows).length + flaggedRows.length + settled(deviceConflictRows).length + conflictRows.length;
+      if (stillWaiting === 0) setReason("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save records.");
     } finally {
@@ -1260,6 +1332,42 @@ function BulkManualRecordForm() {
       )}
       {error && <p className="text-sm text-destructive">{error}</p>}
       {message && <p className="text-sm text-muted-foreground">{message}</p>}
+      {otherFailures.length > 0 && (
+        <ul className="list-disc pl-5 text-sm text-destructive">
+          {otherFailures.map((f) => (
+            <li key={f}>{f}</li>
+          ))}
+        </ul>
+      )}
+      {deviceConflictRows.length > 0 && (
+        <div className="flex flex-col gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 p-3 dark:bg-amber-950/20">
+          <p className="text-sm text-muted-foreground">
+            These days were already synced from the biometric device, so they were left untouched. Overwrite them with
+            the times you entered?
+          </p>
+          <ul className="text-sm">
+            {deviceConflictRows.map((r) => (
+              <li key={r.key}>
+                {r.employeeName} — {r.date}, {r.clockIn}–{r.clockOut}
+              </li>
+            ))}
+          </ul>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="w-fit"
+            disabled={busy}
+            onClick={() => {
+              const next = [...new Set([...overrideKeys, ...deviceConflictRows.map((r) => r.key)])];
+              setOverrideKeys(next);
+              submitRows(deviceConflictRows, false, next);
+            }}
+          >
+            Overwrite device records
+          </Button>
+        </div>
+      )}
       {longDurationRows.length > 0 && (
         <div className="flex flex-col gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 p-3 dark:bg-amber-950/20">
           <p className="text-sm text-muted-foreground">

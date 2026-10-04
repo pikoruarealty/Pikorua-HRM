@@ -820,7 +820,7 @@ export function EmployeeDetail({
 
       {canManage && <EmployeeEventsPanel employeeId={employeeId} />}
 
-      {canViewAttendance && !isAttendanceExemptRole(employee.role) && <EmployeeAttendancePanel employeeId={employeeId} canEditDays={isSelf} />}
+      {canViewAttendance && !isAttendanceExemptRole(employee.role) && <EmployeeAttendancePanel employeeId={employeeId} canEditDays={isSelf} canMarkPaidLeave={isAdmin && !isSelf} />}
 
       {canViewAttendance && <EmployeeWorkPanel employeeId={employeeId} isMetric={isMetric} />}
 

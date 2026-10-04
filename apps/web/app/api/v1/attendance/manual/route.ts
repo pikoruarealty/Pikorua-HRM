@@ -130,6 +130,7 @@ export async function POST(req: Request) {
       clock_out: clockOut?.toISOString() ?? null,
       work_location: record.workLocation,
       reason: d.reason,
+      ...(existing?.source === AttendanceSource.device_sync ? { overrode_device_record: true } : {}),
       ...(existing
         ? {
             clock_in_before: (existing.clockInApproved ?? existing.clockInRaw)?.toISOString() ?? null,

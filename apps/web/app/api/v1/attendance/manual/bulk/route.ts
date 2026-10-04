@@ -80,6 +80,7 @@ export async function POST(req: Request) {
   const results: ResultRow[] = [];
   let created = 0;
   let updated = 0;
+  let deviceOverrides = 0;
 
   for (const r of records) {
     if (!validEmployeeIds.has(r.employee_id)) {
@@ -147,6 +148,7 @@ export async function POST(req: Request) {
       }
       if (existing) updated++;
       else created++;
+      if (existing?.source === AttendanceSource.device_sync) deviceOverrides++;
       // Written pre-approved — re-derive whether this day earns a
       // compensation credit (off-day clock-in), per row.
       await syncCompensationCreditForRecord(record.id);
@@ -168,6 +170,7 @@ export async function POST(req: Request) {
       total: records.length,
       created,
       updated,
+      device_records_overwritten: deviceOverrides,
       failed: results.filter((r) => !r.ok).length,
       employee_ids: employeeIds,
       date_range: { from: dates[0], to: dates[dates.length - 1] },

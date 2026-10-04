@@ -88,12 +88,16 @@ export function EmployeeAttendancePanel({
   employeeId,
   title = "Attendance",
   canEditDays = false,
+  canMarkPaidLeave = false,
 }: {
   employeeId: string;
   title?: string;
   /** The employee's own view: lets them switch an automatic weekly off to unpaid
    *  leave (and back) from the calendar. */
   canEditDays?: boolean;
+  /** Admin viewing someone else: lets them turn an absent / unpaid-leave day into
+   *  paid leave (POST /attendance/mark-paid-leave). */
+  canMarkPaidLeave?: boolean;
 }) {
   const [month, setMonth] = useState(currentMonth);
   const [summary, setSummary] = useState<Summary | null>(null);
@@ -134,6 +138,47 @@ export function EmployeeAttendancePanel({
       setReloadKey((k) => k + 1);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't change that day.");
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  // Admin: absent / unpaid-leave day -> paid leave (audited, reason required).
+  const [paidReason, setPaidReason] = useState("");
+  const [paidHalf, setPaidHalf] = useState(false);
+  const [paidType, setPaidType] = useState<"leave_casual" | "leave_sick">("leave_casual");
+  const [paidNotice, setPaidNotice] = useState<string | null>(null);
+
+  async function markPaidLeave(day: CalendarDay) {
+    setActionBusy(true);
+    setError(null);
+    setPaidNotice(null);
+    try {
+      const data = await getJson(
+        await fetch("/api/v1/attendance/mark-paid-leave", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            employee_id: employeeId,
+            date: day.date,
+            type: paidType,
+            half_day: day.status === "absent" && paidHalf ? true : undefined,
+            reason: paidReason.trim(),
+          }),
+        }),
+      );
+      setSelected(null);
+      setPaidReason("");
+      setPaidHalf(false);
+      setPaidNotice(
+        `${shortDate(day.date)} is now paid leave.` +
+          (data?.exceeds_monthly_cap
+            ? ` Note: that is ${data.monthly_paid_leave_used} paid days this month, over the ${data.monthly_paid_leave_cap}-day allowance.`
+            : ""),
+      );
+      setReloadKey((k) => k + 1);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't mark that day as paid leave.");
     } finally {
       setActionBusy(false);
     }
@@ -254,9 +299,62 @@ export function EmployeeAttendancePanel({
                 month={mo}
                 year={year}
                 days={summary.days}
-                selectedDate={canEditDays ? selected?.date : null}
-                onSelect={canEditDays ? (d) => setSelected((s) => (s?.date === d.date ? null : d)) : undefined}
+                selectedDate={canEditDays || canMarkPaidLeave ? selected?.date : null}
+                onSelect={
+                  canEditDays || canMarkPaidLeave
+                    ? (d) => setSelected((s) => (s?.date === d.date ? null : d))
+                    : undefined
+                }
               />
+              {paidNotice && <p className="text-xs text-muted-foreground">{paidNotice}</p>}
+              {canMarkPaidLeave && selected && (selected.status === "absent" || selected.status === "unpaid_leave") && (
+                <div className="flex flex-col gap-2 rounded-lg border bg-muted/30 px-3 py-2 text-sm">
+                  <span>
+                    <span className="font-medium">{shortDate(selected.date)}</span>
+                    <span className="text-muted-foreground">
+                      {" · "}
+                      {selected.status === "absent" ? "absent" : "unpaid leave"} — mark as paid leave?
+                    </span>
+                  </span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      type="text"
+                      className="flex h-9 min-w-[12rem] flex-1 rounded-md border border-input bg-background px-3 py-1 text-sm"
+                      placeholder="Reason (audited)"
+                      value={paidReason}
+                      onChange={(e) => setPaidReason(e.target.value)}
+                      aria-label="Reason for marking paid leave"
+                    />
+                    <select
+                      className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+                      value={paidType}
+                      onChange={(e) => setPaidType(e.target.value as "leave_casual" | "leave_sick")}
+                      aria-label="Paid leave type"
+                    >
+                      <option value="leave_casual">Casual</option>
+                      <option value="leave_sick">Sick</option>
+                    </select>
+                    {selected.status === "absent" && (
+                      <label className="flex h-9 cursor-pointer items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          className="size-4"
+                          checked={paidHalf}
+                          onChange={(e) => setPaidHalf(e.target.checked)}
+                        />
+                        Half day only
+                      </label>
+                    )}
+                    <Button
+                      size="sm"
+                      disabled={actionBusy || paidReason.trim().length < 3}
+                      onClick={() => markPaidLeave(selected)}
+                    >
+                      {actionBusy ? "Saving…" : "Mark as paid leave"}
+                    </Button>
+                  </div>
+                </div>
+              )}
               {canEditDays && selected && (selected.note === "declared_unpaid" || selected.note === "auto_off" || selected.note === "provisional_off") && (
                 <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted/30 px-3 py-2 text-sm">
                   <span>

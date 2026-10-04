@@ -21,6 +21,14 @@ Bhavarth is the sole developer on this repo. The former **two-track split** (Tra
 - `getEmployeeOfMonthStatus()` from `@/lib/recognition/employee-of-month` — live.
 - `getApprovedUnpaidLeaveDays()` from `@/lib/requests/leave` — live (2026-07-14). Counts approved `leave_unpaid` days clipped to the payroll period; feeds payslip standard deductions.
 
+## Deployment (2026-10-04)
+Production is the **Hostinger VPS** (`hrm.pikoruarealty.com`), not GCP. Read [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) ("Production status") before touching deploy/CI/cron. Easy-to-get-wrong points:
+- Production containers run `SCHEDULER_ENABLED=false`; **host cron** (`deploy/hostinger.cron`) calls the `/api/v1/cron/*` routes. A job added or re-timed in `lib/cron/scheduler.ts` must also be added to `deploy/hostinger.cron` and the allow-list in `deploy/hostinger-cron.sh`, or it silently never runs in production.
+- `DEPLOY_TARGET` repo variable is `hostinger`. Don't set it to `gcp` (the shared `DEPLOY_*` secrets now point at the VPS). Pushing to `main` deploys to production once CI is green.
+- DB is host PostgreSQL **17** (CI uses `postgres:17`). Migrations run from the image against the live DB and must be backward compatible with the still-running old container.
+- The login cookie is `Secure` in production: test a deployment over HTTPS or an SSH tunnel to `localhost`, never plain HTTP to the VPS IP.
+- The CRM sync depends on the CRM's own IP allowlist (`HRM_ALLOWED_IPS`); a 401 can mean a missing IP as much as a bad key.
+
 ## Conventions
 - API responses use `ok()` / `fail()` / `failFor()` from `@/lib/api/response` → `{ data, error }`.
 - Auth: `getSession()` from `@/lib/auth`; guard with `requireRole(session, ROLES)` from `@/lib/rbac`.
@@ -30,7 +38,7 @@ Bhavarth is the sole developer on this repo. The former **two-track split** (Tra
 - **Audit trail (2026-07-15):** any route that mutates financial/sensitive data (payslips, payroll config, attendance edit/approve, request approve/reject, employee CRUD, auth events) must call `audit()` from `@/lib/audit` after the mutation succeeds (action naming: `"<entity>.<verb>"`). `audit_logs` is append-only; viewer is Admin-only (`/audit`).
 - **Verbose logging (2026-07-15):** structured console logging via `createLogger("<scope>")` from `@/lib/log` (level via `LOG_LEVEL`, default debug in dev / info in prod). Three chokepoints are already instrumented — middleware logs every request (with an `x-request-id` header), `ok()`/`fail()` in `@/lib/api/response` log every API response (failures at WARN, 5xx at ERROR), and `audit()` logs every audited mutation — so new routes get logging for free; add ad-hoc `logger.*` lines only for domain events those three can't see.
 - **Profile photos:** `POST /employees` is **multipart/form-data** (fields + optional `photo` file), not JSON — the photo was required at creation from 2026-07-15 until 2026-08-05, now **optional** (can be added later via `PUT /employees/:id/photo`). Stored as opaque local-storage keys; always expose via `/employees/:id/photo` (use `withPhotoPath` from `@/lib/employees/photo`), never the raw key.
-- **Admin manual overrides (2026-07-15):** `request.override`, `payslip unfinalize`/`delete draft`, `announcement delete` are **Admin-only** (deliberately narrower than Admin/HR), require a `reason` where applicable, and must stay audited. Don't widen these to HR. `attendance/manual` (single + bulk) was **widened to Admin/HR on 2026-08-07** — owner request; it's now access-gated the same as `attendance/:id/edit` (`FINANCE_ROLES`), still audited, still requires a `reason`.
+- **Admin manual overrides (2026-07-15):** `request.override`, `payslip unfinalize`/`delete draft`, `announcement delete`, `attendance/mark-paid-leave` (2026-10-04: absent/unpaid day → paid leave, by design not capped by the paid allowance) are **Admin-only** (deliberately narrower than Admin/HR), require a `reason` where applicable, and must stay audited. Don't widen these to HR. `attendance/manual` (single + bulk) was **widened to Admin/HR on 2026-08-07** — owner request; it's now access-gated the same as `attendance/:id/edit` (`FINANCE_ROLES`), still audited, still requires a `reason`.
 
 ## Attendance sessions (2026-08-11)
 A day is one `attendance_records` row **plus one or more `attendance_sessions`**. Clocking out closes the current session; it does not end the day, and the employee can clock back in as often as they need. Consequences that are easy to get wrong:

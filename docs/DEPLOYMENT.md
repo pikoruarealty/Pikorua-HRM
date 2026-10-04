@@ -1,6 +1,28 @@
-# Production deployment: GCP to Hostinger VPS
+# Production deployment: Hostinger VPS (migrated from GCP on 2026-10-04)
 
-The current GCP VM is the source of truth until the one-time data migration and DNS cutover finish. Its former installation guide is preserved in [DEPLOYMENT_GCP_LEGACY.md](DEPLOYMENT_GCP_LEGACY.md). This guide describes the target: one Hostinger Ubuntu VPS, host PostgreSQL 17, host nginx and cron, and one Dockerized Next.js app. GitHub Actions builds and tests the image; the VPS only loads and runs it.
+**Production is the Hostinger VPS.** The HRM was moved from the GCP VM on 2026-10-04; the GCP HRM service (`hrm`) is stopped and disabled (confirmed 2026-10-04), so a reboot of that VM cannot restart it and run duplicate jobs. The former GCP installation guide is preserved in [DEPLOYMENT_GCP_LEGACY.md](DEPLOYMENT_GCP_LEGACY.md) for history only. The layout: one Hostinger Ubuntu 26.04 VPS, host PostgreSQL 17, host nginx and cron, and one Dockerized Next.js app. GitHub Actions builds and tests the image; the VPS only loads and runs it. Sections 1 to 3 below are the preparation and migration runbook (kept so the move can be repeated or audited); section 4 is the routine release process.
+
+## Production status (as built)
+
+| Item | Value |
+|---|---|
+| Public URL | `https://hrm.pikoruarealty.com` (A record to `187.126.115.164`; it was a CNAME to `adflow.pikoruarealty.com` on GCP, with a ~1h TTL) |
+| VPS | Ubuntu 26.04, shared with other Pikorua apps (the CRM stack in `/opt/pikorua-crm`, the `pikorua-live-*` stack). nginx on the host owns 80/443; the HRM is one extra site, `/etc/nginx/sites-enabled/pikorua-hrm.conf`, which certbot edited to add HTTPS and a redirect |
+| App | Docker container `pikorua-blue` or `pikorua-green` (port 3001/3002, loopback only), `--network host`, state in `/opt/pikorua-hrm/active-slot` |
+| Config | `/opt/pikorua-hrm/app.env` (mode 600, owner `deploy_hrm`, unquoted `KEY=value`). `AUTH_SECRET` and every other server secret were carried over unchanged from GCP, so sessions survived the move. `NEXT_PUBLIC_*` values are GitHub repository **variables** |
+| Database | Host PostgreSQL **17.11**, database `pikorua_hrm`, role `pikorua`, listens on localhost only. The password is only in `app.env` |
+| Uploads | `/opt/pikorua-hrm/uploads` (bind-mounted to `/app/apps/web/uploads`), owned by UID 1000. UID 1000 is also a normal login user on this host, so that user can read employee documents |
+| Deploy user | `deploy_hrm` (Docker group; sudo only for `nginx -t` and `systemctl reload nginx`) |
+| Cron | `/etc/cron.d/pikorua-hrm`, run as `deploy_hrm`, UTC server clock. The workflow ships `hostinger-cron.sh` but **not** the cron file, so a rebuilt VPS needs `deploy/hostinger.cron` installed by hand |
+| Releases | `DEPLOY_TARGET=hostinger`. The `gcp` job in `deploy.yml` still exists but the `DEPLOY_*` secrets now point at the VPS, so **do not set `DEPLOY_TARGET=gcp`** without recreating the GCP secrets |
+
+Known gaps and decisions at the time of the move:
+
+- **CRM sync does not work yet.** The CRM allowlists caller IPs in its `HRM_ALLOWED_IPS` setting (an env file in `/opt/pikorua-crm/secrets/`), and it still lists only the old GCP IP `34.14.190.134`. `crm.pikoruarealty.com` currently resolves to a different, older CRM host (8.232.21.212), which returns 401 "Invalid HRM API authorization" to HRM. The HRM key itself is correct (hash matches the CRM's). Fix: the CRM owner adds `187.126.115.164` (confirm the VPS's real outbound IP with `curl https://ifconfig.me`) on whichever CRM server `crm.pikoruarealty.com` points to; if the CRM moves onto this VPS, the address it sees for HRM may differ, so read its log for the rejected IP. No HRM change is needed; the next hourly `crm-sync` recovers, and each run re-pulls today plus the previous two days.
+- **Backups:** only Hostinger's weekly whole-VPS snapshot exists. There is **no** nightly database dump or upload copy, so up to a week of data (and payroll inputs) could be lost, and a snapshot of a running PostgreSQL is only crash-consistent. A nightly encrypted `pg_dump` + uploads archive copied off the VPS is still recommended (see section 4).
+- **A temporary SSH key** (`xfer-temp`, restricted by `from=` to the GCP IP) remains in `/home/deploy_hrm/.ssh/authorized_keys` and `~/xfer_key` on GCP, kept on purpose for another project's migration. Delete it on both sides when that is done.
+- **GCP VM keeps running** and hosts `adflow.pikoruarealty.com`; only its HRM service (`hrm`) is stopped. Do not delete the VM on account of the HRM move.
+- **Postgres 17, not 16.** Ubuntu 26.04 showed no installable `postgresql-16` candidate, and a dump taken on 17 cannot be restored into 16. CI and `deploy.yml` test against `postgres:17` to match production.
 
 ## Why this layout
 
@@ -45,11 +67,13 @@ Install `deploy/hostinger.cron` at `/etc/cron.d/pikorua-hrm` (root owned, mode 6
 
 The existing CI workflow still runs migrations, seed, typecheck, lint, tests and a Next production build on GitHub. After a successful **push to main**, `deploy.yml` checks out that exact commit, builds the final image, applies migrations from the image to a temporary PostgreSQL service, starts the image and checks `/api/health`. It then copies only the deployment scripts and `docker save` stream over SSH. No checkout, package install, Docker build or test runs on the VPS.
 
-The repository variable `DEPLOY_TARGET` selects exactly one path after successful main CI: `gcp` invokes the existing VM deploy script with the existing `DEPLOY_*` secrets; `hostinger` builds/tests/transfers the Docker image. An unset or different value deploys nowhere. Keep `DEPLOY_TARGET=gcp` while the GCP VM is live; change it to `hostinger` only after the VPS is prepared and production data is restored.
+The repository variable `DEPLOY_TARGET` selects exactly one path after successful main CI: `gcp` invokes the old VM deploy script; `hostinger` builds/tests/transfers the Docker image. An unset or different value (for example `none`) deploys nowhere. It is now `hostinger`. During the migration it was `gcp`, then `none` while the VPS was prepared, then `hostinger` only after the data was restored. The `DEPLOY_*` secrets are shared by both jobs, so they now point at the VPS and the `gcp` path cannot work without recreating them.
 
 For Hostinger, set GitHub Actions secrets `DEPLOY_HOST` (VPS address), `DEPLOY_USER` (`deploy_hrm`), `DEPLOY_SSH_KEY` (dedicated key), and `DEPLOY_SSH_KNOWN_HOSTS` (the VPS public SSH host key line, verified out of band). Set `NEXT_PUBLIC_APP_NAME` and Firebase `NEXT_PUBLIC_*` repository variables if those features are enabled. The deploy account must own `/opt/pikorua-hrm` and have the sudo permissions above. The workflow intentionally does not deploy a PR or an unrelated repository's run.
 
 ## 3. One-time production data move
+
+*Completed 2026-10-04, after a rehearsal.* The data was small (12 MB database, 33 upload files), so the procedure was: restore a snapshot onto the VPS while GCP kept serving, deploy and test through an SSH tunnel, then repeat as the real move (stop GCP, final dump, drop and recreate the VPS database, restore, replace the uploads folder, verify per-table row counts and the upload file count are identical, install cron, switch DNS, `certbot --nginx`). Practical lessons: the GCP browser-SSH login user can differ between sessions and may not be able to read the app's home directory, so run `tar`/`find` on the uploads with `sudo` and check the archive is not 20 bytes before sending it; the app container must be stopped before `drop database ... with (force)`; and the three boot-time catch-up jobs the old in-process scheduler ran (`attendance-eod`, `birthday-check`, `crm-sync`) must be run once by hand after cutover with `sudo -u deploy_hrm /opt/pikorua-hrm/hostinger-cron.sh <job>`.
 
 Schedule a maintenance window. First take a fresh **off-VM** backup of GCP PostgreSQL and `apps/web/uploads`, and verify the archive can be listed/read. Stop writes on GCP (`sudo systemctl stop hrm`, after confirming the service name), then make a final PostgreSQL custom-format dump and copy the upload tree. The current GCP deploy script uses `/home/pruthvirajsinh_biz/pikorua-hrm`; verify the real `WorkingDirectory` in `systemctl cat hrm` before copying. One workable sequence, run on GCP then transferring the two files over authenticated SSH, is:
 
@@ -79,4 +103,4 @@ On every successful main CI run, GitHub builds/tests/transfers the new image. `h
 
 For an application rollback after a successful deploy, re-run the workflow for the desired known-good commit or transfer its image and call `hostinger-deploy.sh` with its immutable tag. The VPS deliberately does not retain a third old image; GitHub or an external image archive must supply it. **Database schema changes are not reversed automatically.** Restore a DB backup only for a separately planned data rollback.
 
-Back up PostgreSQL and `/opt/pikorua-hrm/uploads` nightly to off-VPS storage, encrypt the backup, and test restore periodically. Monitor `/api/health`, nginx, `docker logs pikorua-blue|green`, and cron output. Never run two in-process schedulers or expose the raw app ports publicly.
+Back up PostgreSQL and `/opt/pikorua-hrm/uploads` nightly to off-VPS storage, encrypt the backup, and test restore periodically. **Not yet in place:** only Hostinger's weekly VPS snapshot exists today (see "Production status"). Monitor `/api/health`, nginx, `docker logs pikorua-blue|green`, and cron output. Never run two in-process schedulers or expose the raw app ports publicly.

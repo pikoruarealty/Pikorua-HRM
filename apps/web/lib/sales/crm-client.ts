@@ -12,9 +12,11 @@ import type { CrmActivityRow } from "@/lib/sales/matching";
 // Two things about this endpoint that are NOT obvious and cost a session to
 // learn — do not re-derive them the hard way:
 //
-//  1. Access is IP-allowlisted to the production GCP VM. From a dev machine
-//     this returns 401, which looks exactly like a bad API key and is not.
-//     A 401 here is far more likely to be "wrong IP" than "wrong token".
+//  1. Access is IP-allowlisted on the CRM side (its HRM_ALLOWED_IPS setting;
+//     it listed the old GCP VM, and the Hostinger VPS must be added). A
+//     rejected IP returns the same 401 "Invalid HRM API authorization" as a
+//     bad key, so a 401 is ambiguous. Compare a hash of CRM_API_KEY with the
+//     CRM's own copy before blaming either (2026-10-04: the key was right).
 //  2. A rep with no activity comes back as an explicit all-zero row, not an
 //     omitted one. Present-and-zero means "confirmed zero"; absent means "no
 //     data". The sync must not conflate them.
@@ -115,7 +117,7 @@ export async function fetchActivity(from: string, to: string): Promise<CrmActivi
     const body = await res.text().catch(() => "");
     const hint =
       res.status === 401 || res.status === 403
-        ? " (the CRM is IP-allowlisted to the production VM — from anywhere else this is expected and does NOT mean the API key is wrong)"
+        ? " (the CRM allowlists caller IPs, so this server's outbound IP may be missing from its HRM_ALLOWED_IPS — or CRM_API_KEY may be wrong; the CRM cannot tell the two apart)"
         : "";
     throw new CrmSyncError(`CRM returned ${res.status}${hint}: ${body.slice(0, 300)}`, res.status);
   }

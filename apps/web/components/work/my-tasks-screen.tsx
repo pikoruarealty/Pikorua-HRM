@@ -11,6 +11,9 @@ import { DueDateBadge } from "@/components/work/due-date";
 import { WorkItemStatusBadge } from "@/components/work/status-badge";
 import { SelfLogForm } from "@/components/work/self-log-form";
 import { isMetricDepartment } from "@/lib/departments/type";
+import { formatDate } from "@/lib/format-date";
+import { cn } from "@/lib/utils";
+import { ChevronRight } from "lucide-react";
 
 type Me = { employee: { department: { typeKey: string } | null } | null };
 
@@ -26,6 +29,10 @@ type WorkItem = {
   currentValue?: string | null;
   reviewNote?: string | null;
   selfLogged?: boolean;
+  completedAt?: string | null;
+  submittedAt?: string | null;
+  reviewedAt?: string | null;
+  createdAt?: string | null;
 };
 
 function ExplainBlock({ workItemId }: { workItemId: string }) {
@@ -146,6 +153,96 @@ function WorkItemRow({
         </div>
       </div>
       <ExplainBlock workItemId={wi.id} />
+    </div>
+  );
+}
+
+/** A finished task. Collapsed it is one line; opening it shows everything the
+ *  active row shows (description, size, dates, the lead's sign-off note) — but
+ *  read-only, since there is nothing left to complete or update. */
+function CompletedRow({ wi }: { wi: WorkItem }) {
+  const [open, setOpen] = useState(false);
+  const size =
+    wi.mode === "atomic"
+      ? wi.taskPoints != null
+        ? `${wi.taskPoints} pts`
+        : "no points set"
+      : `${wi.currentValue ?? 0}/${wi.targetValue ?? "—"}`;
+
+  return (
+    <div className="rounded border text-sm">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="flex w-full items-center justify-between gap-3 p-3 text-left hover:bg-muted/30"
+      >
+        <span className="flex min-w-0 items-center gap-2">
+          <ChevronRight className={cn("size-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-90")} />
+          <span className="truncate text-muted-foreground">{wi.title}</span>
+        </span>
+        <span className="flex shrink-0 items-center gap-2">
+          {wi.completedAt && (
+            <span className="hidden text-xs text-muted-foreground sm:inline">{formatDate(wi.completedAt)}</span>
+          )}
+          <WorkItemStatusBadge status={wi.status} />
+        </span>
+      </button>
+      {open && (
+        <div className="flex flex-col gap-2 border-t px-3 py-3">
+          {wi.description ? (
+            <p className="whitespace-pre-wrap text-sm">{wi.description}</p>
+          ) : (
+            <p className="text-xs text-muted-foreground">No description.</p>
+          )}
+          <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-xs">
+            <dt className="text-muted-foreground">Type</dt>
+            <dd>
+              {wi.mode}
+              {wi.selfLogged ? " · logged by you" : ""}
+            </dd>
+            <dt className="text-muted-foreground">{wi.mode === "atomic" ? "Points" : "Progress"}</dt>
+            <dd>{size}</dd>
+            {wi.createdAt && (
+              <>
+                <dt className="text-muted-foreground">Created</dt>
+                <dd>{formatDate(wi.createdAt)}</dd>
+              </>
+            )}
+            {wi.dueDate && (
+              <>
+                <dt className="text-muted-foreground">Due</dt>
+                <dd>{formatDate(wi.dueDate)}</dd>
+              </>
+            )}
+            {wi.submittedAt && (
+              <>
+                <dt className="text-muted-foreground">Sent for review</dt>
+                <dd>{formatDate(wi.submittedAt)}</dd>
+              </>
+            )}
+            {wi.reviewedAt && (
+              <>
+                <dt className="text-muted-foreground">Reviewed</dt>
+                <dd>{formatDate(wi.reviewedAt)}</dd>
+              </>
+            )}
+            {wi.completedAt && (
+              <>
+                <dt className="text-muted-foreground">Completed</dt>
+                <dd>{formatDate(wi.completedAt)}</dd>
+              </>
+            )}
+          </dl>
+          {wi.reviewNote && (
+            <p className="rounded bg-muted/40 p-2 text-xs">
+              <span className="font-medium">Lead&apos;s note: </span>
+              {wi.reviewNote}
+            </p>
+          )}
+          <ExplainBlock workItemId={wi.id} />
+        </div>
+      )}
     </div>
   );
 }
@@ -277,10 +374,7 @@ export function MyTasksScreen() {
             <p className="text-sm text-muted-foreground">Nothing completed yet.</p>
           )}
           {completed.map((wi) => (
-            <div key={wi.id} className="flex items-center justify-between rounded border p-3 text-sm">
-              <span className="text-muted-foreground">{wi.title}</span>
-              <WorkItemStatusBadge status={wi.status} />
-            </div>
+            <CompletedRow key={wi.id} wi={wi} />
           ))}
         </CardContent>
       </Card>

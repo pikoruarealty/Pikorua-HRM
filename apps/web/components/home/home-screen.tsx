@@ -28,6 +28,7 @@ import { Button } from "@/components/ui/button";
 import { apiFetch } from "@/components/_lib/api";
 import { cn } from "@/lib/utils";
 import { AdminProgressPanel } from "@/components/home/admin-progress-panel";
+import { EventsThisWeekCard } from "@/components/home/events-this-week-card";
 import { SalesTeamProgressPanel } from "@/components/sales/sales-team-progress-panel";
 import { EmployeeAvatar } from "@/components/employees/employee-avatar";
 import { formatDate, formatTime } from "@/lib/format-date";
@@ -47,11 +48,6 @@ type Me = {
   } | null;
 };
 type Notification = { id: string; readAt: string | null };
-type TodayEvents = {
-  birthdays: { employeeId: string; fullName: string }[];
-  anniversaries: { employeeId: string; fullName: string }[];
-  events: { employeeId: string | null; fullName: string | null; title: string }[];
-};
 type WorkItem = { id: string; status: "pending" | "wip" | "in_review" | "completed" };
 type RequestRow = { id: string; status: string };
 type Payslip = { id: string; periodMonth: number; periodYear: number; status: string };
@@ -116,7 +112,6 @@ export function HomeScreen({
 }) {
   const [me, setMe] = useState<Me | null>(null);
   const [unread, setUnread] = useState(0);
-  const [events, setEvents] = useState<TodayEvents | null>(null);
   const { clockedIn, openSession } = useAttendanceStatus();
 
   // Individual-contributor data.
@@ -176,7 +171,6 @@ export function HomeScreen({
     apiFetch<{ notifications: Notification[] }>("/notifications").then((r) => {
       if (r.data) setUnread(r.data.notifications.filter((n) => !n.readAt).length);
     });
-    apiFetch<TodayEvents>("/events/today").then((r) => setEvents(r.data));
     apiFetch<Announcement[]>("/announcements").then((r) => setAnnouncements(r.data ?? []));
     apiFetch<Meeting[]>("/events/meetings").then((r) => setMeetings(r.data ?? []));
     apiFetch<PublishedPick[]>("/recognition/published").then((r) => setPublishedPicks(r.data ?? []));
@@ -190,7 +184,11 @@ export function HomeScreen({
     if (hasEmployee) {
       apiFetch<WorkItem[]>("/work-items/mine").then((r) => setTasks(r.data ?? []));
       apiFetch<RequestRow[]>("/requests").then((r) => setMyRequests(r.data ?? []));
-      apiFetch<Payslip[]>("/payslips").then((r) => setLatestPayslip(r.data?.[0] ?? null));
+      // Only HR still shows the latest-payslip card (everyone else gets the
+      // events card in that slot), so don't fetch it for them.
+      if (isFinance) {
+        apiFetch<Payslip[]>("/payslips").then((r) => setLatestPayslip(r.data?.[0] ?? null));
+      }
     }
 
     if (isLead || isFinance) {
@@ -216,12 +214,6 @@ export function HomeScreen({
       apiFetch<{ id: string; status: string }[]>("/work-units").then((r) => setWorkUnits(r.data ?? []));
     }
   }, [hasEmployee, isLead, isFinance, isAdmin]);
-
-  const celebrations = [
-    ...(events?.birthdays ?? []).map((b) => `🎉 ${b.fullName}'s birthday`),
-    ...(events?.anniversaries ?? []).map((a) => `🎊 ${a.fullName}'s work anniversary`),
-    ...(events?.events ?? []).map((e) => `📌 ${e.fullName ? `${e.fullName} — ` : ""}${e.title}`),
-  ];
 
   function dismissPick(id: string) {
     const next = [...dismissed, id];
@@ -272,19 +264,6 @@ export function HomeScreen({
           {me ? `Signed in as ${me.email} · ${humanizeRole(role)}` : "Loading…"}
         </p>
       </div>
-
-      {celebrations.length > 0 && (
-        <Card className="border-primary/40">
-          <CardContent className="flex flex-wrap items-center gap-3 py-4 text-sm">
-            <span className="font-medium">Today:</span>
-            {celebrations.map((c, i) => (
-              <Badge key={i} variant="secondary">
-                {c}
-              </Badge>
-            ))}
-          </CardContent>
-        </Card>
-      )}
 
       {visiblePicks.length > 0 && (
         <Card className="border-amber-400/50 bg-amber-50/50 dark:bg-amber-950/20">
@@ -403,6 +382,11 @@ export function HomeScreen({
           </div>
         </section>
       )}
+
+      {/* Admin/HR get the week's coming-up card right under the attendance rosters;
+          for everyone else it sits in the bottom row where the payslip card used to
+          be. It also carries today's celebrations (it replaced the "Today:" banner). */}
+      {isFinance && <EventsThisWeekCard />}
 
       {/* Approval/review oversight — Leads (team-scoped) and Admin/HR (whole
           company, via the same self-scoping APIs) both need this: it was
@@ -619,6 +603,8 @@ export function HomeScreen({
               </div>
             </CardContent>
           </Card>
+        ) : !isFinance ? (
+          <EventsThisWeekCard className="h-full" />
         ) : (
           hasEmployee && (
             <Panel title="Latest payslip" href="/payslips" linkLabel="All payslips">
