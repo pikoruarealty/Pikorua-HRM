@@ -5,6 +5,9 @@
 
 **Last updated:** 2026-10-04 — **HRM migrated from GCP to the Hostinger VPS and live at https://hrm.pikoruarealty.com. CRM sync is not working yet (CRM IP allowlist); only weekly VPS snapshots back it up.**
 
+### Deploy rolled back after HTTPS: post-switch nginx check fixed (2026-10-04, working tree — not yet pushed/deployed)
+A release failed with "Deployment failed; prior slot remains active" even though migrations ran and the new container was healthy. Cause (inferred from the log + the docs, then reproduced against a certbot-style nginx config — **not** confirmed on the VPS itself): `deploy/hostinger-deploy.sh`'s final check called `http://127.0.0.1/api/health`; after `certbot --nginx` port 80 only returns a bodiless 301, so `grep '"status":"ok"'` failed and the script rolled back. This was the first release since HTTPS went on (earlier deploys happened before certbot). Fix: the check now probes `https://<host>/api/health` with `--resolve <host>:443:127.0.0.1 --insecure`, retries 5×, and prints the HTTP status/body on failure (it used to be silent). Verified: `bash -n`, LF line endings, and the old/new check against a local nginx with a certbot-style 80→301 + 443 server (old fails, new passes, wrong route reports `HTTP 404`). **Not verified:** a real release on the VPS. Production was unaffected (old slot kept serving). Documented in DEPLOYMENT.md §4 and CLAUDE.md; `deploy/hostinger-nginx.conf` is now labelled as the pre-certbot template.
+
 ### Completed tasks openable, Admin paid-leave switch, device-day overwrite, "Events this week" (2026-10-04, working tree)
 Owner asks: (1) completed tasks can't be opened to see their details; (2) Admin can mark any unpaid-leave/absent day as paid leave; (3) editing attendance hit "This date is already synced from the biometric device. Pass override=true…" — let Admin edit attendance and times for any employee; (4) an "events this week" card in the overview, with dates.
 

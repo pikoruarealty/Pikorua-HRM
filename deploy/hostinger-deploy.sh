@@ -15,8 +15,9 @@ flock -n 9 || { echo "Another deployment is running" >&2; exit 1; }
 test -f "$env_file"
 test -d "$uploads"
 docker image inspect "$image" >/dev/null
-host_header="$(sed -n 's/^APP_BASE_URL=//p' "$env_file" | tail -n 1)"
-host_header="${host_header#*://}"
+base_url="$(sed -n 's/^APP_BASE_URL=//p' "$env_file" | tail -n 1)"
+scheme="${base_url%%://*}"
+host_header="${base_url#*://}"
 host_header="${host_header%%/*}"
 test -n "$host_header"
 
@@ -80,7 +81,33 @@ sudo systemctl reload nginx
 printf '%s\n' "$slot" > "$state"
 
 # Check through nginx after switching while the old app is still alive.
-curl --fail --silent --max-time 10 -H "Host: $host_header" http://127.0.0.1/api/health | grep -q '"status":"ok"'
+# Once certbot has set up HTTPS, nginx's port-80 server only answers with a 301
+# redirect (no body), so a plain-HTTP check can never see the health JSON and
+# would fail every release (it did, 2026-10-04). Probe the way real users reach
+# the site: HTTPS to this host, pinned to the local nginx with --resolve. -k
+# because this check asks "does nginx route to the new slot?", not "is the
+# certificate valid?" — an expiring cert is certbot's/monitoring's problem and
+# must not block (or roll back) an otherwise healthy release.
+if [[ "$scheme" == https ]]; then
+  check_url="https://$host_header/api/health"
+  check_args=(--insecure --resolve "$host_header:443:127.0.0.1")
+else
+  check_url="http://127.0.0.1/api/health"
+  check_args=(-H "Host: $host_header")
+fi
+via_nginx=false
+response=""
+for _ in {1..5}; do
+  response="$(curl --silent --max-time 10 "${check_args[@]}" -w '\nHTTP %{http_code}' "$check_url" || true)"
+  if grep -q '"status":"ok"' <<<"$response"; then via_nginx=true; break; fi
+  sleep 2
+done
+if [[ "$via_nginx" != true ]]; then
+  # --silent used to hide why this failed; say what nginx actually answered.
+  echo "Health check through nginx failed: $check_url" >&2
+  printf '%s\n' "$response" >&2
+  exit 1
+fi
 
 if [[ "$old_slot" == blue || "$old_slot" == green ]]; then
   docker rm -f "$old_name" >/dev/null

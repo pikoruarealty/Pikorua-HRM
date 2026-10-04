@@ -27,6 +27,7 @@ Production is the **Hostinger VPS** (`hrm.pikoruarealty.com`), not GCP. Read [do
 - `DEPLOY_TARGET` repo variable is `hostinger`. Don't set it to `gcp` (the shared `DEPLOY_*` secrets now point at the VPS). Pushing to `main` deploys to production once CI is green.
 - DB is host PostgreSQL **17** (CI uses `postgres:17`). Migrations run from the image against the live DB and must be backward compatible with the still-running old container.
 - The login cookie is `Secure` in production: test a deployment over HTTPS or an SSH tunnel to `localhost`, never plain HTTP to the VPS IP.
+- The deploy script's post-switch health check goes through nginx over **HTTPS** (`--resolve`), not `http://127.0.0.1` — certbot turned port 80 into a redirect, and the old plain-HTTP check made every release roll back (2026-10-04). A failed run's re-run won't pick up a script fix; push the fix to `main`. See DEPLOYMENT.md §4.
 - The CRM sync depends on the CRM's own IP allowlist (`HRM_ALLOWED_IPS`); a 401 can mean a missing IP as much as a bad key.
 
 ## Conventions
