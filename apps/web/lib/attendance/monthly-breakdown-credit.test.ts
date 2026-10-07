@@ -520,3 +520,45 @@ describe("randomised invariants (500 months)", () => {
     });
   }
 });
+
+describe("daysWorked and weeklyOffDays (monthly overview columns)", () => {
+  test("daysWorked = present + half×0.5 + compensation; weeklyOffDays = the calendar's weekly_off days", () => {
+    // June 2026, Sunday default off. Mon–Wed full, Thu half, and the second Sunday (14th)
+    // worked: that week's off was resolved elsewhere or the 14th is a comp day — either
+    // way the invariants below must hold against the same walk.
+    const attendanceByDate = new Map<string, Att>([
+      [day(1), full()],
+      [day(2), full()],
+      [day(3), full()],
+      [day(4), half()],
+      [day(8), full()],
+      [day(9), full()],
+      [day(10), full()],
+      [day(11), full()],
+      [day(12), full()],
+      [day(13), full()],
+      [day(14), full()],
+    ]);
+    const r = classifyMonth(MONTH, YEAR, fixed({ attendanceByDate }));
+    expect(r.daysWorked).toBe(r.presentDays + r.halfDays * 0.5 + r.compensationDays);
+    // 3 + 7 = 10 full days and 1 half day were worked, none lost or doubled.
+    expect(r.daysWorked).toBe(10 + 0.5);
+    expect(r.weeklyOffDays).toBe(r.days.filter((d) => d.status === "weekly_off").length);
+    expect(r.weeklyOffDays).toBeGreaterThan(0);
+  });
+
+  test("leave and holidays are paid but are not days worked", () => {
+    const r = classifyMonth(
+      MONTH,
+      YEAR,
+      fixed({
+        attendanceByDate: new Map<string, Att>([[day(1), full()]]),
+        holidayDates: new Set([day(2)]),
+        leaveByDate: leave({ [day(3)]: { paid: 1, unpaid: 0 } }),
+      }),
+    );
+    expect(r.daysWorked).toBe(1);
+    expect(r.holidayDays).toBe(1);
+    expect(r.paidLeaveDays).toBe(1);
+  });
+});

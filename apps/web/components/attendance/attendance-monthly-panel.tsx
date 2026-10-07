@@ -28,6 +28,9 @@ type Row = {
   unpaidLeaveDays: number;
   absentDays: number;
   compensationDays: number;
+  weeklyOffDays: number;
+  /** present + half×0.5 + compensation. */
+  daysWorked: number;
   workingDaysElapsed: number;
 };
 
@@ -76,6 +79,8 @@ export function AttendanceMonthlyPanel() {
         { label: "Unpaid leave", value: overview.totals.unpaidLeaveDays },
         { label: "Compensation", value: overview.totals.compensationDays },
         { label: "Holidays", value: overview.totals.holidayDays },
+        { label: "Weekly offs", value: overview.totals.weeklyOffDays },
+        { label: "Days worked", value: overview.totals.daysWorked },
       ]
     : [];
 
@@ -100,7 +105,7 @@ export function AttendanceMonthlyPanel() {
           <p className="text-sm text-muted-foreground">Loading…</p>
         ) : overview ? (
           <>
-            <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
+            <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-9">
               {tiles.map((t) => (
                 <div key={t.label} className="rounded-lg border p-3">
                   <dt className="text-xs text-muted-foreground">{t.label}</dt>
@@ -112,7 +117,8 @@ export function AttendanceMonthlyPanel() {
             </dl>
             <p className="text-xs text-muted-foreground">
               Sundays are treated as off unless an employee clocks in — that counts as a compensation
-              day instead of a normal present day. Saturdays are regular working days.
+              day instead of a normal present day. Saturdays are regular working days. Days worked =
+              present + half-days × 0.5 + compensation days (leave and holidays are paid, not worked).
             </p>
             {/* Phones: a card per person with the counts as small chips. */}
             <ul className="flex flex-col divide-y rounded-lg border md:hidden">
@@ -125,6 +131,9 @@ export function AttendanceMonthlyPanel() {
                     {r.team && <span className="shrink-0 text-xs text-muted-foreground">{r.team.name}</span>}
                   </div>
                   <div className="flex flex-wrap gap-1.5 text-xs">
+                    <span className="rounded-full border border-primary/40 px-2 py-0.5 font-medium">
+                      {r.daysWorked} worked
+                    </span>
                     <span className="rounded-full border px-2 py-0.5">{r.presentDays} present</span>
                     {r.halfDays > 0 && <span className="rounded-full border px-2 py-0.5">{r.halfDays} half</span>}
                     {r.absentDays > 0 && (
@@ -136,6 +145,7 @@ export function AttendanceMonthlyPanel() {
                     {r.unpaidLeaveDays > 0 && <span className="rounded-full border px-2 py-0.5">{r.unpaidLeaveDays} unpaid</span>}
                     {r.compensationDays > 0 && <span className="rounded-full border px-2 py-0.5">{r.compensationDays} comp</span>}
                     {r.holidayDays > 0 && <span className="rounded-full border px-2 py-0.5">{r.holidayDays} holiday</span>}
+                    {r.weeklyOffDays > 0 && <span className="rounded-full border px-2 py-0.5">{r.weeklyOffDays} weekly off</span>}
                   </div>
                 </li>
               ))}
@@ -153,6 +163,8 @@ export function AttendanceMonthlyPanel() {
                   <TableHead>Unpaid leave</TableHead>
                   <TableHead>Compensation</TableHead>
                   <TableHead>Holidays</TableHead>
+                  <TableHead>Weekly offs</TableHead>
+                  <TableHead title="Present + half-days × 0.5 + compensation days">Days worked</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -181,6 +193,8 @@ export function AttendanceMonthlyPanel() {
                     <TableCell>{r.unpaidLeaveDays}</TableCell>
                     <TableCell>{r.compensationDays}</TableCell>
                     <TableCell>{r.holidayDays}</TableCell>
+                    <TableCell>{r.weeklyOffDays}</TableCell>
+                    <TableCell className="font-semibold tabular-nums">{r.daysWorked}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>

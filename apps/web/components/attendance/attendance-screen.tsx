@@ -53,9 +53,12 @@ function LocationSelect({
   );
 }
 
-/** Employee pickers for manual entry: Admin has no attendance to enter. */
-function withoutExempt(list: { id: string; fullName: string; role?: string }[]) {
-  return list.filter((e) => !isAttendanceExemptRole(e.role)).map(({ id, fullName }) => ({ id, fullName }));
+/** Employee pickers for manual entry: Admin has no attendance to enter, and a
+ *  deactivated (soft-deleted) employee is no longer someone to record days for. */
+function withoutExempt(list: { id: string; fullName: string; role?: string; status?: string }[]) {
+  return list
+    .filter((e) => e.status !== "inactive" && !isAttendanceExemptRole(e.role))
+    .map(({ id, fullName }) => ({ id, fullName }));
 }
 
 type AttendanceRecord = {
@@ -356,7 +359,7 @@ function AttendanceTable({
                           </div>
                         )}
                         {canReview && (
-                          <div className="flex flex-wrap gap-1.5">
+                          <div className="flex flex-nowrap gap-1.5">
                             <IconActionButton
                               icon={editingId === r.id ? X : Pencil}
                               label={editingId === r.id ? "Close edit form" : "Edit record"}
@@ -412,8 +415,8 @@ function AttendanceTable({
                       <TableHead className="w-44">Clock in</TableHead>
                       <TableHead className="w-44">Clock out</TableHead>
                       <TableHead className="w-36">Hours</TableHead>
-                      <TableHead className="w-56">Status</TableHead>
-                      {canReview && <TableHead className="w-32">Actions</TableHead>}
+                      <TableHead className="w-48">Status</TableHead>
+                      {canReview && <TableHead className="w-44">Actions</TableHead>}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -480,8 +483,8 @@ function AttendanceTable({
                               </div>
                             </TableCell>
                             {canReview && (
-                              <TableCell>
-                                <div className="flex flex-wrap gap-1.5">
+                              <TableCell className="px-3">
+                                <div className="flex flex-nowrap gap-1.5">
                                   <IconActionButton
                                     icon={editingId === r.id ? X : Pencil}
                                     label={editingId === r.id ? "Close edit form" : "Edit record"}
@@ -909,7 +912,7 @@ function ManualRecordForm() {
 
   useEffect(() => {
     (async () => {
-      const res = await fetch("/api/v1/employees");
+      const res = await fetch("/api/v1/employees?status=active");
       const json = await res.json();
       if (json.data) setEmployees(withoutExempt(json.data));
     })();
@@ -1050,9 +1053,13 @@ function ManualRecordForm() {
         </div>
       )}
       {message && <p className="text-sm text-muted-foreground sm:col-span-2 lg:col-span-3">{message}</p>}
-      <Button type="submit" disabled={busy || !employeeId} className="w-fit">
-        {busy ? "Saving…" : "Save manual record"}
-      </Button>
+      {/* Always its own row under the fields, so it doesn't jump below the
+          reason box once an error/message row appears. */}
+      <div className="sm:col-span-2 lg:col-span-3">
+        <Button type="submit" disabled={busy || !employeeId} className="w-fit">
+          {busy ? "Saving…" : "Save manual record"}
+        </Button>
+      </div>
     </form>
   );
 }
@@ -1108,7 +1115,7 @@ function BulkManualRecordForm() {
 
   useEffect(() => {
     (async () => {
-      const res = await fetch("/api/v1/employees");
+      const res = await fetch("/api/v1/employees?status=active");
       const json = await res.json();
       if (json.data) setEmployees(withoutExempt(json.data));
     })();

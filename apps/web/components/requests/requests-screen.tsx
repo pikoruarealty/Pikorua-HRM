@@ -92,7 +92,9 @@ export function RequestsScreen() {
   const [editSubmitting, setEditSubmitting] = useState(false);
 
   // Submit form
-  const [type, setType] = useState("leave_casual");
+  // Unpaid is the default: paid leave (casual/sick) is something the employee
+  // picks on purpose, never what an untouched form submits (2026-10-07).
+  const [type, setType] = useState("leave_unpaid");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [halfDay, setHalfDay] = useState(false);

@@ -61,6 +61,13 @@ export type MonthlyBreakdown = {
    *  compensation — the exact sum of `days[].credit` and the numerator of
    *  lib/payroll/calc.ts's earned-pay formula. */
   payableDays: number;
+  /** Days actually worked: present + half×0.5 + compensation (a day worked on the
+   *  weekly off or flagged as compensation is still a day at work). Leave and
+   *  holidays are paid but not worked, so they are not in here. */
+  daysWorked: number;
+  /** Weekly offs taken in the walked span (days[] entries with status
+   *  `weekly_off`). A flexible-schedule employee has no fixed off, so 0. */
+  weeklyOffDays: number;
   /** Days credited against `workingDaysElapsed` for the performance score:
    *  present + half×0.5 + holiday + paid leave, with a part-timer's weeks capped at
    *  their quota (extra days are compensation, not a better attendance score). */
@@ -215,6 +222,8 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
     compensationDays: 0,
     workingDaysElapsed: 0,
     payableDays: 0,
+    daysWorked: 0,
+    weeklyOffDays: 0,
     creditedWorkingDays: 0,
     absentDates: [],
     days: [],
@@ -563,6 +572,8 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
  *  else, so they cannot drift from the days they summarise. */
 function finish(result: MonthlyBreakdown, isFlexible: boolean, flexibleCredited: number): MonthlyBreakdown {
   result.payableDays = result.days.reduce((sum, d) => sum + d.credit, 0);
+  result.daysWorked = result.presentDays + result.halfDays * 0.5 + result.compensationDays;
+  result.weeklyOffDays = result.days.filter((d) => d.status === "weekly_off").length;
   result.creditedWorkingDays = isFlexible
     ? flexibleCredited
     : result.presentDays + result.halfDays * 0.5 + result.holidayDays + result.paidLeaveDays;

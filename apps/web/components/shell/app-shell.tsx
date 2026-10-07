@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { visibleGroups, type NavCtx } from "@/components/shell/nav-config";
 import { useTheme } from "@/lib/hooks/use-theme";
+import { useBodyScrollLock } from "@/lib/hooks/use-body-scroll-lock";
 import { EnablePushBanner } from "@/components/notifications/enable-push-banner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { syncPushRegistration } from "@/lib/firebase/messaging-client";
@@ -51,7 +52,7 @@ function NavContent({
   return (
     <nav
       ref={navRef as React.RefObject<HTMLElement>}
-      className="scrollbar-thin flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-3 py-4"
+      className="scrollbar-thin flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto overscroll-contain px-3 py-4"
     >
       {groups.map((group, gi) => (
         <div key={gi} className="flex flex-col gap-1">
@@ -273,6 +274,27 @@ export function AppShell({
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [unread, setUnread] = useState(0);
+  const mainColumnRef = useRef<HTMLDivElement>(null);
+
+  // While the drawer is open the page behind it must not scroll or take focus:
+  // freeze the body, make the main column inert (no taps, no tabbing into it),
+  // and close the drawer if the window grows past the breakpoint where the
+  // drawer no longer exists (rotating a tablet), so neither lock can stick.
+  useBodyScrollLock(open);
+  useEffect(() => {
+    const column = mainColumnRef.current;
+    if (!column) return;
+    if (open) column.setAttribute("inert", "");
+    else column.removeAttribute("inert");
+    return () => column.removeAttribute("inert");
+  }, [open]);
+  useEffect(() => {
+    if (!open) return;
+    const mq = window.matchMedia("(min-width: 768px)");
+    const onChange = () => mq.matches && setOpen(false);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, [open]);
 
   // Devices that already opted in: re-attach the foreground listener and
   // re-register if the server lost this browser's token (see
@@ -316,12 +338,12 @@ export function AppShell({
 
       {/* Mobile drawer */}
       {open && (
-        <div className="fixed inset-0 z-40 md:hidden">
+        <div className="fixed inset-x-0 top-0 z-40 h-[100dvh] md:hidden">
           <div
-            className="absolute inset-0 animate-in fade-in bg-slate-950/60 backdrop-blur-sm duration-200"
+            className="absolute inset-0 animate-in fade-in touch-none bg-slate-950/60 backdrop-blur-sm duration-200"
             onClick={() => setOpen(false)}
           />
-          <aside className="absolute inset-y-0 left-0 w-72 animate-in slide-in-from-left overflow-hidden border-r border-sidebar-border shadow-xl duration-200 ease-out">
+          <aside className="absolute inset-y-0 left-0 w-72 max-w-[85vw] animate-in slide-in-from-left overflow-hidden overscroll-contain border-r border-sidebar-border shadow-xl duration-200 ease-out">
             <button
               onClick={() => setOpen(false)}
               className="absolute right-3 top-4 z-10 rounded-md p-1.5 text-sidebar-muted transition-colors hover:text-white active:scale-90"
@@ -343,7 +365,7 @@ export function AppShell({
       )}
 
       {/* Main column */}
-      <div className="flex min-h-[100dvh] flex-col md:pl-64">
+      <div ref={mainColumnRef} className="flex min-h-[100dvh] flex-col md:pl-64">
         {/* Mobile top bar */}
         <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b bg-background/80 px-4 backdrop-blur md:hidden">
           <Button variant="outline" size="icon" onClick={() => setOpen(true)} aria-label="Open menu">

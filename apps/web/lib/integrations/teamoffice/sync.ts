@@ -28,6 +28,10 @@ async function getOrCreateCursor() {
 }
 
 export type DeviceSyncResult = {
+  /** Cursor sent to the vendor, and the one it answered with — lets a manual run
+   *  show at a glance whether the vendor is returning anything new. */
+  lastRecord: string;
+  maxRecord: string | null;
   punchesFetched: number;
   punchesIngested: number;
   daysReconciled: number;
@@ -94,6 +98,8 @@ export async function runDeviceSync(): Promise<DeviceSyncResult> {
   }
 
   return {
+    lastRecord,
+    maxRecord,
     punchesFetched: punches.length,
     punchesIngested,
     daysReconciled: outcomes.filter((o) => o.status === "reconciled").length,

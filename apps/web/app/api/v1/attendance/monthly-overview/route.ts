@@ -44,6 +44,8 @@ export async function GET(req: Request) {
       acc.unpaidLeaveDays += r.unpaidLeaveDays;
       acc.absentDays += r.absentDays;
       acc.compensationDays += r.compensationDays;
+      acc.weeklyOffDays += r.weeklyOffDays;
+      acc.daysWorked += r.daysWorked;
       return acc;
     },
     {
@@ -54,6 +56,8 @@ export async function GET(req: Request) {
       unpaidLeaveDays: 0,
       absentDays: 0,
       compensationDays: 0,
+      weeklyOffDays: 0,
+      daysWorked: 0,
     },
   );
 

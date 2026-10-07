@@ -97,6 +97,26 @@ Verify row counts for users, employees, work items, attendance records, point le
 
 The first data move needs a write freeze because this project has one writable PostgreSQL database and local uploads, with no replication or dual-write path. Subsequent blue-green **app** releases do not need that freeze. Prisma migrations in app releases must be backward compatible with the old app during the overlap; destructive migrations need a separate staged release.
 
+## Verifying device sync (TeamOffice) on the VPS
+
+Host cron calls `/api/v1/cron/device-sync` every 2 minutes between 07:00 and 22:59 IST. Since 2026-10-07 each run writes a line to `/opt/pikorua-hrm/cron.log` (a deploy ships the script); on a VPS that has not had that deploy yet, use step 3 to see what a run returns.
+
+1. **Is cron running the job?** `cat /etc/cron.d/pikorua-hrm` (must exist, root-owned, mode 644, no `.` in the name) and `systemctl status cron`; `journalctl -u cron --since "30 min ago" | grep pikorua-hrm` (or `grep CRON /var/log/syslog`). No lines means cron is not firing.
+2. **What did recent runs return?** `tail -n 30 /opt/pikorua-hrm/cron.log`. `FAILED: HTTP 401` = `CRON_SECRET` differs between `app.env` and the running container; `HTTP 500 ... TeamOffice ...` = the vendor call failed (credentials, IP block, timeout); `curl exit 7` = the active slot's port is not listening; `SKIPPED` = `active-slot` is wrong.
+3. **Run it by hand and read the answer** (works before the logging deploy):
+   ```bash
+   cd /opt/pikorua-hrm
+   slot=$(cat active-slot); port=$([ "$slot" = blue ] && echo 3001 || echo 3002)
+   secret=$(sed -n 's/^CRON_SECRET=//p' app.env | tail -n 1)
+   curl -sS -i -X POST -H "Authorization: Bearer $secret" "http://127.0.0.1:$port/api/v1/cron/device-sync"
+   ```
+   200 with `punchesFetched: N` means the vendor answered (`lastRecord`/`maxRecord` are only in builds after 2026-10-07); `punchesFetched: 0` while the TeamOffice portal shows new punches points at the cursor (step 5) or the vendor account.
+4. **App log:** `docker logs --since 2h pikorua-$(cat /opt/pikorua-hrm/active-slot) 2>&1 | grep -i teamoffice | tail -40` — "polled TeamOffice" lines show fetched counts; errors show the vendor's reason.
+5. **Database:** `sudo -u postgres psql pikorua_hrm -c "select last_record, updated_at from device_sync_cursor;" -c "select count(*), max(punch_time), max(synced_at), count(*) filter (where reconciled_at is null) as unreconciled from device_punch_raw;"` — `max(synced_at)` is the last time a punch was ingested; `unreconciled > 0` with mapped codes means reconcile is failing (look for "reconciliation failed" in the app log).
+6. **Credentials present (without printing them):** `grep -c '^TEAM_OFFICE_' /opt/pikorua-hrm/app.env` should print 3.
+
+A punch is never lost while the sync is down: the cursor only advances after a successful ingest, so a later run fetches everything since.
+
 ## 4. Routine release and rollback
 
 On every successful main CI run, GitHub builds/tests/transfers the new image. `hostinger-deploy.sh` migrates, starts the inactive slot, waits for a healthy DB response, switches nginx, checks the response through nginx, then removes the old slot and image. A failed candidate leaves the old slot serving. The active image tag is the exact 40-character commit SHA in `/opt/pikorua-hrm/active-slot` and `docker inspect`; `docker ps --filter name=pikorua-` shows the current slot.
