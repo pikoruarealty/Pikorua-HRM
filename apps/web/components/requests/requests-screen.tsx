@@ -48,6 +48,7 @@ const TYPE_LABELS: Record<string, string> = {
   reimbursement: "Reimbursement",
   wfh: "Work from home",
   other: "Other",
+  balance_day: "Balance day",
 };
 
 function dayTypeLabel(t: string): string {
@@ -510,6 +511,7 @@ export function RequestsScreen() {
                   <SelectItem value="leave_sick">Sick leave</SelectItem>
                   <SelectItem value="leave_unpaid">Unpaid leave</SelectItem>
                   <SelectItem value="reimbursement">Reimbursement</SelectItem>
+                  <SelectItem value="balance_day">Balance day</SelectItem>
                 </SelectContent>
               </Select>
             </div>

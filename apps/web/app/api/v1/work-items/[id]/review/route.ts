@@ -5,7 +5,7 @@ import { isFinanceRole } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { Prisma, WorkItemStatus } from "@prisma/client";
 import { notifyReviewAccepted, notifyReviewRejected } from "@/lib/work/notify";
-import { maxAwardablePoints } from "@/lib/work/review";
+import { maxAwardablePoints, reviewCreditDate } from "@/lib/work/review";
 import { audit, clientIp } from "@/lib/audit";
 
 // POST /api/v1/work-items/:id/review — the Lead side of tiered point crediting
@@ -157,8 +157,11 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     return ok(updated);
   }
 
-  // Accept. The ledger's unique(work_item_id) constraint is still the real
-  // guard — if this races another crediting path, the loser rolls back whole.
+  // Accept. The task counts for the day it was SUBMITTED, not the day it was
+  // approved (reviewCreditDate); `reviewedAt` still records the approval itself.
+  // The ledger's unique(work_item_id) constraint is still the real guard — if this
+  // races another crediting path, the loser rolls back whole.
+  const creditedOn = reviewCreditDate(true, workItem.submittedAt, now);
   let updated;
   try {
     [updated] = await prisma.$transaction([
@@ -166,14 +169,14 @@ export async function POST(req: Request, { params }: { params: { id: string } })
         where: { id: workItem.id },
         data: {
           status: WorkItemStatus.completed,
-          completedAt: now,
+          completedAt: creditedOn,
           reviewedBy: session.employeeId,
           reviewedAt: now,
           reviewNote: note ?? null,
         },
       }),
       prisma.employeePointLedger.create({
-        data: { employeeId: workItem.assignedTo, workItemId: workItem.id, points: awarded },
+        data: { employeeId: workItem.assignedTo, workItemId: workItem.id, points: awarded, creditedAt: creditedOn },
       }),
     ]);
   } catch (err) {
@@ -194,6 +197,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       status: updated.status,
       assigneeId: workItem.assignedTo,
       pointsCredited: awarded,
+      creditedOn: creditedOn.toISOString(),
       nominalPoints: nominal,
       note: note ?? null,
     },

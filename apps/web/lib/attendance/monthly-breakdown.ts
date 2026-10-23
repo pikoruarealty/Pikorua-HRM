@@ -50,6 +50,13 @@ const ALL_LEAVE_TYPES: RequestType[] = [RequestType.leave_casual, RequestType.le
 // 60 days. It is pay-neutral: present and compensation have always been worth one
 // day each, so `payableDays`/`daysWorked` do not move. `compensationDays` now
 // counts only a part-timer's over-quota days (paid, but no balance is earned).
+//
+// 2026-10-24: a balance day can be USED on purpose for one absent / unpaid-leave day
+// (`balanceDates`, from compensation credits with `applied`). That day is then a paid
+// day shown as `paid_leave` with note `balance`, counted in `paidLeaveDays` (so pay
+// and every total move exactly as for any paid leave) and in `balanceDays`. A balance
+// day only ever covers a day with nothing worked and no paid leave on it — it fills
+// the room that would otherwise be unpaid leave or absence, never a worked day.
 
 export type MonthlyBreakdown = {
   presentDays: number;
@@ -57,6 +64,9 @@ export type MonthlyBreakdown = {
   holidayDays: number;
   /** Paid leave in days — fractional when half-day leave is involved. */
   paidLeaveDays: number;
+  /** Of `paidLeaveDays`, the days covered by a balance day used on purpose
+   *  (compensation credit). Not an extra count: already inside `paidLeaveDays`. */
+  balanceDays: number;
   /** Unpaid leave in days — fractional when half-day leave is involved. */
   unpaidLeaveDays: number;
   /** Absent in days. Fractional for half a day of leave with the rest unworked, and
@@ -126,8 +136,9 @@ export type ClassifiedDay = {
    *    come, so it can flip back to absent;
    *  - declared_unpaid: the employee switched an automatic weekly off to unpaid;
    *  - advance: a day worked in advance (weekly off / flagged) — shown as present,
-   *    and it earned a balance day. */
-  note?: "auto_off" | "provisional_off" | "declared_unpaid" | "advance";
+   *    and it earned a balance day;
+   *  - balance: an absent / unpaid-leave day covered by a balance day used on purpose. */
+  note?: "auto_off" | "provisional_off" | "declared_unpaid" | "advance" | "balance";
   /** What the day is worth toward pay, in days (0, 0.5, 1). */
   credit: number;
   /** Leave applied to this day, in days — present only when > 0. A half-day leave
@@ -169,6 +180,8 @@ type MonthLookups = {
   dateOfJoining?: Date | null;
   /** Days the employee switched from a weekly off to unpaid leave themselves. */
   declaredUnpaidDates?: Set<string>;
+  /** Days covered by a balance day used on purpose (fixed-schedule employees). */
+  balanceDates?: Set<string>;
   /** Overrides "today" — for tests; defaults to the real date. */
   today?: Date;
 };
@@ -220,11 +233,20 @@ function workedCredit(attendance: DayAttendance | undefined): number {
  *  a day worked half is half a day of leave, and a day worked in full needs none.
  *  Paid is applied before unpaid. This is what stops a day being counted as more
  *  than one day however many things touch it. */
-function applyLeave(worked: number, leave: LeaveDayEntry | undefined): { paid: number; unpaid: number } {
+function applyLeave(
+  worked: number,
+  leave: LeaveDayEntry | undefined,
+  /** A balance day was used on this date. */
+  balance = false,
+): { paid: number; unpaid: number; balance: number } {
   const room = Math.max(0, 1 - worked);
   const paid = Math.min(leave?.paid ?? 0, room);
-  const unpaid = Math.min(leave?.unpaid ?? 0, room - paid);
-  return { paid, unpaid };
+  // A balance day covers a whole day of nothing: not a day already worked at all or
+  // already part-covered by paid leave. It takes the room before unpaid leave does
+  // (using one on an unpaid-leave day is the point), so the day ends up paid.
+  const bal = balance && worked === 0 && paid === 0 ? room : 0;
+  const unpaid = Math.min(leave?.unpaid ?? 0, room - paid - bal);
+  return { paid, unpaid, balance: bal };
 }
 
 export function classifyMonth(month: number, year: number, lookups: MonthLookups): MonthlyBreakdown {
@@ -233,6 +255,7 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
     halfDays: 0,
     holidayDays: 0,
     paidLeaveDays: 0,
+    balanceDays: 0,
     unpaidLeaveDays: 0,
     absentDays: 0,
     compensationDays: 0,
@@ -252,6 +275,7 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
   if (through === 0) return result;
   const todayKey = dateKey(new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())));
   const declaredUnpaid = lookups.declaredUnpaidDates ?? new Set<string>();
+  const balanceDates = lookups.balanceDates ?? new Set<string>();
 
   const leaveFor = (key: string): LeaveDayEntry | undefined => {
     const entry = lookups.leaveByDate?.get(key);
@@ -261,6 +285,8 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
     return isPaidLeaveType(legacy) ? { paid: 1, unpaid: 0 } : { paid: 0, unpaid: 1 };
   };
   const hasLeave = (key: string) => {
+    // A balance day used on the date explains it exactly as approved leave does.
+    if (balanceDates.has(key)) return true;
     const e = leaveFor(key);
     return !!e && e.paid + e.unpaid > 0;
   };
@@ -372,7 +398,8 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
       // A day the employee switched from an automatic weekly off to unpaid is an
       // unpaid day like any other — unless real leave already covers it.
       const leave = leaveFor(key) ?? (declared ? { paid: 0, unpaid: 1 } : undefined);
-      const { paid, unpaid } = applyLeave(worked, leave);
+      const { paid: paidLeave, unpaid, balance: bal } = applyLeave(worked, leave, balanceDates.has(key));
+      const paid = paidLeave + bal;
       // Only a day with nothing worked can be absent; a short day is a half-day,
       // not "half absent".
       let absent = worked === 0 ? 1 - paid - unpaid : 0;
@@ -381,6 +408,7 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
       if (pendingToday) absent = 0;
 
       result.paidLeaveDays += paid;
+      result.balanceDays += bal;
       result.unpaidLeaveDays += unpaid;
       result.absentDays += absent;
       const leaveFields = {
@@ -401,6 +429,7 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
           credit: paid,
           ...leaveFields,
           ...(absent > 0 ? { absentPart: absent } : {}),
+          ...(bal > 0 ? { note: "balance" as const } : {}),
         });
       } else if (unpaid > 0) {
         result.days.push({
@@ -761,7 +790,7 @@ export async function getMonthlyAttendanceBreakdown(
   const periodEnd = new Date(Date.UTC(year, month, 1));
   const span = weekSpan(periodStart, periodEnd);
 
-  const [records, leaves, holidays, offDayContext, declared] = await Promise.all([
+  const [records, leaves, holidays, offDayContext, declared, balanceRows] = await Promise.all([
     prisma.attendanceRecord.findMany({
       where: {
         employeeId,
@@ -798,6 +827,10 @@ export async function getMonthlyAttendanceBreakdown(
       where: { employeeId, date: { gte: span.start, lt: span.endExclusive } },
       select: { date: true },
     }),
+    prisma.compensationCredit.findMany({
+      where: { employeeId, applied: true, consumedForDate: { gte: span.start, lt: span.endExclusive } },
+      select: { consumedForDate: true },
+    }),
   ]);
 
   const attendanceByDate = new Map<string, DayAttendance>();
@@ -811,6 +844,7 @@ export async function getMonthlyAttendanceBreakdown(
     leaveByDate: buildLeaveByDate(leaves, span),
     holidayDates,
     declaredUnpaidDates,
+    balanceDates: new Set(balanceRows.flatMap((b) => (b.consumedForDate ? [dateKey(b.consumedForDate)] : []))),
     ...offDayContext,
   });
 }
@@ -837,7 +871,7 @@ export async function getMonthlyAttendanceBreakdownForAllEmployees(
   const periodEnd = new Date(Date.UTC(year, month, 1));
   const span = weekSpan(periodStart, periodEnd);
 
-  const [employees, records, leaves, holidays, moves, declared] = await Promise.all([
+  const [employees, records, leaves, holidays, moves, declared, balanceRows] = await Promise.all([
     prisma.employee.findMany({
       where: { status: "active", role: { notIn: ATTENDANCE_EXEMPT_ROLES } },
       select: {
@@ -893,7 +927,18 @@ export async function getMonthlyAttendanceBreakdownForAllEmployees(
       where: { date: { gte: span.start, lt: span.endExclusive } },
       select: { employeeId: true, date: true },
     }),
+    prisma.compensationCredit.findMany({
+      where: { applied: true, consumedForDate: { gte: span.start, lt: span.endExclusive } },
+      select: { employeeId: true, consumedForDate: true },
+    }),
   ]);
+  const balanceByEmployee = new Map<string, Set<string>>();
+  for (const b of balanceRows) {
+    if (!b.consumedForDate) continue;
+    const set = balanceByEmployee.get(b.employeeId) ?? new Set<string>();
+    set.add(dateKey(b.consumedForDate));
+    balanceByEmployee.set(b.employeeId, set);
+  }
   const declaredByEmployee = new Map<string, Set<string>>();
   for (const d of declared) {
     const s = declaredByEmployee.get(d.employeeId) ?? new Set<string>();
@@ -938,6 +983,7 @@ export async function getMonthlyAttendanceBreakdownForAllEmployees(
       requiredDaysPerWeek: e.requiredDaysPerWeek,
       dateOfJoining: e.dateOfJoining,
       declaredUnpaidDates: declaredByEmployee.get(e.id),
+      balanceDates: balanceByEmployee.get(e.id),
     });
     // The day-by-day list is for one employee's calendar; the company-wide
     // table only needs the counts, so it isn't shipped per row.

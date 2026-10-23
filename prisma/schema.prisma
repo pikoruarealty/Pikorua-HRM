@@ -165,6 +165,10 @@ enum RequestType {
   reimbursement
   wfh
   other
+  // 2026-10-24: ask to use a balance day (compensation credit) on one absent /
+  // unpaid-leave day. dateFrom = dateTo = that day; Admin/HR approve it like any
+  // request and the credit is spent on approval. See lib/attendance/balance-day.ts.
+  balance_day
 }
 
 enum RequestStatus {
@@ -870,6 +874,15 @@ model CompensationCredit {
   // — a missed in-office day is made up in the office only. See
   // lib/attendance/compensation-credits.ts (canCreditCover).
   workLocation         WorkLocation     @default(office) @map("work_location")
+  // True when this credit was USED ON PURPOSE for one specific day (the employee,
+  // or Admin/HR, pressed "use a balance day") rather than auto-redeemed by a
+  // payslip. consumed_at / consumed_for_date are set the same way, so the credit
+  // is spent either way; `applied` is what makes attendance count that day as
+  // covered right away (lib/attendance/monthly-breakdown.ts) and stops a
+  // payslip's rollback from un-spending it. Undone with DELETE /attendance/balance-day.
+  applied              Boolean          @default(false)
+  appliedByUserId      String?          @map("applied_by_user_id") @db.Uuid
+  appliedAt            DateTime?        @map("applied_at") @db.Timestamptz(6)
   createdAt            DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
 
   @@index([employeeId, consumedAt])

@@ -7,6 +7,7 @@ import { prisma } from "@/lib/db/prisma";
 type Db = typeof prisma | Prisma.TransactionClient;
 import { addDays, weekStartOf } from "@/lib/attendance/week";
 import { getMonthlyAttendanceBreakdown } from "@/lib/attendance/monthly-breakdown";
+import { isFixedSchedule } from "@/lib/attendance/weekly-off";
 import { getWeekOff } from "@/lib/attendance/weekly-off";
 import { periodBounds } from "@/lib/requests/leave-math";
 import { splitHoursByLocation } from "@/lib/attendance/calendar";
@@ -57,6 +58,13 @@ import { splitHoursByLocation } from "@/lib/attendance/calendar";
 // Where the work happened matters (2026-10-24, owner rule): "in-office days can be
 // compensated in office only, but WFH can be compensated both ways, in office and
 // WFH later too."
+// 8. (2026-10-24) A credit can also be USED ON PURPOSE for one specific day —
+//    POST /attendance/balance-day by the employee (or Admin/HR) — instead of waiting
+//    for a payslip to redeem it. That sets consumed_at / consumed_for_date like a
+//    redemption and `applied = true`; attendance then counts the day as covered
+//    straight away (monthly-breakdown.ts `balanceDates`). Same eligibility as
+//    point 7 (window, office/WFH rule); only a whole absent / unpaid-leave day of a
+//    fixed-schedule employee, already over, in a month with no payslip yet.
 // 7. Each credit carries the location of the day that earned it. A day to be
 //    covered is an IN-OFFICE day unless an approved work-from-home request covers
 //    it (then it is a WFH day). An OFFICE credit covers either kind of day; a WFH
@@ -330,7 +338,7 @@ export function allocateCompensationCredits(
 /** Dates in [start, end] covered by an APPROVED work-from-home request — the days
  *  an employee was expected to work from home, which a credit of either location
  *  can cover. A request without a date range covers nothing here. */
-async function loadWfhRequestDates(employeeId: string, start: Date, end: Date): Promise<Set<string>> {
+export async function loadWfhRequestDates(employeeId: string, start: Date, end: Date): Promise<Set<string>> {
   const requests = await prisma.request.findMany({
     where: {
       employeeId,
@@ -426,33 +434,67 @@ export type BalanceCredit = {
   expiresAt: string;
   workLocation: WorkLocation;
   /** available: unspent and usable; covering: it would cover `coversDate` in the
-   *  month asked about; used: spent by a payslip; expired: lapsed unspent (it
-   *  tops up the leave balance instead). */
+   *  month asked about when a payslip is generated; used: spent (by a payslip, or
+   *  on purpose — see `applied`); expired: lapsed unspent (it tops up the leave
+   *  balance instead). */
   status: "available" | "covering" | "used" | "expired";
   coversDate?: string;
   coversKind?: CompensationRedemption["kind"];
+  /** Used on purpose for `coversDate` (can be undone while the month has no payslip). */
+  applied?: boolean;
+};
+
+/** A day a balance day could be used on: whole, over, and nothing worked or paid. */
+export type BalanceEligibleDay = {
+  date: string;
+  kind: "absence" | "unpaid_leave";
+  location: WorkLocation;
+  /** A balance-day request for this day is already waiting for Admin/HR. */
+  pending: boolean;
 };
 
 const dayKey = (d: Date) => d.toISOString().slice(0, 10);
 
 /** The employee's balance days (compensation credits) for display: the open ones
  *  — with the absent/unpaid day each WOULD cover in `month`, by the same
- *  allocator a payslip uses — plus recent spent/expired ones for context. */
+ *  allocator a payslip uses — plus recent spent/expired ones for context, and the
+ *  days one could be used on right now (`eligibleDays`). */
 export async function getCompensationBalance(
   employeeId: string,
   month: number,
   year: number,
   now: Date = new Date(),
-): Promise<{ availableCount: number; credits: BalanceCredit[] }> {
+): Promise<{ availableCount: number; credits: BalanceCredit[]; eligibleDays: BalanceEligibleDay[] }> {
   const since = new Date(now.getTime() - 120 * MS_PER_DAY);
-  const [rows, redemptions] = await Promise.all([
+  const { start: periodStart, lastDay: periodLastDay } = periodBounds(month, year);
+  const [rows, redemptions, breakdown, employee, wfhDates, payslip, pendingRequests] = await Promise.all([
     prisma.compensationCredit.findMany({
       where: { employeeId, OR: [{ consumedAt: null, expiresAt: { gte: since } }, { consumedAt: { gte: since } }] },
       orderBy: { earnedDate: "desc" },
       take: 30,
     }),
     computeCompensationRedemption(employeeId, month, year),
+    getMonthlyAttendanceBreakdown(employeeId, month, year),
+    prisma.employee.findUnique({
+      where: { id: employeeId },
+      select: { employmentType: true, requiredDaysPerWeek: true },
+    }),
+    loadWfhRequestDates(employeeId, periodStart, periodLastDay),
+    prisma.payslip.findUnique({
+      where: { employeeId_periodYear_periodMonth: { employeeId, periodYear: year, periodMonth: month } },
+      select: { id: true },
+    }),
+    prisma.request.findMany({
+      where: {
+        employeeId,
+        type: RequestType.balance_day,
+        status: RequestStatus.pending,
+        dateFrom: { gte: periodStart, lte: periodLastDay },
+      },
+      select: { dateFrom: true },
+    }),
   ]);
+  const pendingDates = new Set(pendingRequests.flatMap((r) => (r.dateFrom ? [dayKey(r.dateFrom)] : [])));
   const covering = new Map(redemptions.map((r) => [r.creditId, r]));
 
   const credits: BalanceCredit[] = rows.map((c) => {
@@ -466,6 +508,7 @@ export async function getCompensationBalance(
       return {
         ...base,
         status: "used" as const,
+        applied: c.applied,
         ...(c.consumedForDate ? { coversDate: dayKey(c.consumedForDate) } : {}),
       };
     }
@@ -475,7 +518,41 @@ export async function getCompensationBalance(
       ? { ...base, status: "covering" as const, coversDate: dayKey(r.date), coversKind: r.kind }
       : { ...base, status: "available" as const };
   });
-  return { availableCount: credits.filter((c) => c.status === "available" || c.status === "covering").length, credits };
+
+  // Days a balance day can be used on: whole absent / unpaid-leave days that are
+  // over, for a fixed-schedule employee, in a month with no payslip — and only those
+  // some open credit can actually cover (window + office/WFH rule).
+  const open = rows.filter((c) => !c.consumedAt && c.expiresAt.getTime() >= now.getTime());
+  const eligibleDays: BalanceEligibleDay[] = [];
+  if (employee && isFixedSchedule(employee) && !payslip) {
+    for (const d of breakdown.days) {
+      if (d.absentPart != null && d.absentPart > 0) continue;
+      const wholeUnpaid = d.status === "unpaid_leave" && d.leaveUnpaid === 1;
+      if (d.status !== "absent" && !wholeUnpaid) continue;
+      const location = wfhDates.has(d.date) ? WorkLocation.wfh : WorkLocation.office;
+      const date = new Date(`${d.date}T00:00:00.000Z`);
+      const usable = open.some(
+        (c) =>
+          c.earnedDate.getTime() <= date.getTime() &&
+          date.getTime() <= c.expiresAt.getTime() &&
+          canCreditCover(c.workLocation, location),
+      );
+      if (usable) {
+        eligibleDays.push({
+          date: d.date,
+          kind: d.status === "absent" ? "absence" : "unpaid_leave",
+          location,
+          pending: pendingDates.has(d.date),
+        });
+      }
+    }
+  }
+
+  return {
+    availableCount: credits.filter((c) => c.status === "available" || c.status === "covering").length,
+    credits,
+    eligibleDays,
+  };
 }
 
 /** Credits that expired having covered nothing at all in their 60-day
@@ -506,7 +583,9 @@ export async function rollbackCompensationRedemptionsForPeriod(
 ): Promise<void> {
   const { start: periodStart, lastDay: periodLastDay } = periodBounds(month, year);
   await db.compensationCredit.updateMany({
-    where: { employeeId, consumedForDate: { gte: periodStart, lte: periodLastDay } },
+    // `applied` credits were used on purpose for a specific day — a payslip being
+    // deleted must not give those back.
+    where: { employeeId, applied: false, consumedForDate: { gte: periodStart, lte: periodLastDay } },
     data: { consumedAt: null, consumedForDate: null, consumedForRequestId: null },
   });
 }

@@ -5,7 +5,7 @@ import { isFinanceRole, rolesAtOrBelow } from "@/lib/rbac";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { Prisma, WorkItemMode, WorkItemStatus } from "@prisma/client";
 import { isClockedInNow } from "@/lib/attendance/status";
-import { maxAwardablePoints, requiresReviewForItem } from "@/lib/work/review";
+import { maxAwardablePoints, requiresReviewForItem, reviewCreditDate } from "@/lib/work/review";
 import { notifyReviewSubmitted } from "@/lib/work/notify";
 
 // Track B. PATCH/DELETE /api/v1/work-items/:id — Milestone 1.2 (atomic) + 2.2 (metric).
@@ -234,6 +234,14 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   // we surface a conflict instead of double-crediting. A task accepted out of
   // `in_review` via POST /work-items/:id/review takes the same guard.
   if (completingNow) {
+    // Accepted straight out of review: it counts for the day it was submitted
+    // (see reviewCreditDate), same as POST /work-items/:id/review.
+    const nowAt = new Date();
+    const creditedOn = reviewCreditDate(
+      workItem.status === WorkItemStatus.in_review,
+      workItem.submittedAt,
+      nowAt,
+    );
     try {
       const [updatedItem] = await prisma.$transaction([
         prisma.workItem.update({
@@ -246,10 +254,10 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
             taskPoints,
             repeatDaily,
             status,
-            completedAt: new Date(),
+            completedAt: creditedOn,
             // A Lead completing an item straight out of review is the reviewer.
             ...(workItem.status === WorkItemStatus.in_review
-              ? { reviewedBy: session.employeeId, reviewedAt: new Date() }
+              ? { reviewedBy: session.employeeId, reviewedAt: nowAt }
               : {}),
           },
         }),
@@ -258,6 +266,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
             employeeId: assignedTo ?? workItem.assignedTo,
             workItemId: workItem.id,
             points: taskPoints ?? workItem.taskPoints!,
+            creditedAt: creditedOn,
           },
         }),
       ]);

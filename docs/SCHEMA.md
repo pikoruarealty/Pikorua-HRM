@@ -188,6 +188,8 @@ One row per employee per day. The clock columns are the day's **bounds**, not a 
 - `attendance_sessions.auto_closed` boolean (default false) — true when the system closed a WFH session at its 8 h limit (`lib/attendance/wfh-autoclose.ts`).
 - `compensation_credits.work_location` `WorkLocation` (default `office`; backfilled from the source record) — where the earning day was worked. An office credit can cover any unpaid day; a WFH credit only a WFH day (`canCreditCover`).
 - `payroll_config.wfh_weekly_cap_hours` decimal(5,2) default 10 — most WFH hours per ISO week that count toward the WFH-hours target. Versioned with the rest of the row.
+- `compensation_credits.applied` boolean (default false), `applied_by_user_id`, `applied_at` — set when a credit was **used on purpose** for one day (an approved `balance_day` request); `consumed_at` / `consumed_for_date` / `consumed_for_request_id` are set too. Attendance (`classifyMonth` `balanceDates`) counts an `applied` day as covered; a payslip's rollback never un-spends it.
+- `RequestType.balance_day` — request to use a balance day; `date_from = date_to` = the day to cover.
 - `wfh_weekly_approvals` — one row per (`employee_id`, `week_start` Monday): `extra_hours`, `approved_by` (Admin), `reason`. Counted WFH hours for a week = `min(actual, cap + extra_hours)`.
 
 ### `attendance_sessions` (2026-08-11)

@@ -97,6 +97,12 @@ Verify row counts for users, employees, work items, attendance records, point le
 
 The first data move needs a write freeze because this project has one writable PostgreSQL database and local uploads, with no replication or dual-write path. Subsequent blue-green **app** releases do not need that freeze. Prisma migrations in app releases must be backward compatible with the old app during the overlap; destructive migrations need a separate staged release.
 
+## Cloudflare Tunnel origin — must be the fixed nginx port (2026-10-24, verified working)
+
+**What happened:** the release of 2026-10-23 (`eb433b4`) moved the active slot from blue (3001) to green (3002). The tunnel, added 2026-10-08, pointed straight at `http://localhost:3001`, so Cloudflare answered 502 ("Host: Error") while the app was healthy on 3002 and the deploy had passed its own check (that check goes through nginx). `journalctl -u cloudflared` showed `dial tcp [::1]:3001: connection refused`. A tunnel set to `https://localhost:443` did not work either (it dials `localhost`, which can resolve to `::1`); pointing it at `3002` worked at once but would break again on the next release. **Fix, confirmed working 2026-10-24:** a loopback-only nginx listener on a fixed port that follows the active slot, with the tunnel pointed at it.
+
+The tunnel (added 2026-10-08) must point at `http://127.0.0.1:8088`, the loopback-only listener defined in [deploy/hostinger-tunnel-nginx.conf](../deploy/hostinger-tunnel-nginx.conf) (install it as `/etc/nginx/conf.d/hrm-tunnel.conf`). It follows `proxy.conf`, so it always reaches the active slot. **Never point the tunnel at 3001 or 3002**: the active slot changes every release, and the first release after the tunnel was created (2026-10-23) moved to green while the tunnel still pointed at blue — the site returned Cloudflare 502 while the app was healthy. The deploy script's own health check goes through nginx, so it cannot see this. Use `127.0.0.1`, not `localhost` (the tunnel log showed it dialling `[::1]`). Check: `curl -s http://127.0.0.1:8088/api/health` on the VPS, and after a release, `curl -s https://hrm.pikoruarealty.com/api/health`. The listener is bound to `127.0.0.1:8088` only, so `server_name _` there cannot affect the other sites sharing this nginx (nginx picks the server block by address and port first); check the port is free first with `sudo ss -ltnp | grep ':8088'`. Other apps' tunnels/routes are unaffected. The first release after this change is the real test: after it, confirm the site is still up.
+
 ## Verifying device sync (TeamOffice) on the VPS
 
 Host cron calls `/api/v1/cron/device-sync` every 2 minutes between 07:00 and 22:59 IST. Since 2026-10-07 each run writes a line to `/opt/pikorua-hrm/cron.log` (a deploy ships the script); on a VPS that has not had that deploy yet, use step 3 to see what a run returns.
@@ -116,6 +122,10 @@ Host cron calls `/api/v1/cron/device-sync` every 2 minutes between 07:00 and 22:
 6. **Credentials present (without printing them):** `grep -c '^TEAM_OFFICE_' /opt/pikorua-hrm/app.env` should print 3.
 
 A punch is never lost while the sync is down: the cursor only advances after a successful ingest, so a later run fetches everything since.
+
+### TeamOffice relay via a Cloudflare Worker (2026-10-08)
+
+On 2026-10-06 the VPS lost its outbound route to `api.etimeoffice.com` (SYNs unanswered; `mtr -T -P 443` showed 60-100% loss at the first hop outside Hostinger), while the API worked from other networks. A Cloudflare Tunnel only fixes traffic *into* the VPS, so the device sync is relayed through [deploy/teamoffice-relay-worker.js](../deploy/teamoffice-relay-worker.js). No app code is involved: set `TEAM_OFFICE_BASE_URL=https://<worker>.<account>.workers.dev/<RELAY_SECRET>/api/` (trailing slash) in `app.env` and **recreate** the active container (`docker restart` does not re-read `--env-file`). The Worker holds only the `RELAY_SECRET` Worker secret (a path prefix that makes it not an open relay); TeamOffice credentials stay in `app.env` and pass through in the usual `Authorization` header. To go back, restore `TEAM_OFFICE_BASE_URL=https://api.etimeoffice.com/api/` and recreate the container.
 
 ## 4. Routine release and rollback
 

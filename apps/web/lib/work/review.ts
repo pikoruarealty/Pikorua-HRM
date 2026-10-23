@@ -95,3 +95,25 @@ export function requiresReviewForItem(item: {
   if (item.adhocTypeId) return true;
   return requiresReview(item.taskPoints);
 }
+
+/**
+ * The moment a reviewed task's points (and its completion) count for.
+ *
+ * A task that waits for a Lead/Admin's sign-off is DONE on the day the employee
+ * submitted it, not the day someone got round to approving it (owner request,
+ * 2026-10-24): the points land in that day's EOD summary, week and month, and the
+ * task is on-time or late by when the work was handed in. Approval is only the
+ * verdict — it is still stamped separately as `reviewedAt`.
+ *
+ * Only an item that really sat in `in_review` has such a date; a task completed
+ * any other way counts when it is completed. A submit date in the future (bad
+ * data) is never honoured.
+ */
+export function reviewCreditDate(
+  wasInReview: boolean,
+  submittedAt: Date | null | undefined,
+  now: Date,
+): Date {
+  if (!wasInReview || !submittedAt) return now;
+  return submittedAt.getTime() <= now.getTime() ? submittedAt : now;
+}

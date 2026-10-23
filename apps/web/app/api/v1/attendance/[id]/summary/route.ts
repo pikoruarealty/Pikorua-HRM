@@ -99,6 +99,8 @@ export async function GET(
     // flagged day) are in `present_days` (2026-10-24) and counted here separately.
     compensation_days: breakdown.compensationDays,
     advance_days: breakdown.advanceDays,
+    // Of paid_leave_days: absent / unpaid days covered by an approved balance day.
+    balance_days: breakdown.balanceDays,
     holiday_days: breakdown.holidayDays,
     working_days_elapsed: breakdown.workingDaysElapsed,
     // 2026-10-01 — the days that count toward pay (present + half×0.5 + paid leave +

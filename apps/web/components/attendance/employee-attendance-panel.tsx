@@ -15,6 +15,13 @@ import { cn } from "@/lib/utils";
 
 type Split = { office: number; wfh: number };
 
+type BalanceEligibleDay = {
+  date: string;
+  kind: "absence" | "unpaid_leave";
+  location: "office" | "wfh";
+  pending: boolean;
+};
+
 type BalanceCredit = {
   id: string;
   earnedDate: string;
@@ -23,6 +30,7 @@ type BalanceCredit = {
   status: "available" | "covering" | "used" | "expired";
   coversDate?: string;
   coversKind?: "absence" | "unpaid_leave";
+  applied?: boolean;
 };
 
 type Summary = {
@@ -39,7 +47,9 @@ type Summary = {
   compensation_days: number;
   /** Days worked in advance (weekly off / flagged) — counted in present_days. */
   advance_days: number;
-  compensation_balance: { availableCount: number; credits: BalanceCredit[] };
+  /** Absent / unpaid days covered by an approved balance day — counted in paid_leave_days. */
+  balance_days: number;
+  compensation_balance: { availableCount: number; credits: BalanceCredit[]; eligibleDays: BalanceEligibleDay[] };
   holiday_days: number;
   working_days_elapsed: number;
   /** Days that count toward pay: present + ½ × half-days + paid leave + holidays + compensation. */
@@ -289,7 +299,11 @@ export function EmployeeAttendancePanel({
               <Stat label="Half-day" value={summary.half_days} split={summary.by_status.half_day} />
               <Stat label="Absent" value={summary.absent_days} alert={summary.absent_days > 0} />
               <Stat label="Late (approved)" value={summary.late_count} />
-              <Stat label="Paid leave" value={summary.paid_leave_days} />
+              <Stat
+                label="Paid leave"
+                value={summary.paid_leave_days}
+                hint={summary.balance_days > 0 ? `incl. ${summary.balance_days} balance day${summary.balance_days === 1 ? "" : "s"}` : undefined}
+              />
               <Stat label="Unpaid leave" value={summary.unpaid_leave_days} />
               <Stat label="Compensation" value={summary.compensation_days} split={summary.by_status.compensation} />
               <Stat label="Holidays" value={summary.holiday_days} />
@@ -337,7 +351,11 @@ export function EmployeeAttendancePanel({
               />
             )}
 
-            <BalanceDays balance={summary.compensation_balance} />
+            <BalanceDays
+              balance={summary.compensation_balance}
+              canRequest={canEditDays}
+              onRequested={() => setReloadKey((k) => k + 1)}
+            />
 
             <div className="flex flex-col gap-3">
               <AttendanceCalendar
@@ -653,13 +671,52 @@ function WfhCapRow({
 
 const KIND_LABEL = { absence: "an absent day", unpaid_leave: "an unpaid-leave day" } as const;
 
-/** Balance days: one per day worked in advance, usable against any absent or
- *  unpaid-leave day for 60 days. Office-earned days cover any day; a day earned
- *  working from home only covers a day that was itself a WFH day. */
-function BalanceDays({ balance }: { balance: { availableCount: number; credits: BalanceCredit[] } }) {
+/** Balance days: one per day worked in advance, usable against an absent or
+ *  unpaid-leave day for 60 days. The employee asks to use one on a specific day;
+ *  Admin/HR approve it in Requests, and only then does the day count as covered
+ *  (shown as "Balance" on the calendar, inside Paid leave in the tiles). Office-
+ *  earned days cover any day; a day earned working from home only covers a day
+ *  that was itself a WFH day. */
+function BalanceDays({
+  balance,
+  canRequest,
+  onRequested,
+}: {
+  balance: { availableCount: number; credits: BalanceCredit[]; eligibleDays: BalanceEligibleDay[] };
+  canRequest: boolean;
+  onRequested: () => void;
+}) {
+  const [day, setDay] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   if (balance.credits.length === 0) return null;
   const open = balance.credits.filter((c) => c.status === "available" || c.status === "covering");
   const past = balance.credits.filter((c) => c.status === "used" || c.status === "expired").slice(0, 4);
+  const requestable = balance.eligibleDays.filter((d) => !d.pending);
+  const waiting = balance.eligibleDays.filter((d) => d.pending);
+
+  async function request() {
+    if (!day) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      await getJson(
+        await fetch("/api/v1/requests", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ type: "balance_day", dateFrom: day, dateTo: day }),
+        }),
+      );
+      setMsg({ ok: true, text: `Requested for ${shortDate(day)} — waiting for Admin/HR to approve.` });
+      setDay("");
+      onRequested();
+    } catch (e) {
+      setMsg({ ok: false, text: e instanceof Error ? e.message : "Could not send the request." });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="rounded-lg border p-3">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -667,7 +724,7 @@ function BalanceDays({ balance }: { balance: { availableCount: number; credits: 
           Balance days <span className="tabular-nums text-muted-foreground">· {balance.availableCount} available</span>
         </div>
         <div className="text-[11px] text-muted-foreground">
-          Earned by working in advance · use within 60 days against any absence or unpaid leave
+          Earned by working in advance · use within 60 days on an absent or unpaid-leave day
         </div>
       </div>
       {open.length > 0 ? (
@@ -685,8 +742,8 @@ function BalanceDays({ balance }: { balance: { availableCount: number; credits: 
               <span>Worked {shortDate(c.earnedDate)}</span>
               <span className="text-muted-foreground">· use by {shortDate(c.expiresAt)}</span>
               {c.status === "covering" && c.coversDate && (
-                <span className="text-foreground">
-                  · will cover {KIND_LABEL[c.coversKind ?? "absence"]} on {shortDate(c.coversDate)}
+                <span className="text-muted-foreground">
+                  · would cover {KIND_LABEL[c.coversKind ?? "absence"]} on {shortDate(c.coversDate)}
                 </span>
               )}
             </li>
@@ -695,13 +752,43 @@ function BalanceDays({ balance }: { balance: { availableCount: number; credits: 
       ) : (
         <p className="mt-2 text-xs text-muted-foreground">No unused balance days.</p>
       )}
+
+      {waiting.length > 0 && (
+        <p className="mt-2 text-xs text-warning">
+          Waiting for approval: {waiting.map((d) => shortDate(d.date)).join(", ")}
+        </p>
+      )}
+      {canRequest && requestable.length > 0 && (
+        <div className="mt-2 flex flex-wrap items-center gap-2 border-t pt-2 text-xs">
+          <span className="text-muted-foreground">Use a balance day on</span>
+          <select
+            value={day}
+            onChange={(e) => setDay(e.target.value)}
+            aria-label="Day to cover with a balance day"
+            className="h-8 rounded border bg-background px-2 text-foreground"
+          >
+            <option value="">choose a day…</option>
+            {requestable.map((d) => (
+              <option key={d.date} value={d.date}>
+                {shortDate(d.date)} — {d.kind === "absence" ? "absent" : "unpaid leave"}
+              </option>
+            ))}
+          </select>
+          <Button size="sm" className="h-8" disabled={busy || !day} onClick={request}>
+            {busy ? "Sending…" : "Request"}
+          </Button>
+          <span className="text-[11px] text-muted-foreground">Admin/HR approve it; then the day counts as covered.</span>
+        </div>
+      )}
+      {msg && <p className={cn("mt-1.5 text-xs", msg.ok ? "text-muted-foreground" : "text-destructive")}>{msg.text}</p>}
+
       {past.length > 0 && (
         <ul className="mt-2 flex flex-col gap-0.5 border-t pt-2 text-[11px] text-muted-foreground">
           {past.map((c) => (
             <li key={c.id}>
               {shortDate(c.earnedDate)} ({c.workLocation === "wfh" ? "WFH" : "office"}) —{" "}
               {c.status === "used"
-                ? `used${c.coversDate ? ` for ${shortDate(c.coversDate)}` : ""}`
+                ? `used${c.coversDate ? ` for ${shortDate(c.coversDate)}` : ""}${c.applied ? " (approved)" : ""}`
                 : "expired unused (added to leave balance)"}
             </li>
           ))}

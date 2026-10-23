@@ -2,13 +2,14 @@ import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { isFinanceRole, isLeadRole, EMPLOYEE_ROLES, LEAD_ROLES, Role } from "@/lib/rbac";
-import { ok, failFor, ErrorCode } from "@/lib/api/response";
+import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { uuidFilter, enumFilter } from "@/lib/api/params";
 import { redactRequestFinancials } from "@/lib/requests/redact";
 import { getLedEmployeeIds } from "@/lib/employees/managed-scope";
 import { notifyFinanceUsers } from "@/lib/notifications/push";
 import { saveUploadedFile } from "@/lib/storage/local";
 import { RequestType, RequestStatus } from "@prisma/client";
+import { checkBalanceDay } from "@/lib/attendance/balance-day";
 
 // Owner request, 2026-09-01: no role should ever be forbidden from filing its
 // own request. Previously Admin was excluded ("no one above it to approve"),
@@ -81,6 +82,7 @@ const REQUEST_TYPE_LABELS: Record<RequestType, string> = {
   [RequestType.reimbursement]: "reimbursement",
   [RequestType.wfh]: "work-from-home",
   [RequestType.other]: "other",
+  [RequestType.balance_day]: "balance-day",
 };
 
 export async function POST(req: Request) {
@@ -146,8 +148,17 @@ export async function POST(req: Request) {
     if (amount === undefined) {
       return failFor(ErrorCode.VALIDATION, "amount is required for reimbursement requests.");
     }
+  } else if (type === RequestType.balance_day) {
+    // Use a balance day on one absent / unpaid-leave day (2026-10-24). Checked now so
+    // an impossible request is refused up front, and again at approval.
+    if (!dateFrom) return failFor(ErrorCode.VALIDATION, "dateFrom (the day to cover) is required for a balance-day request.");
+    if (dateTo && dateTo.getTime() !== dateFrom.getTime()) {
+      return failFor(ErrorCode.VALIDATION, "A balance day covers a single day — dateFrom and dateTo must match.");
+    }
+    const check = await checkBalanceDay(session.employeeId, dateFrom);
+    if (!check.ok) return fail(check.status === 409 ? ErrorCode.CONFLICT : ErrorCode.VALIDATION, check.message, check.status);
   } else {
-    return failFor(ErrorCode.NOT_IMPLEMENTED, "Only leave and reimbursement requests are supported until Milestone 3.");
+    return failFor(ErrorCode.NOT_IMPLEMENTED, "Only leave, reimbursement and balance-day requests are supported.");
   }
 
   // Persist the uploaded bill (reimbursement only) before creating the row so
@@ -170,8 +181,8 @@ export async function POST(req: Request) {
     data: {
       employeeId: session.employeeId,
       type,
-      dateFrom: LEAVE_TYPES.includes(type) ? dateFrom : undefined,
-      dateTo: LEAVE_TYPES.includes(type) ? dateTo : undefined,
+      dateFrom: LEAVE_TYPES.includes(type) || type === RequestType.balance_day ? dateFrom : undefined,
+      dateTo: LEAVE_TYPES.includes(type) ? dateTo : type === RequestType.balance_day ? dateFrom : undefined,
       halfDay,
       amount: type === RequestType.reimbursement ? amount : undefined,
       attachmentUrl: type === RequestType.reimbursement ? storedAttachment : undefined,

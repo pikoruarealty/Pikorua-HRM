@@ -46,7 +46,7 @@ export type CalendarDay = {
   isHalfDay: boolean;
   isCompensation: boolean;
   /** Why the day is what it is, where not obvious (automatic weekly off etc.). */
-  note?: "auto_off" | "provisional_off" | "declared_unpaid" | "advance" | null;
+  note?: "auto_off" | "provisional_off" | "declared_unpaid" | "advance" | "balance" | null;
   /** Leave covering part or all of the day, in days (half-day leave = 0.5). */
   leavePaid?: number;
   leaveUnpaid?: number;
@@ -247,6 +247,8 @@ function cellLabel(day: CalendarDay): { full: string; tiny: string } {
     if (day.status === "present") return { full: "—", tiny: "—" };
     return { full: STATUS_STYLE[day.status].short, tiny: TINY_LABEL[day.status] };
   }
+  // A day covered by a balance day used on purpose reads "Balance", not "Leave".
+  if (day.status === "paid_leave" && day.note === "balance") return { full: "Balance", tiny: "Bal" };
   if ((day.status === "paid_leave" || day.status === "unpaid_leave") && partial) {
     return {
       full: `${STATUS_STYLE[day.status].short} ${fracDays(leaveTotal)}`,
@@ -313,7 +315,9 @@ function DayTooltip({ day }: { day: CalendarDay }) {
         </div>
       ) : (
         <p className="text-muted-foreground">
-          {day.note === "declared_unpaid"
+          {day.note === "balance"
+            ? "Covered by a balance day (earned by working in advance; approved by Admin/HR)."
+            : day.note === "declared_unpaid"
             ? "Switched to unpaid leave."
             : day.note === "auto_off"
               ? "Automatic weekly off."

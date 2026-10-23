@@ -5,8 +5,9 @@ import { getSession } from "@/lib/auth";
 import { Role } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { pushNotification } from "@/lib/notifications/push";
-import { RequestStatus } from "@prisma/client";
+import { RequestStatus, RequestType } from "@prisma/client";
 import { audit, clientIp } from "@/lib/audit";
+import { releaseBalanceDayCredit } from "@/lib/attendance/balance-day";
 
 // Admin manual override (2026-07-15). PATCH /api/v1/requests/:id/override —
 // **Admin only** (narrower than approve/reject's Admin/HR): force a request
@@ -40,6 +41,22 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   if (!request) return failFor(ErrorCode.NOT_FOUND);
   if (request.status === parsed.data.status) {
     return failFor(ErrorCode.CONFLICT, `Request is already ${parsed.data.status}.`);
+  }
+
+  // A balance-day request is approved only by spending a credit (approve route), so
+  // an override can't conjure an approval — and taking one back must give the credit
+  // back, or the day would stay covered / the credit would be lost.
+  if (request.type === RequestType.balance_day) {
+    if (parsed.data.status === RequestStatus.approved) {
+      return failFor(
+        ErrorCode.VALIDATION,
+        "A balance-day request can only be approved through the normal approval, which spends the credit.",
+      );
+    }
+    if (request.status === RequestStatus.approved) {
+      const released = await releaseBalanceDayCredit(request);
+      if (!released.ok) return failFor(ErrorCode.CONFLICT, released.message);
+    }
   }
 
   const updated = await prisma.request.update({

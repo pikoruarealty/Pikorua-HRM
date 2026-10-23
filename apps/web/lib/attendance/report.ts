@@ -175,9 +175,10 @@ export function toReportDay(day: CalendarDay, joinKey: string | null): ReportDay
       return { ...base, statusLabel: "Absent", tone: "absent", credit: day.credit, note: null };
     case "paid_leave":
       addLeaveNotes();
+      if (day.note === "balance") notes.push("Covered by a balance day");
       return {
         ...base,
-        statusLabel: partialLeave ? "Paid leave ½" : "Paid leave",
+        statusLabel: day.note === "balance" ? "Balance day" : partialLeave ? "Paid leave ½" : "Paid leave",
         tone: "paid_leave",
         credit: day.credit,
         note: notes.join(" · ") || null,

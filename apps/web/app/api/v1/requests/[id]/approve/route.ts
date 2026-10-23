@@ -16,6 +16,7 @@ import {
 } from "@/lib/requests/leave-math";
 import { getApprovedPaidLeaveDaysByMonthsInRange, getApprovedPaidLeaveDaysForYear } from "@/lib/requests/leave";
 import { getEffectivePaidLeaveCaps } from "@/lib/leave/balance";
+import { checkBalanceDay } from "@/lib/attendance/balance-day";
 
 // Track B. PATCH /api/v1/requests/:id/approve — Milestone 1.3.
 // Golden rule: Admin/HR only, always — Team Leads get 403 even for their own team.
@@ -115,6 +116,60 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   const requester = await prisma.user.findUnique({ where: { employeeId: request.employeeId } });
   if (requester && requester.id === session!.userId) {
     return failFor(ErrorCode.FORBIDDEN, "Cannot approve your own request.");
+  }
+
+  // Use a balance day (2026-10-24). Approval is what spends the credit: re-check the
+  // day (leave may have been approved on it, a payslip generated, the credit used up
+  // since it was filed), then spend it and stamp the request in one go. A day that
+  // no longer qualifies leaves the request pending so it can be rejected with a reason.
+  if (request.type === RequestType.balance_day) {
+    if (!request.dateFrom) return failFor(ErrorCode.VALIDATION, "This balance-day request has no date.");
+    // The request itself is not a conflict with itself.
+    const verdict = await checkBalanceDay(request.employeeId, request.dateFrom, request.id);
+    if (!verdict.ok) return failFor(verdict.status === 409 ? ErrorCode.CONFLICT : ErrorCode.VALIDATION, verdict.message);
+    const approvedAt = new Date();
+    const spent = await prisma.compensationCredit.updateMany({
+      where: { id: verdict.creditId, consumedAt: null, applied: false },
+      data: {
+        consumedAt: approvedAt,
+        consumedForDate: request.dateFrom,
+        consumedForRequestId: request.id,
+        applied: true,
+        appliedByUserId: session!.userId,
+        appliedAt: approvedAt,
+      },
+    });
+    if (spent.count !== 1) {
+      return failFor(ErrorCode.CONFLICT, "That balance day was just used for something else — try again.");
+    }
+    const approvedRow = await prisma.request.update({
+      where: { id: request.id },
+      data: { status: RequestStatus.approved, approverId: session!.userId, approvedAt },
+    });
+    if (requester) {
+      await pushNotification(
+        requester.id,
+        "balance_day_approved",
+        `Your balance-day request for ${request.dateFrom.toISOString().slice(0, 10)} was approved — that day now counts as covered.`,
+      );
+    }
+    await audit({
+      action: "request.approve",
+      actorUserId: session!.userId,
+      actorRole: session!.role,
+      entityType: "request",
+      entityId: request.id,
+      metadata: {
+        type: request.type,
+        employee_id: request.employeeId,
+        date: request.dateFrom.toISOString().slice(0, 10),
+        credit_id: verdict.creditId,
+        credit_location: verdict.location,
+        day_was: verdict.kind,
+      },
+      ip: clientIp(req),
+    });
+    return ok(approvedRow);
   }
 
   const isLeaveRequest = LEAVE_TYPES.includes(request.type) && !!request.dateFrom && !!request.dateTo;

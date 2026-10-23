@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { isAdmin, isFinanceRole, isLeadRole } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
+import { releaseBalanceDayCredit } from "@/lib/attendance/balance-day";
 import { isUuid } from "@/lib/api/params";
 import { redactRequestFinancials } from "@/lib/requests/redact";
 import { leadsEmployee } from "@/lib/employees/managed-scope";
@@ -92,6 +93,14 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   if (!parsed.success) return failFor(ErrorCode.VALIDATION, "Invalid request body.");
   const { type, dateFrom, amount, description } = parsed.data;
 
+  // A balance-day request names one day and one credit-worth of cover; to change it,
+  // withdraw it and file a new one (the checks are run when it is filed).
+  if (existing.type === RequestType.balance_day || type === RequestType.balance_day) {
+    if (type !== undefined || dateFrom !== undefined || parsed.data.dateTo !== undefined) {
+      return failFor(ErrorCode.VALIDATION, "A balance-day request can't be edited — withdraw it and file a new one.");
+    }
+  }
+
   const effectiveType = type ?? existing.type;
   const effectiveHalf = LEAVE_TYPES.includes(effectiveType) ? (parsed.data.halfDay ?? existing.halfDay) : false;
   // A half-day request is the one day it is for: switching to half-day, or moving
@@ -160,6 +169,13 @@ export async function DELETE(req: Request, { params }: { params: { id: string } 
   const canDeleteAny = isAdmin(session.role);
 
   if (canDeleteAny) {
+    // An approved balance-day request holds a spent credit and a covered day: give
+    // both back first (refused once the month has a payslip), or the day would stay
+    // covered with no request behind it.
+    if (existing.type === RequestType.balance_day && existing.status === RequestStatus.approved) {
+      const released = await releaseBalanceDayCredit(existing);
+      if (!released.ok) return failFor(ErrorCode.CONFLICT, released.message);
+    }
     // Admin may delete a request in any status — permanent junk-data cleanup.
     await prisma.request.delete({ where: { id: existing.id } });
     await audit({
