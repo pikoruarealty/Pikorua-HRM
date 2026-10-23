@@ -58,6 +58,22 @@ describe("summariseSessions", () => {
     });
   });
 
+  test("the full-day line is 7 hours of summed session time, breaks excluded", () => {
+    // 6.5h across a lunch break: the 9-18 span is 9h but only 6.5h was worked.
+    expect(
+      summariseSessions([
+        { clockIn: t(9), clockOut: t(13) },
+        { clockIn: t(15, 30), clockOut: t(18) },
+      ]),
+    ).toEqual({ totalHours: 6.5, isHalfDay: true });
+    expect(
+      summariseSessions([
+        { clockIn: t(9), clockOut: t(13) },
+        { clockIn: t(14), clockOut: t(17) },
+      ]),
+    ).toEqual({ totalHours: 7, isHalfDay: false });
+  });
+
   test("nothing worked is neither present nor half", () => {
     expect(summariseSessions([{ clockIn: t(9), clockOut: null }])).toEqual({
       totalHours: 0,

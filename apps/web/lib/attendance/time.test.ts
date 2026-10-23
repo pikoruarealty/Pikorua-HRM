@@ -65,13 +65,18 @@ describe("computeHours", () => {
     expect(computeHours(t(9), t(18))).toEqual({ totalHours: 9, isHalfDay: false });
   });
 
-  test("anything under 5 hours is a half-day", () => {
+  test("anything under 7 hours is a half-day", () => {
     expect(computeHours(t(9), t(13, 30))).toEqual({ totalHours: 4.5, isHalfDay: true });
     expect(computeHours(t(9), t(11))).toEqual({ totalHours: 2, isHalfDay: true });
+    // The old 5h full-day line: a 5h and a 6.5h day are now half-days.
+    expect(computeHours(t(9), t(14))).toEqual({ totalHours: 5, isHalfDay: true });
+    expect(computeHours(t(9), t(15, 30))).toEqual({ totalHours: 6.5, isHalfDay: true });
+    expect(computeHours(t(9), t(15, 59))).toEqual({ totalHours: 6.98, isHalfDay: true });
   });
 
-  test("exactly 5 hours is NOT a half-day", () => {
-    expect(computeHours(t(9), t(14))).toEqual({ totalHours: 5, isHalfDay: false });
+  test("exactly 7 hours is NOT a half-day", () => {
+    expect(computeHours(t(9), t(16))).toEqual({ totalHours: 7, isHalfDay: false });
+    expect(computeHours(t(9), t(16, 1))).toEqual({ totalHours: 7.02, isHalfDay: false });
   });
 
   test("a very short day is a half-day, never a full one", () => {

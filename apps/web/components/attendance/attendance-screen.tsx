@@ -961,7 +961,7 @@ function ManualRecordForm() {
   }
 
   return (
-    <form onSubmit={submit} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+    <form onSubmit={submit} className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="manual_employee">Employee</Label>
         <Select
@@ -1235,7 +1235,7 @@ function BulkManualRecordForm() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <div className="flex flex-col gap-1.5 sm:col-span-2 lg:col-span-4">
           <Label>Employees</Label>
           <EmployeeMultiSelect employees={employees} selectedIds={selectedIds} onChange={setSelectedIds} />

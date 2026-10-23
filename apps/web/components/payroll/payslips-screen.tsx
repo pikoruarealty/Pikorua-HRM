@@ -354,7 +354,7 @@ function GenerateForm({ onGenerated }: { onGenerated: () => void }) {
         <form onSubmit={onSubmit} className="flex flex-col gap-6">
           <section className="flex flex-col gap-3">
             <h3 className="text-sm font-semibold text-muted-foreground">Employee &amp; period</h3>
-            <div className="grid gap-4 sm:grid-cols-3">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
               <div className="flex flex-col gap-2">
                 <Label htmlFor="employee">Employee</Label>
                 <SearchableSelect
@@ -444,7 +444,7 @@ function GenerateForm({ onGenerated }: { onGenerated: () => void }) {
 
           <section className="flex flex-col gap-3">
             <h3 className="text-sm font-semibold text-muted-foreground">Manual adjustments</h3>
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <div className="flex flex-col gap-2 rounded-lg border p-3">
                 <Label htmlFor="incentive">Incentive (₹)</Label>
                 <Input

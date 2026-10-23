@@ -148,7 +148,8 @@ export function toReportDay(day: CalendarDay, joinKey: string | null): ReportDay
   const longDay = day.hours != null && day.hours > MAX_PLAUSIBLE_SHIFT_HOURS;
   const workedNotes = () => {
     if (day.sessionCount > 1) notes.push(`${day.sessionCount} sessions`);
-    if (day.isCompensation && day.status !== "compensation") notes.push("Marked compensation");
+    if (day.note === "advance") notes.push("Worked in advance — earned a balance day");
+    else if (day.isCompensation && day.status !== "compensation") notes.push("Marked compensation");
     addLeaveNotes();
     if (longDay) notes.push(`Check: ${day.hours}h is unusually long`);
   };

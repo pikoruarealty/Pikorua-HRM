@@ -106,8 +106,11 @@ export function isLateWaivedByMakeup(
   return departureMinutes >= requiredDepartureMinutes;
 }
 
-/** Below this many hours a day is a half-day; at or above it, a full day. */
-export const FULL_DAY_HOURS = 5;
+/** Below this many hours a day is a half-day; at or above it, a full day.
+ *  Raised from 5 to 7 on 2026-10-24 (owner request). It only decides records
+ *  judged from then on — an already-approved day keeps the `is_half_day` it was
+ *  approved with, so earlier months' figures do not move. */
+export const FULL_DAY_HOURS = 7;
 
 /**
  * A day this long is almost certainly bad data, not a real shift (2026-08-12,

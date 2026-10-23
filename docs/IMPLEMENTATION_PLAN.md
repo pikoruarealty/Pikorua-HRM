@@ -146,7 +146,7 @@ No standalone worker needed for v1:
 
 1. Employee taps **Clock In** → server writes `clock_in_raw` (server-generated timestamp, never trust a client-supplied time) to today's `attendance_records` row for that employee, creating the row if it doesn't exist.
 2. Employee taps **Clock Out** later → server writes `clock_out_raw` on the same row.
-3. Once both times exist, compute `total_hours` and `is_half_day` (< 5 hours) automatically.
+3. Once both times exist, compute `total_hours` and `is_half_day` (< 7 hours — raised from 5 on 2026-10-24) automatically.
 4. HR/Admin get an **Attendance Review** screen: list of today's/this period's records, with the ability to **edit** `clock_in_approved`/`clock_out_approved` (defaulting to the raw values) and mark each record **Approved**.
 5. Payroll's monthly deduction calculation (§ Payroll in PRD/Schema) only counts `approval_status = approved` records — this is important: make sure Track A's payroll logic filters on this, not on raw records, so an un-reviewed attendance record can't silently affect someone's salary.
 

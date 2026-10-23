@@ -94,7 +94,7 @@ export function WorkUnitsScreen() {
           <CardTitle>New work unit</CardTitle>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleCreate} className="grid gap-3 sm:grid-cols-2">
+          <form onSubmit={handleCreate} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="flex flex-col gap-1.5">
               <Label>Name</Label>
               <Input value={name} onChange={(e) => setName(e.target.value)} required />

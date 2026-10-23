@@ -463,7 +463,7 @@ export function EmployeeDetail({
         <CardHeader>
           <CardTitle>Details</CardTitle>
         </CardHeader>
-        <CardContent className="grid gap-2 text-sm sm:grid-cols-2">
+        <CardContent className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
           <div>
             <span className="text-muted-foreground">Role: </span>
             {humanizeRole(employee.role)}
@@ -605,7 +605,7 @@ export function EmployeeDetail({
             <CardTitle>Edit</CardTitle>
           </CardHeader>
           <CardContent>
-            <form onSubmit={onSave} className="grid gap-4 sm:grid-cols-2">
+            <form onSubmit={onSave} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="flex flex-col gap-2">
                 <Label htmlFor="full_name">Full name</Label>
                 <Input
@@ -820,7 +820,7 @@ export function EmployeeDetail({
 
       {canManage && <EmployeeEventsPanel employeeId={employeeId} />}
 
-      {canViewAttendance && !isAttendanceExemptRole(employee.role) && <EmployeeAttendancePanel employeeId={employeeId} canEditDays={isSelf} canMarkPaidLeave={isAdmin && !isSelf} />}
+      {canViewAttendance && !isAttendanceExemptRole(employee.role) && <EmployeeAttendancePanel employeeId={employeeId} canEditDays={isSelf} canMarkPaidLeave={isAdmin && !isSelf} canApproveWfhHours={isAdmin} />}
 
       {canViewAttendance && <EmployeeWorkPanel employeeId={employeeId} isMetric={isMetric} />}
 

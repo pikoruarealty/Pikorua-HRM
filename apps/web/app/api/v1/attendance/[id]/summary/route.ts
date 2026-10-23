@@ -6,6 +6,7 @@ import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { getAttendanceSummary } from "@/lib/attendance/summary";
 import { getMonthlyAttendanceBreakdown } from "@/lib/attendance/monthly-breakdown";
 import { getEffectivePayrollConfig } from "@/lib/payroll/config";
+import { getCompensationBalance } from "@/lib/attendance/compensation-credits";
 import { getLedEmployeeIds } from "@/lib/employees/managed-scope";
 import { getEmployeeAttendanceCalendar } from "@/lib/attendance/calendar";
 import { getExpectedHoursForMonth } from "@/lib/attendance/expected-hours";
@@ -72,9 +73,10 @@ export async function GET(
     getAttendanceSummary(employeeId, month, year, effectiveConfig?.lateGraceMinutes ?? 0),
     getMonthlyAttendanceBreakdown(employeeId, month, year),
   ]);
-  const [{ calendar }, expectedHours] = await Promise.all([
+  const [{ calendar }, expectedHours, compensationBalance] = await Promise.all([
     getEmployeeAttendanceCalendar(employeeId, month, year, breakdown),
     getExpectedHoursForMonth(employeeId, month, year),
+    getCompensationBalance(employeeId, month, year),
   ]);
 
   return ok({
@@ -93,7 +95,10 @@ export async function GET(
     half_days: breakdown.halfDays,
     paid_leave_days: breakdown.paidLeaveDays,
     unpaid_leave_days: breakdown.unpaidLeaveDays,
+    // A part-timer's over-quota days. Days worked in advance (a worked weekly off /
+    // flagged day) are in `present_days` (2026-10-24) and counted here separately.
     compensation_days: breakdown.compensationDays,
+    advance_days: breakdown.advanceDays,
     holiday_days: breakdown.holidayDays,
     working_days_elapsed: breakdown.workingDaysElapsed,
     // 2026-10-01 — the days that count toward pay (present + half×0.5 + paid leave +
@@ -116,6 +121,10 @@ export async function GET(
     // One entry per calendar day of the month — the same classification that
     // produced the counts above, plus the day's hours/times/location.
     days: calendar.days,
+    // Balance days (compensation credits): each day worked in advance banks one,
+    // usable against any absent / unpaid-leave day for 60 days — see
+    // lib/attendance/compensation-credits.ts for the office/WFH rule.
+    compensation_balance: compensationBalance,
     notes: {
       late_tracking_unavailable: summary.lateTrackingUnavailable
         ? "This employee's team has no expected_start_time configured — late count excludes those days."

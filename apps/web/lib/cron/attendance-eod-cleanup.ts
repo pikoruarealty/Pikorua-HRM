@@ -3,7 +3,8 @@ import { todayDateOnly, getDefaultClockOut, isSuspectedReversedPunch } from "@/l
 import { summariseSessions } from "@/lib/attendance/sessions";
 import { notifyFinanceUsers } from "@/lib/notifications/push";
 import { audit } from "@/lib/audit";
-import { AttendanceSource, Prisma } from "@prisma/client";
+import { AttendanceSource, Prisma, WorkLocation } from "@prisma/client";
+import { autoCloseOverlongWfhSessions } from "@/lib/attendance/wfh-autoclose";
 
 /**
  * End-of-day attendance maintenance and dangling request cleanup.
@@ -30,6 +31,13 @@ export async function runAttendanceEodCleanup(): Promise<{
   reversedPunchesResolved: number;
 }> {
   const today = todayDateOnly();
+
+  // 0. WFH sessions have their own rule (closed at WFH_MAX_SESSION_HOURS, at the
+  //    limit — see wfh-autoclose.ts). Settle those first; step 2 then leaves any
+  //    WFH session that is still inside its limit alone. Without that, a night
+  //    shift started shortly before the date turned over was given a default
+  //    clock-out hours in the future.
+  await autoCloseOverlongWfhSessions();
 
   // 1. Delete empty phantom records on or before yesterday
   const phantoms = await prisma.attendanceRecord.findMany({
@@ -62,7 +70,7 @@ export async function runAttendanceEodCleanup(): Promise<{
       sessions: { some: { clockOut: null } },
     },
     include: {
-      sessions: { select: { id: true, clockIn: true, clockOut: true } },
+      sessions: { select: { id: true, clockIn: true, clockOut: true, workLocation: true } },
       employee: {
         select: {
           id: true,
@@ -79,6 +87,10 @@ export async function runAttendanceEodCleanup(): Promise<{
     // Already flagged on a prior night's run — leave whatever Admin/HR is
     // already looking at alone rather than re-touching it every night.
     if (record.flaggedForReview) continue;
+
+    // A WFH session still inside its limit is still being worked (e.g. started
+    // late last night) — the WFH auto clock-out owns it, not this default.
+    if (record.sessions.some((s) => !s.clockOut && s.workLocation === WorkLocation.wfh)) continue;
 
     const expectedStart = record.employee?.team?.expectedStartTime ?? "11:00";
     const expectedEnd = record.employee?.team?.expectedEndTime ?? "19:00";

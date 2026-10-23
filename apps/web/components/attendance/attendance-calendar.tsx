@@ -46,7 +46,7 @@ export type CalendarDay = {
   isHalfDay: boolean;
   isCompensation: boolean;
   /** Why the day is what it is, where not obvious (automatic weekly off etc.). */
-  note?: "auto_off" | "provisional_off" | "declared_unpaid" | null;
+  note?: "auto_off" | "provisional_off" | "declared_unpaid" | "advance" | null;
   /** Leave covering part or all of the day, in days (half-day leave = 0.5). */
   leavePaid?: number;
   leaveUnpaid?: number;
@@ -304,7 +304,10 @@ function DayTooltip({ day }: { day: CalendarDay }) {
             </span>
           )}
           {day.sessionCount > 1 && <span>{day.sessionCount} sessions (breaks not counted)</span>}
-          {day.isCompensation && status !== "compensation" && <span>Marked as a compensation day</span>}
+          {day.note === "advance" && <span>Worked in advance — earned a balance day (see Balance days).</span>}
+          {day.isCompensation && status !== "compensation" && day.note !== "advance" && (
+            <span>Marked as a compensation day</span>
+          )}
           {status === "live" && <span>Counted once you clock out.</span>}
           {day.pending && <span>Not approved yet — not counted in the totals</span>}
         </div>

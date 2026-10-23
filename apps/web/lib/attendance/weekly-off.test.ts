@@ -115,10 +115,14 @@ describe("classifyMonth — automatic weekly off", () => {
     const tenth = r.days.find((x) => x.date === d(10))!;
     expect(tenth.status).toBe("weekly_off");
     expect(tenth.note).toBe("auto_off");
-    // The 14th was worked and is no longer the off: present, not compensation.
-    expect(r.days.find((x) => x.date === d(14))!.status).toBe("present");
-    // The other three Sundays had nothing to give the off to: compensation.
-    expect(r.compensationDays).toBe(3);
+    // The 14th was worked and is no longer the off: an ordinary present day.
+    const fourteenth = r.days.find((x) => x.date === d(14))!;
+    expect(fourteenth.status).toBe("present");
+    expect(fourteenth.note).toBeUndefined();
+    // The other three Sundays had nothing to give the off to: worked in advance
+    // (shown as present, each earning a balance day).
+    expect(r.advanceDays).toBe(3);
+    expect(r.compensationDays).toBe(0);
   });
 
   test("the same no-show is absent when the Sunday is not worked", () => {
@@ -134,9 +138,10 @@ describe("classifyMonth — automatic weekly off", () => {
     expect(tenth.status).toBe("unpaid_leave");
     expect(tenth.note).toBe("declared_unpaid");
     expect(r.unpaidLeaveDays).toBe(1);
-    // With nothing left to take the off, the worked Sunday is compensation again.
-    expect(r.days.find((x) => x.date === d(14))!.status).toBe("compensation");
-    expect(r.compensationDays).toBe(4);
+    // With nothing left to take the off, the worked Sunday is an advance day again.
+    expect(r.days.find((x) => x.date === d(14))).toMatchObject({ status: "present", note: "advance" });
+    expect(r.advanceDays).toBe(4);
+    expect(r.compensationDays).toBe(0);
   });
 
   test("a week straddling two months resolves the same from either side", () => {

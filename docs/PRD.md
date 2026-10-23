@@ -95,7 +95,7 @@ This is a critical design decision — **do not merge these two into one task ty
   1. Employee taps a **Clock In** button (timestamped by the server, not client-supplied) at the start of their day, and a **Clock Out** button at the end.
   2. This raw clock-in/out record is visible to **HR/Admin**, who can **review, edit, and approve** the recorded times (to correct forgotten clock-outs, mistaken entries, etc.). Until approved, the record should be treated as provisional for payroll purposes.
   3. Approved attendance records feed into the monthly deduction calculation (late/half-day/leave) in payroll.
-- **Half-day definition:** an employee is marked half-day if their total clocked time for the day is **under 5 hours**.
+- **Half-day definition:** an employee is marked half-day if their total clocked time for the day is **under 7 hours** (raised from 5 on 2026-10-24; applies to records judged from then on).
 - **Leave types:** Paid and Unpaid. Leave is one type of a more general **Request** entity (see Section 5.9). **Leave requests are approved only by HR/Admin** (not Team Leads — see 5.9).
 - Attendance record fields: Employee ID, Date, Clock-In timestamp, Clock-Out timestamp, Approval status, Approved/edited by (HR/Admin user), Edit history (for audit — keep the original clock times alongside any HR/Admin edits).
 

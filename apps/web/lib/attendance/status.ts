@@ -1,4 +1,4 @@
-import { hasOpenSessionToday } from "@/lib/attendance/sessions";
+import { hasOpenSession } from "@/lib/attendance/sessions";
 
 // Attendance helper consumed by the work-item routes to gate task modification
 // on the assignee's own clock-in state.
@@ -9,5 +9,5 @@ import { hasOpenSessionToday } from "@/lib/attendance/sessions";
 // clock in again whenever you like, but while you are clocked out you cannot
 // log progress.
 export async function isClockedInNow(employeeId: string): Promise<boolean> {
-  return hasOpenSessionToday(employeeId);
+  return hasOpenSession(employeeId);
 }

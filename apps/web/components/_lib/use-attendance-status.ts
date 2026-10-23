@@ -8,6 +8,8 @@ export type AttendanceSession = {
   clockIn: string;
   clockOut: string | null;
   workLocation: "office" | "wfh";
+  /** Closed by the system at the WFH session limit, not by the employee. */
+  autoClosed?: boolean;
 };
 
 type AttendanceRecord = {
@@ -44,7 +46,13 @@ export function useAttendanceStatus() {
     const res = await apiFetch<AttendanceRecord[]>("/attendance");
     if (res.data) {
       const t = todayLocal();
-      setAttendance(res.data.find((r) => r.date.slice(0, 10) === t) ?? null);
+      // An open session wins over "today's" record: someone working from home
+      // past midnight is still clocked in on the record they started, and with
+      // only the date match the clock-out button vanished (and Clock In came
+      // back) the moment the date turned over (2026-10-24). The list is newest
+      // day first, so the first open one is the most recent.
+      const open = res.data.find((r) => r.sessions?.some((s) => s.clockOut === null));
+      setAttendance(open ?? res.data.find((r) => r.date.slice(0, 10) === t) ?? null);
     }
     setLoading(false);
   }, []);

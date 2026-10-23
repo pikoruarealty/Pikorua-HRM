@@ -4,7 +4,8 @@ import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
 import { todayDateOnly } from "@/lib/attendance/time";
-import { findOpenSession } from "@/lib/attendance/sessions";
+import { findOpenSessionForEmployee } from "@/lib/attendance/sessions";
+import { autoCloseOverlongWfhSessions } from "@/lib/attendance/wfh-autoclose";
 import { ATTENDANCE_EXEMPT_MESSAGE, isAttendanceExemptRole } from "@/lib/attendance/tracking";
 import { notifyFinanceUsers } from "@/lib/notifications/push";
 import { audit } from "@/lib/audit";
@@ -92,8 +93,20 @@ export async function POST(req: Request) {
     where: { employeeId_date: { employeeId, date } },
   });
 
-  if (existing && (await findOpenSession(existing.id))) {
-    return fail(ErrorCode.CONFLICT, "Already clocked in today.", 409);
+  // An open session counts wherever it lives: a WFH session opened last night
+  // is still open this morning (until the system closes it at its limit), and
+  // opening a second one beside it would split one stretch of work in two.
+  await autoCloseOverlongWfhSessions(now, employeeId);
+  const stillOpen = await findOpenSessionForEmployee(employeeId);
+  if (stillOpen) {
+    const openDate = stillOpen.record.date.toISOString().slice(0, 10);
+    return fail(
+      ErrorCode.CONFLICT,
+      openDate === date.toISOString().slice(0, 10)
+        ? "Already clocked in today."
+        : `You're still clocked in from ${openDate}. Clock out first.`,
+      409,
+    );
   }
 
   // Reopening an approved day would silently invalidate the approved times

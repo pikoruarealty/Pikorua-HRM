@@ -170,7 +170,7 @@ One row per employee per day. The clock columns are the day's **bounds**, not a 
 | clock_in_approved | timestamptz? | HR/Admin-edited/approved value; falls back to `clock_in_raw` if unedited |
 | clock_out_approved | timestamptz? | HR/Admin-edited/approved value; falls back to `clock_out_raw` if unedited |
 | total_hours | numeric(4,2)? | **sum of the day's closed sessions**, not last-out minus first-in — otherwise breaks would be paid as work. `null` while a session is open |
-| is_half_day | boolean | derived: `0 < total_hours < 5` |
+| is_half_day | boolean | derived: `0 < total_hours < 7` |
 | is_compensation | boolean | (2026-08-07) Admin/HR manual override marking an otherwise-normal present day as a compensation day (e.g. making up for leave taken elsewhere), independent of the automatic Sunday-clock-in detection. Both paths feed the same `compensationDays` bucket. Set via `.../edit` |
 | late_exempt | boolean | (2026-08-12) Admin/HR manual override: waives the late-arrival deduction for a day where lateness wasn't the employee's fault (e.g. office inaccessible) and no make-up should be required. Checked first in `getAttendanceSummary`'s `lateCount` loop, before the automatic `isLateWaivedByMakeup` make-up waiver. Set via `.../edit`, audited |
 | late_exempt_reason | text? | human-readable reason set alongside `late_exempt` |
@@ -183,6 +183,12 @@ One row per employee per day. The clock columns are the day's **bounds**, not a 
 | flag_reason | text? | human-readable reason set alongside `flagged_for_review` |
 | created_at | timestamptz | |
 | updated_at | timestamptz | |
+
+### 2026-10-24 additions
+- `attendance_sessions.auto_closed` boolean (default false) — true when the system closed a WFH session at its 8 h limit (`lib/attendance/wfh-autoclose.ts`).
+- `compensation_credits.work_location` `WorkLocation` (default `office`; backfilled from the source record) — where the earning day was worked. An office credit can cover any unpaid day; a WFH credit only a WFH day (`canCreditCover`).
+- `payroll_config.wfh_weekly_cap_hours` decimal(5,2) default 10 — most WFH hours per ISO week that count toward the WFH-hours target. Versioned with the rest of the row.
+- `wfh_weekly_approvals` — one row per (`employee_id`, `week_start` Monday): `extra_hours`, `approved_by` (Admin), `reason`. Counted WFH hours for a week = `min(actual, cap + extra_hours)`.
 
 ### `attendance_sessions` (2026-08-11)
 One continuous stretch of clocked-in time. Added because clocking out used to end the day permanently: an employee who stepped out at lunch could not come back, and could not log any progress for the rest of the day.

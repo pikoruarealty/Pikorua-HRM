@@ -42,6 +42,14 @@ const ALL_LEAVE_TYPES: RequestType[] = [RequestType.leave_casual, RequestType.le
 //  - Today is not final. A day still open (clocked in, not out) or not started yet
 //    is `live` / `today`, never "absent". A device punch auto-approves the day at
 //    once with 0 hours until the session closes, which used to read as absent.
+//
+// 2026-10-24 (owner request): a day worked IN ADVANCE — the weekly off, or a day
+// Admin/HR flagged as compensation — is shown as an ordinary PRESENT day (note
+// `advance`), not as "Compensation". What it earned lives separately as a balance
+// day (a compensation credit, lib/attendance/compensation-credits.ts) usable for
+// 60 days. It is pay-neutral: present and compensation have always been worth one
+// day each, so `payableDays`/`daysWorked` do not move. `compensationDays` now
+// counts only a part-timer's over-quota days (paid, but no balance is earned).
 
 export type MonthlyBreakdown = {
   presentDays: number;
@@ -54,7 +62,13 @@ export type MonthlyBreakdown = {
   /** Absent in days. Fractional for half a day of leave with the rest unworked, and
    *  for a part-timer's weekly-quota shortfall. */
   absentDays: number;
+  /** A part-timer's worked days beyond the weekly quota. Days worked in advance
+   *  (weekly off / flagged) are in `presentDays` — see `advanceDays`. */
   compensationDays: number;
+  /** Days worked in advance (a worked weekly off, or one flagged as compensation):
+   *  counted in `presentDays`, each earning a balance day. Not a working day the
+   *  employee owed, so they are left out of `creditedWorkingDays`. */
+  advanceDays: number;
   /** Expected working days considered so far (present+half+holiday+paidLeave+unpaidLeave+absent). */
   workingDaysElapsed: number;
   /** Days that count toward pay: present + half×0.5 + paid leave + holiday +
@@ -110,8 +124,10 @@ export type ClassifiedDay = {
    *  - auto_off: a no-show day turned into the week's weekly off automatically;
    *  - provisional_off: the same, but this week's default off day is still to
    *    come, so it can flip back to absent;
-   *  - declared_unpaid: the employee switched an automatic weekly off to unpaid. */
-  note?: "auto_off" | "provisional_off" | "declared_unpaid";
+   *  - declared_unpaid: the employee switched an automatic weekly off to unpaid;
+   *  - advance: a day worked in advance (weekly off / flagged) — shown as present,
+   *    and it earned a balance day. */
+  note?: "auto_off" | "provisional_off" | "declared_unpaid" | "advance";
   /** What the day is worth toward pay, in days (0, 0.5, 1). */
   credit: number;
   /** Leave applied to this day, in days — present only when > 0. A half-day leave
@@ -220,6 +236,7 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
     unpaidLeaveDays: 0,
     absentDays: 0,
     compensationDays: 0,
+    advanceDays: 0,
     workingDaysElapsed: 0,
     payableDays: 0,
     daysWorked: 0,
@@ -311,8 +328,9 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
           if (live) {
             result.days.push({ date: key, status: "live", credit: 0 });
           } else {
-            result.compensationDays += 1;
-            result.days.push({ date: key, status: "compensation", credit: 1 });
+            result.presentDays += 1;
+            result.advanceDays += 1;
+            result.days.push({ date: key, status: "present", note: "advance", credit: 1 });
           }
         } else {
           result.days.push({
@@ -334,9 +352,10 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
 
       if (attendance?.isCompensation) {
         // Manually flagged compensation day — same treatment as an
-        // off-day comp day: paid, but not counted as a regular working day.
-        result.compensationDays += 1;
-        result.days.push({ date: key, status: "compensation", credit: 1 });
+        // off-day advance day: paid, but not counted as a regular working day.
+        result.presentDays += 1;
+        result.advanceDays += 1;
+        result.days.push({ date: key, status: "present", note: "advance", credit: 1 });
         continue;
       }
 
@@ -461,8 +480,11 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
       }
 
       if (attendance?.isCompensation) {
-        result.compensationDays += 1;
-        weekDays.push({ date: key, status: "compensation", credit: 1 });
+        // A flagged day earns a balance day, so it is shown as present like any
+        // day worked in advance. It stays outside the weekly quota (as before).
+        result.presentDays += 1;
+        result.advanceDays += 1;
+        weekDays.push({ date: key, status: "present", note: "advance", credit: 1 });
         continue;
       }
 
@@ -526,7 +548,8 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
       result.presentDays += weekPresent - toRelabel;
       result.workingDaysElapsed += targetForChunk;
       for (let i = weekDays.length - 1; i >= 0 && toRelabel > 0; i--) {
-        if (weekDays[i]!.status === "present") {
+        // An advance day is outside the quota already — never relabel it.
+        if (weekDays[i]!.status === "present" && weekDays[i]!.note !== "advance") {
           weekDays[i]!.status = "compensation";
           toRelabel -= 1;
         }
@@ -576,7 +599,7 @@ function finish(result: MonthlyBreakdown, isFlexible: boolean, flexibleCredited:
   result.weeklyOffDays = result.days.filter((d) => d.status === "weekly_off").length;
   result.creditedWorkingDays = isFlexible
     ? flexibleCredited
-    : result.presentDays + result.halfDays * 0.5 + result.holidayDays + result.paidLeaveDays;
+    : result.presentDays - result.advanceDays + result.halfDays * 0.5 + result.holidayDays + result.paidLeaveDays;
   return result;
 }
 

@@ -45,14 +45,16 @@ describe("classifyMonth — attendance before the joining date", () => {
     expect(r.presentDays).toBe(3);
   });
 
-  test("an off day worked before joining is a compensation day", () => {
+  test("an off day worked before joining is a day worked in advance (shown as present)", () => {
     const attendanceByDate = new Map<string, Att>([[day(7), present()]]); // Sunday
     const r = classifyMonth(
       MONTH,
       YEAR,
       lookups({ attendanceByDate, dateOfJoining: new Date("2026-06-10T00:00:00.000Z") }),
     );
-    expect(r.compensationDays).toBe(1);
+    expect(r.advanceDays).toBe(1);
+    expect(r.presentDays).toBe(1);
+    expect(r.compensationDays).toBe(0);
   });
 
   test("unattended days before joining are still not absences", () => {
@@ -82,8 +84,10 @@ describe("classifyMonth — attendance before the joining date", () => {
     // Every approved day lands in exactly one worked bucket.
     expect(r.presentDays + r.halfDays + r.compensationDays).toBe(26);
     // Sundays 2 and 9 August: nothing before them in the week to give the off
-    // to (3-4 Aug pre-date joining), so they stay compensation days.
-    expect(r.compensationDays).toBe(2);
+    // to (3-4 Aug pre-date joining), so they stay days worked in advance — shown
+    // as present, counted in advanceDays.
+    expect(r.advanceDays).toBe(2);
+    expect(r.compensationDays).toBe(0);
     // 10, 20 and 28 August are no-shows in weeks where the Sunday was worked:
     // each is that week's automatic weekly off, so none is an absence, and the
     // Sundays 16/23/30 are ordinary working days.

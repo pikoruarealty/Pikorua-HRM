@@ -2,7 +2,7 @@
 set -euo pipefail
 job="${1:?job name required}"
 case "$job" in
-  device-sync|meeting-reminders|birthday-check|attendance-eod|daily-rollover|crm-sync|task-reminders) ;;
+  device-sync|meeting-reminders|birthday-check|attendance-eod|daily-rollover|crm-sync|task-reminders|wfh-autoclose) ;;
   *) exit 2 ;;
 esac
 if [[ "$job" == device-sync ]]; then

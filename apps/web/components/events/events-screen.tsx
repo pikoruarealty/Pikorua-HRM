@@ -129,7 +129,7 @@ export function EventsScreen() {
             <CardTitle>Create meeting</CardTitle>
           </CardHeader>
           <CardContent>
-            <form onSubmit={createMeeting} className="grid gap-3 sm:grid-cols-2">
+            <form onSubmit={createMeeting} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="flex flex-col gap-1.5">
                 <Label>Title</Label>
                 <Input value={title} onChange={(e) => setTitle(e.target.value)} required />

@@ -106,7 +106,7 @@ export function SelfLogForm({ disabled, onLogged }: { disabled: boolean; onLogge
             </Button>
           </div>
         )}
-        <form onSubmit={submit} className="grid gap-3 sm:grid-cols-2">
+        <form onSubmit={submit} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           {effectiveMode === "catalog" ? (
             <>
               <div className="flex flex-col gap-1.5">

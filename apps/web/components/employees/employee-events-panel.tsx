@@ -88,7 +88,7 @@ export function EmployeeEventsPanel({ employeeId }: { employeeId: string }) {
         <CardTitle>Events</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        <form onSubmit={onAdd} className="grid gap-3 sm:grid-cols-[1fr_auto_auto]">
+        <form onSubmit={onAdd} className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto_auto]">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="event_title">Title</Label>
             <Input

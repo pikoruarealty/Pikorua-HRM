@@ -15,6 +15,16 @@ import { cn } from "@/lib/utils";
 
 type Split = { office: number; wfh: number };
 
+type BalanceCredit = {
+  id: string;
+  earnedDate: string;
+  expiresAt: string;
+  workLocation: "office" | "wfh";
+  status: "available" | "covering" | "used" | "expired";
+  coversDate?: string;
+  coversKind?: "absence" | "unpaid_leave";
+};
+
 type Summary = {
   late_count: number;
   half_day_count: number;
@@ -25,7 +35,11 @@ type Summary = {
   half_days: number;
   paid_leave_days: number;
   unpaid_leave_days: number;
+  /** A part-timer's over-quota days. Days worked in advance are in present_days. */
   compensation_days: number;
+  /** Days worked in advance (weekly off / flagged) — counted in present_days. */
+  advance_days: number;
+  compensation_balance: { availableCount: number; credits: BalanceCredit[] };
   holiday_days: number;
   working_days_elapsed: number;
   /** Days that count toward pay: present + ½ × half-days + paid leave + holidays + compensation. */
@@ -70,15 +84,29 @@ type WfhPlan =
   | {
       enabled: true;
       expectedPerWeek: number;
-      thisWeek: { worked: number; target: number };
+      /** Hours of WFH per week that count (Admin-set cap). */
+      capPerWeek: number;
+      /** `worked` = counted hours (after the cap and any Admin approval); `actual` = really worked. */
+      thisWeek: WfhWeekRow;
+      recent: WfhWeekRow[];
       balance: {
         bankedHours: number;
+        bankedFromOfficeHours: number;
         bankedUntil: string | null;
         owedHours: number;
         owedUntil: string | null;
         unmetHours: number;
       };
     };
+
+type WfhWeekRow = {
+  weekStart: string;
+  worked: number;
+  actual: number;
+  cap: number;
+  approvedExtra: number;
+  target: number;
+};
 
 function shortDate(key: string) {
   return new Date(`${key}T00:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
@@ -89,6 +117,7 @@ export function EmployeeAttendancePanel({
   title = "Attendance",
   canEditDays = false,
   canMarkPaidLeave = false,
+  canApproveWfhHours = false,
 }: {
   employeeId: string;
   title?: string;
@@ -98,6 +127,8 @@ export function EmployeeAttendancePanel({
   /** Admin viewing someone else: lets them turn an absent / unpaid-leave day into
    *  paid leave (POST /attendance/mark-paid-leave). */
   canMarkPaidLeave?: boolean;
+  /** Admin: approve extra WFH hours over the weekly cap (PUT .../wfh-hours/extra). */
+  canApproveWfhHours?: boolean;
 }) {
   const [month, setMonth] = useState(currentMonth);
   const [summary, setSummary] = useState<Summary | null>(null);
@@ -249,7 +280,12 @@ export function EmployeeAttendancePanel({
         ) : summary ? (
           <div className={cn("flex flex-col gap-4 transition-opacity sm:gap-5", loading && "opacity-60")}>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-3 lg:grid-cols-8">
-              <Stat label="Present" value={summary.present_days} split={summary.by_status.present} />
+              <Stat
+                label="Present"
+                value={summary.present_days}
+                split={summary.by_status.present}
+                hint={summary.advance_days > 0 ? `incl. ${summary.advance_days} worked in advance` : undefined}
+              />
               <Stat label="Half-day" value={summary.half_days} split={summary.by_status.half_day} />
               <Stat label="Absent" value={summary.absent_days} alert={summary.absent_days > 0} />
               <Stat label="Late (approved)" value={summary.late_count} />
@@ -292,7 +328,16 @@ export function EmployeeAttendancePanel({
               </div>
             </div>
 
-            {wfh?.enabled && <WfhLine plan={wfh} />}
+            {wfh?.enabled && (
+              <WfhLine
+                plan={wfh}
+                employeeId={employeeId}
+                canApprove={canApproveWfhHours}
+                onChanged={() => setReloadKey((k) => k + 1)}
+              />
+            )}
+
+            <BalanceDays balance={summary.compensation_balance} />
 
             <div className="flex flex-col gap-3">
               <AttendanceCalendar
@@ -408,18 +453,22 @@ function Stat({
   value,
   split,
   alert,
+  hint,
 }: {
   label: string;
   value: number | string;
   /** Where the counted days were worked — only shown when there's something to split. */
   split?: Split;
   alert?: boolean;
+  /** Small muted extra under the label. */
+  hint?: string;
 }) {
   const showSplit = split && split.office + split.wfh > 0;
   return (
     <div className="rounded-lg border p-2.5 sm:p-3">
       <div className={cn("text-xl font-semibold tabular-nums sm:text-2xl", alert && "text-destructive")}>{value}</div>
       <div className="text-xs text-muted-foreground">{label}</div>
+      {hint && <div className="mt-0.5 text-[11px] text-muted-foreground">{hint}</div>}
       {showSplit && (
         <div className="mt-1.5 flex flex-wrap gap-x-2.5 gap-y-0.5 text-[11px] text-muted-foreground">
           <span className="flex items-center gap-1">
@@ -471,30 +520,197 @@ function HoursTile({
   );
 }
 
-/** One quiet line: this week's WFH hours against the target, plus any banked
- *  (worked ahead) or owed (still to make up) hours with the date they lapse. */
-function WfhLine({ plan }: { plan: Extract<WfhPlan, { enabled: true }> }) {
+/** WFH hours against the target. Only `capPerWeek` hours of a week count, so the
+ *  line shows counted vs actually worked; any banked (worked ahead) or owed (still
+ *  to make up) hours carry the date they lapse. An Admin can count more of what was
+ *  really worked from the rows below. */
+function WfhLine({
+  plan,
+  employeeId,
+  canApprove,
+  onChanged,
+}: {
+  plan: Extract<WfhPlan, { enabled: true }>;
+  employeeId: string;
+  canApprove: boolean;
+  onChanged: () => void;
+}) {
   const b = plan.balance;
+  const t = plan.thisWeek;
+  // Weeks where the cap held something back (or an Admin already released some).
+  const capped = [t, ...plan.recent].filter((w) => w.actual > w.cap || w.approvedExtra > 0);
   return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-      <span className="flex items-center gap-1.5">
-        <span className={cn("h-2 w-2 rounded-full", LOCATION_STYLE.wfh.dot)} />
-        WFH this week{" "}
-        <span className="font-medium text-foreground">
-          {formatHours(plan.thisWeek.worked)} / {formatHours(plan.thisWeek.target)}
+    <div className="flex flex-col gap-1.5 text-xs text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+        <span className="flex items-center gap-1.5">
+          <span className={cn("h-2 w-2 rounded-full", LOCATION_STYLE.wfh.dot)} />
+          WFH this week{" "}
+          <span className="font-medium text-foreground">
+            {formatHours(t.worked)} / {formatHours(t.target)}
+          </span>
+          {t.actual > t.worked && (
+            <span>
+              ({formatHours(t.actual)} worked, {formatHours(plan.capPerWeek)} counts)
+            </span>
+          )}
         </span>
+        {b.bankedHours > 0 && (
+          <span>
+            +{formatHours(b.bankedHours)} ahead
+            {b.bankedFromOfficeHours > 0 ? ` (${formatHours(b.bankedFromOfficeHours)} from office time)` : ""}
+            {b.bankedUntil ? ` · until ${shortDate(b.bankedUntil)}` : ""}
+          </span>
+        )}
+        {b.owedHours > 0 && (
+          <span className="text-warning">
+            {formatHours(b.owedHours)} to make up{b.owedUntil ? ` by ${shortDate(b.owedUntil)}` : ""}
+          </span>
+        )}
+        {b.unmetHours > 0 && <span className="text-destructive">{formatHours(b.unmetHours)} missed</span>}
+      </div>
+      {capped.map((w) => (
+        <WfhCapRow key={w.weekStart} week={w} employeeId={employeeId} canApprove={canApprove} onChanged={onChanged} />
+      ))}
+    </div>
+  );
+}
+
+function WfhCapRow({
+  week,
+  employeeId,
+  canApprove,
+  onChanged,
+}: {
+  week: WfhWeekRow;
+  employeeId: string;
+  canApprove: boolean;
+  onChanged: () => void;
+}) {
+  const headroom = Math.max(0, Math.round((week.actual - week.cap) * 100) / 100);
+  const [extra, setExtra] = useState(String(week.approvedExtra > 0 ? week.approvedExtra : headroom));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function save(hours: number) {
+    setBusy(true);
+    setErr(null);
+    try {
+      await getJson(
+        await fetch(`/api/v1/attendance/${employeeId}/wfh-hours/extra`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ week_start: week.weekStart, extra_hours: hours }),
+        }),
+      );
+      onChanged();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Could not save.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border bg-muted/30 px-2.5 py-1.5">
+      <span>
+        Week of <span className="font-medium text-foreground">{shortDate(week.weekStart)}</span>:{" "}
+        <span className="font-medium text-foreground">{formatHours(week.actual)}</span> worked from home,{" "}
+        <span className="font-medium text-foreground">{formatHours(week.worked)}</span> counted
+        {week.approvedExtra > 0 && <> (incl. {formatHours(week.approvedExtra)} approved by Admin)</>}
       </span>
-      {b.bankedHours > 0 && (
-        <span>
-          +{formatHours(b.bankedHours)} ahead{b.bankedUntil ? ` · until ${shortDate(b.bankedUntil)}` : ""}
+      {canApprove && headroom > 0 && (
+        <span className="flex items-center gap-1.5">
+          <input
+            type="number"
+            min={0}
+            max={headroom}
+            step={0.5}
+            value={extra}
+            onChange={(e) => setExtra(e.target.value)}
+            aria-label="Extra WFH hours to count"
+            className="h-7 w-16 rounded border bg-background px-1.5 text-foreground"
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 px-2 text-xs"
+            disabled={busy || !(Number(extra) >= 0) || Number(extra) > headroom}
+            onClick={() => save(Number(extra))}
+          >
+            {busy ? "Saving…" : week.approvedExtra > 0 ? "Update" : "Count extra"}
+          </Button>
+          {week.approvedExtra > 0 && (
+            <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" disabled={busy} onClick={() => save(0)}>
+              Remove
+            </Button>
+          )}
         </span>
       )}
-      {b.owedHours > 0 && (
-        <span className="text-warning">
-          {formatHours(b.owedHours)} to make up{b.owedUntil ? ` by ${shortDate(b.owedUntil)}` : ""}
-        </span>
+      {err && <span className="w-full text-destructive">{err}</span>}
+    </div>
+  );
+}
+
+const KIND_LABEL = { absence: "an absent day", unpaid_leave: "an unpaid-leave day" } as const;
+
+/** Balance days: one per day worked in advance, usable against any absent or
+ *  unpaid-leave day for 60 days. Office-earned days cover any day; a day earned
+ *  working from home only covers a day that was itself a WFH day. */
+function BalanceDays({ balance }: { balance: { availableCount: number; credits: BalanceCredit[] } }) {
+  if (balance.credits.length === 0) return null;
+  const open = balance.credits.filter((c) => c.status === "available" || c.status === "covering");
+  const past = balance.credits.filter((c) => c.status === "used" || c.status === "expired").slice(0, 4);
+  return (
+    <div className="rounded-lg border p-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div className="text-sm font-medium">
+          Balance days <span className="tabular-nums text-muted-foreground">· {balance.availableCount} available</span>
+        </div>
+        <div className="text-[11px] text-muted-foreground">
+          Earned by working in advance · use within 60 days against any absence or unpaid leave
+        </div>
+      </div>
+      {open.length > 0 ? (
+        <ul className="mt-2 flex flex-col gap-1 text-xs">
+          {open.map((c) => (
+            <li key={c.id} className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+              <span
+                className={cn(
+                  "rounded-full border px-1.5 py-0.5 text-[10px] font-medium",
+                  c.workLocation === "wfh" ? LOCATION_STYLE.wfh.text : LOCATION_STYLE.office.text,
+                )}
+              >
+                {c.workLocation === "wfh" ? "WFH" : "Office"}
+              </span>
+              <span>Worked {shortDate(c.earnedDate)}</span>
+              <span className="text-muted-foreground">· use by {shortDate(c.expiresAt)}</span>
+              {c.status === "covering" && c.coversDate && (
+                <span className="text-foreground">
+                  · will cover {KIND_LABEL[c.coversKind ?? "absence"]} on {shortDate(c.coversDate)}
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-2 text-xs text-muted-foreground">No unused balance days.</p>
       )}
-      {b.unmetHours > 0 && <span className="text-destructive">{formatHours(b.unmetHours)} missed</span>}
+      {past.length > 0 && (
+        <ul className="mt-2 flex flex-col gap-0.5 border-t pt-2 text-[11px] text-muted-foreground">
+          {past.map((c) => (
+            <li key={c.id}>
+              {shortDate(c.earnedDate)} ({c.workLocation === "wfh" ? "WFH" : "office"}) —{" "}
+              {c.status === "used"
+                ? `used${c.coversDate ? ` for ${shortDate(c.coversDate)}` : ""}`
+                : "expired unused (added to leave balance)"}
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="mt-2 text-[11px] text-muted-foreground">
+        An office day can only be made up by working in the office; a day owed for work-from-home can be made up either
+        way, so a day earned from home only covers a WFH day.
+      </p>
     </div>
   );
 }

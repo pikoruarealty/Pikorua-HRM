@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db/prisma";
-import { todayDateOnly, FULL_DAY_HOURS } from "@/lib/attendance/time";
+import { FULL_DAY_HOURS } from "@/lib/attendance/time";
 
 // Session arithmetic for a day that can be clocked in and out more than once
 // (2026-08-11). Clock-out used to end the day permanently — an employee who
@@ -59,13 +59,27 @@ export async function findOpenSession(recordId: string) {
   });
 }
 
-/** Is this employee clocked in *right now* — i.e. does today's record have an
- *  open session? This is the gate on logging any work progress. */
-export async function hasOpenSessionToday(employeeId: string): Promise<boolean> {
-  const record = await prisma.attendanceRecord.findUnique({
-    where: { employeeId_date: { employeeId, date: todayDateOnly() } },
-    select: { id: true },
+/** The employee's open session wherever it lives — NOT just on today's record.
+ *
+ *  A session belongs to the day it was opened on. Someone working from home late
+ *  at night is still clocked in when the date turns over, and the next day's
+ *  record does not exist yet — looking only at today's record made the clock-out
+ *  button vanish at midnight, left the session unclosable, and left the day
+ *  unapprovable (2026-10-24). The record it comes back with is the one the
+ *  session's hours must be written to. */
+export async function findOpenSessionForEmployee(employeeId: string) {
+  return prisma.attendanceSession.findFirst({
+    where: { clockOut: null, record: { employeeId } },
+    orderBy: { clockIn: "desc" },
+    include: { record: true },
   });
-  if (!record) return false;
-  return (await findOpenSession(record.id)) !== null;
+}
+
+/** Is this employee clocked in *right now* — i.e. do they have an open session?
+ *  This is the gate on logging any work progress. Date-independent on purpose:
+ *  a session that started before midnight is still a live session after it. */
+export async function hasOpenSession(employeeId: string): Promise<boolean> {
+  return (
+    (await prisma.attendanceSession.count({ where: { clockOut: null, record: { employeeId } } })) > 0
+  );
 }

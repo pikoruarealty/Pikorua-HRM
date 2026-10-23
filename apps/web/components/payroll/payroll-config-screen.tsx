@@ -12,6 +12,7 @@ type PayrollConfig = {
   id: string;
   lateDeductionPercent: string;
   lateGraceMinutes: number;
+  wfhWeeklyCapHours?: string;
   effectiveFrom: string;
 };
 
@@ -28,6 +29,7 @@ export function PayrollConfigScreen({ canEdit }: { canEdit: boolean }) {
 
   const [lateDeductionPercent, setLateDeductionPercent] = useState("");
   const [lateGraceMinutes, setLateGraceMinutes] = useState("0");
+  const [wfhCap, setWfhCap] = useState("10");
   const [effectiveFrom, setEffectiveFrom] = useState(new Date().toISOString().slice(0, 10));
   const [submitting, setSubmitting] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -40,6 +42,7 @@ export function PayrollConfigScreen({ canEdit }: { canEdit: boolean }) {
       if (data) {
         setLateDeductionPercent(data.lateDeductionPercent);
         setLateGraceMinutes(String(data.lateGraceMinutes ?? 0));
+        setWfhCap(String(Number(data.wfhWeeklyCapHours ?? 10)));
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load payroll config.");
@@ -64,6 +67,7 @@ export function PayrollConfigScreen({ canEdit }: { canEdit: boolean }) {
           body: JSON.stringify({
             late_deduction_percent: lateDeductionPercent,
             late_grace_minutes: lateGraceMinutes,
+            wfh_weekly_cap_hours: wfhCap,
             effective_from: effectiveFrom,
           }),
         }),
@@ -113,6 +117,10 @@ export function PayrollConfigScreen({ canEdit }: { canEdit: boolean }) {
                 </dd>
               </div>
               <div>
+                <dt className="text-muted-foreground">WFH hours counted</dt>
+                <dd className="font-medium">up to {Number(config.wfhWeeklyCapHours ?? 10)} h / week</dd>
+              </div>
+              <div>
                 <dt className="text-muted-foreground">Effective from</dt>
                 <dd className="font-medium">
                   {formatDate(config.effectiveFrom)}
@@ -125,7 +133,10 @@ export function PayrollConfigScreen({ canEdit }: { canEdit: boolean }) {
             on time — a clock-in within the grace window isn&apos;t counted late (0 = exact to the
             minute). Half-day deducts 50% of a day&apos;s pay, and unpaid leave / absent days each
             deduct a full day&apos;s pay — these are fixed fractions of each employee&apos;s own
-            salary, not separately configurable.
+            salary, not separately configurable. The WFH cap is the most work-from-home hours in a
+            week that count toward an employee&apos;s WFH-hours target — 15 h worked with a 10 h cap
+            counts 10 h (Admin can approve more for a week from the employee&apos;s attendance page).
+            It is tracking only: a WFH day is still paid as a normal day.
           </p>
         </CardContent>
       </Card>
@@ -167,6 +178,20 @@ export function PayrollConfigScreen({ canEdit }: { canEdit: boolean }) {
                   required
                   value={lateGraceMinutes}
                   onChange={(e) => setLateGraceMinutes(e.target.value)}
+                  className="w-40"
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="wfhcap">WFH hours counted / week</Label>
+                <Input
+                  id="wfhcap"
+                  type="number"
+                  min="0.5"
+                  max="168"
+                  step="0.5"
+                  required
+                  value={wfhCap}
+                  onChange={(e) => setWfhCap(e.target.value)}
                   className="w-40"
                 />
               </div>

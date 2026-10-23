@@ -1,8 +1,10 @@
 import { prisma } from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth";
 import { ok, fail, failFor, ErrorCode } from "@/lib/api/response";
-import { todayDateOnly, isImplausibleDuration } from "@/lib/attendance/time";
-import { findOpenSession, summariseSessions } from "@/lib/attendance/sessions";
+import { todayDateOnly } from "@/lib/attendance/time";
+import { findOpenSessionForEmployee } from "@/lib/attendance/sessions";
+import { closeSessionAndRecompute } from "@/lib/attendance/close-session";
+import { autoCloseOverlongWfhSessions, WFH_MAX_SESSION_HOURS } from "@/lib/attendance/wfh-autoclose";
 import { buildEodSummary } from "@/lib/eod/summary";
 import { ATTENDANCE_EXEMPT_MESSAGE, isAttendanceExemptRole } from "@/lib/attendance/tracking";
 import { pushNotification } from "@/lib/notifications/push";
@@ -56,58 +58,48 @@ export async function POST(req: Request) {
     endOfDay = parsed.data?.endOfDay ?? true;
   }
 
-  const date = todayDateOnly();
   const now = new Date();
 
-  const existing = await prisma.attendanceRecord.findUnique({
-    where: { employeeId_date: { employeeId, date } },
-  });
-
-  if (!existing?.clockInRaw) {
-    return fail(ErrorCode.CONFLICT, "Must clock in before clocking out.", 409);
-  }
+  // A WFH session past its limit is closed by the system first, so the answer
+  // below reflects it immediately rather than up to a cron interval late.
+  const autoClosed = await autoCloseOverlongWfhSessions(now, employeeId);
 
   // Clocking out closes the OPEN session, not the day: the employee is free to
-  // clock in again afterwards. Without an open session there is nothing to
-  // close — they are already out.
-  const open = await findOpenSession(existing.id);
+  // clock in again afterwards. The session is found wherever it lives, not on
+  // today's record — someone working from home past midnight is still clocked in
+  // on the date they started, and looking only at today's record made clock-out
+  // impossible once the date turned over (2026-10-24).
+  const open = await findOpenSessionForEmployee(employeeId);
   if (!open) {
-    return fail(ErrorCode.CONFLICT, "Already clocked out today.", 409);
+    if (autoClosed.closed > 0) {
+      return fail(
+        ErrorCode.CONFLICT,
+        `You were clocked out automatically after ${WFH_MAX_SESSION_HOURS} hours of work from home. Clock back in if you're still working.`,
+        409,
+      );
+    }
+    const today = await prisma.attendanceRecord.findUnique({
+      where: { employeeId_date: { employeeId, date: todayDateOnly() } },
+      select: { clockInRaw: true },
+    });
+    return fail(
+      ErrorCode.CONFLICT,
+      today?.clockInRaw ? "Already clocked out today." : "Must clock in before clocking out.",
+      409,
+    );
   }
-  await prisma.attendanceSession.update({
-    where: { id: open.id },
-    data: { clockOut: now },
-  });
+
+  // The session's own day: its hours, flags and the EOD summary all belong to the
+  // record it was opened on, even when `now` is already the next calendar day.
+  const date = open.record.date;
 
   // Worked time is the sum of the day's sessions, never last-out minus
   // first-in — the gap between sessions is a break, and paying it would make
   // stepping out for two hours worth the same as working them.
-  const sessions = await prisma.attendanceSession.findMany({
-    where: { recordId: existing.id },
-    select: { clockIn: true, clockOut: true },
-  });
-  const { totalHours, isHalfDay } = summariseSessions(sessions);
-
-  // A day this long is almost certainly a forgotten clock-out rather than a
-  // real shift (2026-08-12) — flag it so /approve refuses it until Admin/HR
-  // looks (see isImplausibleDuration's doc comment). Never overwrite an
-  // existing flag/reason from something else (e.g. a suspected reversed
-  // device punch) that's still unresolved.
-  const implausible = isImplausibleDuration(totalHours);
-
-  const record = await prisma.attendanceRecord.update({
-    where: { id: existing.id },
-    data: {
-      clockOutRaw: now,
-      totalHours,
-      isHalfDay,
-      ...(implausible && !existing.flaggedForReview
-        ? {
-            flaggedForReview: true,
-            flagReason: `Worked ${totalHours}h, well beyond a normal shift — likely a forgotten clock-out. Needs manual review via Edit before it can be approved.`,
-          }
-        : {}),
-    },
+  const { record } = await closeSessionAndRecompute({
+    sessionId: open.id,
+    recordId: open.record.id,
+    at: now,
   });
 
   // EOD wrap-up. Best-effort notifications — never fail the clock-out itself if

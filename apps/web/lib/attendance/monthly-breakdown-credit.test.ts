@@ -305,7 +305,7 @@ describe("today is not final — a day still open is never 'absent'", () => {
     expect(entryOf(r, 10).status).toBe("absent");
   });
 
-  test("today on the week's off day while open is live, not a compensation day yet", () => {
+  test("today on the week's off day while open is live, not an advance day yet", () => {
     const sunday = new Date(2026, 5, 14, 12, 0, 0); // 14 June is a Sunday
     // Claim the Sunday as that week's off, so a clock-in on it would be compensation.
     const r = classifyMonth(
@@ -318,8 +318,9 @@ describe("today is not final — a day still open is never 'absent'", () => {
       }),
     );
     expect(entryOf(r, 14).status).toBe("live");
-    expect(r.compensationDays).toBe(0);
-    // Once it closes it is a compensation day.
+    expect(r.advanceDays).toBe(0);
+    expect(r.presentDays).toBe(0);
+    // Once it closes it is a day worked in advance: shown as present, flagged advance.
     const closed: Att = { hasClockIn: true, isHalfDay: false, isCompensation: false, totalHours: 8, isOpen: false };
     const done = classifyMonth(
       MONTH,
@@ -330,7 +331,9 @@ describe("today is not final — a day still open is never 'absent'", () => {
         movedOffDateByWeek: new Map([[day(8), day(14)]]),
       }),
     );
-    expect(entryOf(done, 14)).toMatchObject({ status: "compensation", credit: 1 });
+    expect(entryOf(done, 14)).toMatchObject({ status: "present", note: "advance", credit: 1 });
+    expect(done.advanceDays).toBe(1);
+    expect(done.compensationDays).toBe(0);
   });
 
   test("part-time: an open day is live, and a half-day so far is not mistaken for absence", () => {
@@ -479,6 +482,14 @@ describe("randomised invariants (500 months)", () => {
         expect({ tag, v: r.halfDays }).toEqual({ tag, v: count("half_day") });
         expect({ tag, v: r.compensationDays }).toEqual({ tag, v: count("compensation") });
         expect({ tag, v: r.holidayDays }).toEqual({ tag, v: count("holiday") });
+
+        // 1b. Days worked in advance are shown as present, counted once, and never
+        //     leak into the attendance score's denominator side.
+        const advance = r.days.filter((d) => d.note === "advance");
+        expect({ tag, v: r.advanceDays }).toEqual({ tag, v: advance.length });
+        for (const d of advance) expect({ tag, s: d.status, c: d.credit }).toEqual({ tag, s: "present", c: 1 });
+        expect(r.advanceDays).toBeLessThanOrEqual(r.presentDays);
+        expect({ tag, ok: r.creditedWorkingDays <= r.workingDaysElapsed + 1e-9 }).toEqual({ tag, ok: true });
 
         // 2. One pay figure, three ways.
         const formula = r.presentDays + r.halfDays * 0.5 + r.paidLeaveDays + r.holidayDays + r.compensationDays;

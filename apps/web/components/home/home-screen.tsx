@@ -350,7 +350,7 @@ export function HomeScreen({
       {isFinance && (
         <section className="flex flex-col gap-3">
           <h2 className="text-sm font-semibold text-muted-foreground">Today&apos;s attendance</h2>
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <RosterCard
               icon={<UserCheck className="size-4" />}
               title="Present today"
@@ -397,7 +397,7 @@ export function HomeScreen({
           <h2 className="text-sm font-semibold text-muted-foreground">
             {isLead ? "Your team" : "Approvals & reviews"}
           </h2>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <StatTile
               icon={<Inbox className="size-4" />}
               label="Requests awaiting action"
@@ -481,7 +481,7 @@ export function HomeScreen({
         </section>
       )}
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {/* Latest announcements — everyone. */}
         <Panel title="Announcements" href="/announcements" linkLabel="All">
           {announcements === null ? (
@@ -627,7 +627,7 @@ export function HomeScreen({
 
       <div>
         <h2 className="mb-3 text-sm font-semibold text-muted-foreground">Quick links</h2>
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {QUICK_LINKS.filter(
             (l) =>
               (hasEmployee || l.href === "/recognition") &&
@@ -895,10 +895,15 @@ function ClockCard() {
           <div className="flex flex-col gap-3">
             <p className="text-muted-foreground">
               {clockedOut
-                ? `Clocked out at ${formatTime(rec!.clockOutRaw!)}. You can clock back in any time.`
+                ? `Clocked out at ${formatTime(rec!.clockOutRaw!)}${
+                    sessions[sessions.length - 1]?.autoClosed ? " (automatically, after 8 hours of work from home)" : ""
+                  }. You can clock back in any time.`
                 : `Clocked in at ${formatTime(openSession!.clockIn)}${
-                    openSession!.workLocation === "wfh" ? " (from home)" : ""
-                  }.`}
+                    // A session carried over midnight belongs to the day it started.
+                    new Date(openSession!.clockIn).toDateString() !== new Date().toDateString()
+                      ? ` on ${new Date(openSession!.clockIn).toLocaleDateString(undefined, { day: "numeric", month: "short" })}`
+                      : ""
+                  }${openSession!.workLocation === "wfh" ? " (from home)" : ""}.`}
             </p>
             <div className="grid grid-cols-2 gap-4">
               <div>

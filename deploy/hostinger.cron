@@ -5,3 +5,4 @@
 10 0 * * * deploy_hrm /opt/pikorua-hrm/hostinger-cron.sh daily-rollover
 15 * * * * deploy_hrm /opt/pikorua-hrm/hostinger-cron.sh crm-sync
 */15 * * * * deploy_hrm /opt/pikorua-hrm/hostinger-cron.sh task-reminders
+*/10 * * * * deploy_hrm /opt/pikorua-hrm/hostinger-cron.sh wfh-autoclose

@@ -268,7 +268,7 @@ export function EmployeeCreateForm() {
         <CardTitle>New employee</CardTitle>
       </CardHeader>
       <CardContent>
-        <form onSubmit={onSubmit} className="grid gap-4 sm:grid-cols-2">
+        <form onSubmit={onSubmit} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div className="flex flex-col gap-2">
             <Label htmlFor="full_name">Full name</Label>
             <Input id="full_name" value={fullName} onChange={(e) => setFullName(e.target.value)} required />

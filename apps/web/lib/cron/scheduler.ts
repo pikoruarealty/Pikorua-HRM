@@ -6,6 +6,7 @@ import { runAttendanceEodCleanup } from "@/lib/cron/attendance-eod-cleanup";
 import { runCrmSync } from "@/lib/cron/crm-sync";
 import { runDeviceSync } from "@/lib/integrations/teamoffice/sync";
 import { runTaskReminders } from "@/lib/cron/task-reminders";
+import { autoCloseOverlongWfhSessions } from "@/lib/attendance/wfh-autoclose";
 
 // In-process scheduler (PRD §6 — "a lightweight scheduled-jobs mechanism").
 // Registered once at server boot from instrumentation.ts when
@@ -105,6 +106,14 @@ export function startScheduler(): void {
   // responsive; it no-ops immediately if the reminder is disabled.
   cron.schedule("*/15 * * * *", () => {
     safeRun("task-reminders", () => runTaskReminders());
+  });
+
+  // WFH auto clock-out — every 10 minutes. Closes a WFH session left open past
+  // WFH_MAX_SESSION_HOURS (2026-10-24) at the limit, so a forgotten clock-out
+  // never leaves a day open (and unapprovable). Keep deploy/hostinger.cron and
+  // hostinger-cron.sh's allow-list in step.
+  cron.schedule("*/10 * * * *", () => {
+    safeRun("wfh-autoclose", () => autoCloseOverlongWfhSessions());
   });
 
   // Recognition weekly/monthly snapshots are no longer auto-scheduled

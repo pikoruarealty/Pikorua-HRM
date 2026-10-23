@@ -417,7 +417,7 @@ export function RequestsScreen() {
             <CardTitle>Submit a request</CardTitle>
           </CardHeader>
           <CardContent>
-            <form onSubmit={submit} className="grid gap-3 sm:grid-cols-2">
+            <form onSubmit={submit} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="flex flex-col gap-1.5">
                 <Label>Type</Label>
                 <Select value={type} onValueChange={setType}>

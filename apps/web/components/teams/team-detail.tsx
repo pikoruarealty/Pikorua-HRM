@@ -113,7 +113,7 @@ export function TeamDetail({ teamId, canManage }: { teamId: string; canManage: b
         <CardHeader>
           <CardTitle>Details</CardTitle>
         </CardHeader>
-        <CardContent className="grid gap-2 text-sm sm:grid-cols-2">
+        <CardContent className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
           <div>
             <span className="text-muted-foreground">Team lead: </span>
             {team.teamLead?.fullName ?? "— unassigned —"}

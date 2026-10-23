@@ -1,4 +1,4 @@
-import { AttendanceApprovalStatus, Prisma, RequestStatus, RequestType } from "@prisma/client";
+import { AttendanceApprovalStatus, Prisma, RequestStatus, RequestType, WorkLocation } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 
 /** Either the default prisma singleton or an interactive-transaction client
@@ -9,6 +9,7 @@ import { addDays, weekStartOf } from "@/lib/attendance/week";
 import { getMonthlyAttendanceBreakdown } from "@/lib/attendance/monthly-breakdown";
 import { getWeekOff } from "@/lib/attendance/weekly-off";
 import { periodBounds } from "@/lib/requests/leave-math";
+import { splitHoursByLocation } from "@/lib/attendance/calendar";
 
 // Compensation credit (comp-off) ledger, 2026-09-06 owner request: "if I come
 // on my weekoff, then it should compensate for my leaves in the timeframe of
@@ -53,8 +54,43 @@ import { periodBounds } from "@/lib/requests/leave-math";
 //    getExpiredUnusedCreditCount below. A credit that redeemed an absence or
 //    an unpaid-leave day never adds to the balance; it already did its job.
 
+// Where the work happened matters (2026-10-24, owner rule): "in-office days can be
+// compensated in office only, but WFH can be compensated both ways, in office and
+// WFH later too."
+// 7. Each credit carries the location of the day that earned it. A day to be
+//    covered is an IN-OFFICE day unless an approved work-from-home request covers
+//    it (then it is a WFH day). An OFFICE credit covers either kind of day; a WFH
+//    credit covers only a WFH day — so a day owed in the office can only be made up
+//    by working in the office. When both could cover a WFH day, the WFH credit is
+//    spent first so the more flexible office credit stays available.
+
 export const COMPENSATION_CREDIT_WINDOW_DAYS = 60;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/** The one rule: may a credit earned at `credit` cover a day that was owed at
+ *  `day`? Office covers anything; WFH covers only a WFH day. */
+export function canCreditCover(credit: WorkLocation, day: WorkLocation): boolean {
+  return credit === WorkLocation.office || day === WorkLocation.wfh;
+}
+
+/** Where an attendance record was worked, for the credit it earns: WFH only when
+ *  the whole day was from home. A day with any office time is an office day (the
+ *  more valuable kind). A record with no session detail falls back to its own
+ *  recorded location. */
+export function creditLocationOf(record: {
+  totalHours: unknown;
+  workLocation: WorkLocation;
+  sessions: { clockIn: Date; clockOut: Date | null; workLocation: WorkLocation }[];
+}): WorkLocation {
+  const split = splitHoursByLocation(
+    record.totalHours === null || record.totalHours === undefined ? null : Number(record.totalHours),
+    record.sessions,
+    record.workLocation,
+  );
+  if (split.office > 0) return WorkLocation.office;
+  if (split.wfh > 0) return WorkLocation.wfh;
+  return record.workLocation;
+}
 
 /** Re-derives whether an attendance record currently qualifies for a
  *  compensation credit and creates/removes the credit row to match. Called
@@ -93,6 +129,9 @@ export async function syncCompensationCreditsForWeek(employeeId: string, date: D
         isCompensation: true,
         clockInApproved: true,
         clockInRaw: true,
+        totalHours: true,
+        workLocation: true,
+        sessions: { select: { clockIn: true, clockOut: true, workLocation: true } },
       },
     }),
     getWeekOff(employeeId, weekStart),
@@ -112,10 +151,11 @@ export async function syncCompensationCreditsForWeek(employeeId: string, date: D
 
     const existingCredit = await prisma.compensationCredit.findUnique({
       where: { sourceRecordId: record.id },
-      select: { id: true, consumedAt: true },
+      select: { id: true, consumedAt: true, workLocation: true },
     });
 
     if (qualifies) {
+      const workLocation = creditLocationOf(record);
       if (!existingCredit) {
         await prisma.compensationCredit.create({
           data: {
@@ -123,8 +163,13 @@ export async function syncCompensationCreditsForWeek(employeeId: string, date: D
             earnedDate: record.date,
             expiresAt: new Date(record.date.getTime() + COMPENSATION_CREDIT_WINDOW_DAYS * MS_PER_DAY),
             sourceRecordId: record.id,
+            workLocation,
           },
         });
+      } else if (!existingCredit.consumedAt && existingCredit.workLocation !== workLocation) {
+        // The day was edited (e.g. re-tagged office/WFH) after the credit was
+        // minted. A credit a payslip already spent keeps the location it was spent as.
+        await prisma.compensationCredit.update({ where: { id: existingCredit.id }, data: { workLocation } });
       }
       continue;
     }
@@ -232,11 +277,15 @@ function wholeUnpaidDaysOf(breakdown: Awaited<ReturnType<typeof getMonthlyAttend
  *  Absence days are matched in full before any unpaid-leave day is
  *  considered, per the owner's "compensate for absent days first" ordering
  *  — only credits left over after absences are exhausted can cover leave.
- *  Each credit and each day is used at most once. */
+ *  Each credit and each day is used at most once.
+ *
+ *  Location (point 7 above): a day without `location` is an in-office day, a
+ *  credit without `workLocation` an office credit — so callers and tests that
+ *  predate the rule behave exactly as before. */
 export function allocateCompensationCredits(
-  absenceDays: { date: Date }[],
-  unpaidLeaveDays: { date: Date; requestId: string | null }[],
-  credits: { id: string; earnedDate: Date; expiresAt: Date }[],
+  absenceDays: { date: Date; location?: WorkLocation }[],
+  unpaidLeaveDays: { date: Date; requestId: string | null; location?: WorkLocation }[],
+  credits: { id: string; earnedDate: Date; expiresAt: Date; workLocation?: WorkLocation }[],
 ): CompensationRedemption[] {
   if (credits.length === 0 || (absenceDays.length === 0 && unpaidLeaveDays.length === 0)) return [];
 
@@ -244,19 +293,27 @@ export function allocateCompensationCredits(
   const usedCreditIds = new Set<string>();
   const redemptions: CompensationRedemption[] = [];
 
-  const allocate = <T extends { date: Date }>(
+  const allocate = <T extends { date: Date; location?: WorkLocation }>(
     days: T[],
     kind: CompensationRedemption["kind"],
     requestIdOf: (day: T) => string | null,
   ) => {
     const sortedDays = [...days].sort((a, b) => a.date.getTime() - b.date.getTime());
     for (const day of sortedDays) {
-      const match = sortedCredits.find(
+      const dayLocation = day.location ?? WorkLocation.office;
+      const eligible = sortedCredits.filter(
         (c) =>
           !usedCreditIds.has(c.id) &&
           c.earnedDate.getTime() <= day.date.getTime() &&
-          day.date.getTime() <= c.expiresAt.getTime(),
+          day.date.getTime() <= c.expiresAt.getTime() &&
+          canCreditCover(c.workLocation ?? WorkLocation.office, dayLocation),
       );
+      // For a WFH day, spend a WFH credit first: an office credit can cover an
+      // in-office day too, so it is the one worth keeping.
+      const match =
+        dayLocation === WorkLocation.wfh
+          ? (eligible.find((c) => c.workLocation === WorkLocation.wfh) ?? eligible[0])
+          : eligible[0];
       if (match) {
         usedCreditIds.add(match.id);
         redemptions.push({ creditId: match.id, date: day.date, kind, requestId: requestIdOf(day) });
@@ -270,6 +327,30 @@ export function allocateCompensationCredits(
   return redemptions;
 }
 
+/** Dates in [start, end] covered by an APPROVED work-from-home request — the days
+ *  an employee was expected to work from home, which a credit of either location
+ *  can cover. A request without a date range covers nothing here. */
+async function loadWfhRequestDates(employeeId: string, start: Date, end: Date): Promise<Set<string>> {
+  const requests = await prisma.request.findMany({
+    where: {
+      employeeId,
+      type: RequestType.wfh,
+      status: RequestStatus.approved,
+      dateFrom: { lte: end },
+      dateTo: { gte: start },
+    },
+    select: { dateFrom: true, dateTo: true },
+  });
+  const dates = new Set<string>();
+  for (const r of requests) {
+    if (!r.dateFrom || !r.dateTo) continue;
+    const from = r.dateFrom < start ? start : r.dateFrom;
+    const to = r.dateTo > end ? end : r.dateTo;
+    for (let t = from.getTime(); t <= to.getTime(); t += MS_PER_DAY) dates.add(new Date(t).toISOString().slice(0, 10));
+  }
+  return dates;
+}
+
 /** Dry-run: which absent/approved-unpaid-leave days in this month WOULD be
  *  redeemed against this employee's unconsumed compensation credits.
  *  Read-only — does not touch consumedAt. Used by payslip-preview.ts (both
@@ -281,16 +362,22 @@ export async function computeCompensationRedemption(
   month: number,
   year: number,
 ): Promise<CompensationRedemption[]> {
-  const [breakdown, credits] = await Promise.all([
+  const { start: periodStart, lastDay: periodLastDay } = periodBounds(month, year);
+  const [breakdown, credits, wfhDates] = await Promise.all([
     getMonthlyAttendanceBreakdown(employeeId, month, year),
     prisma.compensationCredit.findMany({
       where: { employeeId, consumedAt: null },
-      select: { id: true, earnedDate: true, expiresAt: true },
+      select: { id: true, earnedDate: true, expiresAt: true, workLocation: true },
     }),
+    loadWfhRequestDates(employeeId, periodStart, periodLastDay),
   ]);
   const unpaidDays = await getUnpaidLeaveDaysInPeriod(employeeId, month, year, wholeUnpaidDaysOf(breakdown));
 
-  return allocateCompensationCredits(absentDaysOf(breakdown), unpaidDays, credits);
+  const locate = <T extends { date: Date }>(day: T): T & { location: WorkLocation } => ({
+    ...day,
+    location: wfhDates.has(day.date.toISOString().slice(0, 10)) ? WorkLocation.wfh : WorkLocation.office,
+  });
+  return allocateCompensationCredits(absentDaysOf(breakdown).map(locate), unpaidDays.map(locate), credits);
 }
 
 /** Commits a redemption list computed by computeCompensationRedemption —
@@ -331,6 +418,64 @@ export async function getCompensationCreditSummary(employeeId: string): Promise<
     orderBy: { expiresAt: "asc" },
   });
   return { activeCount: credits.length, nearestExpiry: credits[0]?.expiresAt ?? null };
+}
+
+export type BalanceCredit = {
+  id: string;
+  earnedDate: string;
+  expiresAt: string;
+  workLocation: WorkLocation;
+  /** available: unspent and usable; covering: it would cover `coversDate` in the
+   *  month asked about; used: spent by a payslip; expired: lapsed unspent (it
+   *  tops up the leave balance instead). */
+  status: "available" | "covering" | "used" | "expired";
+  coversDate?: string;
+  coversKind?: CompensationRedemption["kind"];
+};
+
+const dayKey = (d: Date) => d.toISOString().slice(0, 10);
+
+/** The employee's balance days (compensation credits) for display: the open ones
+ *  — with the absent/unpaid day each WOULD cover in `month`, by the same
+ *  allocator a payslip uses — plus recent spent/expired ones for context. */
+export async function getCompensationBalance(
+  employeeId: string,
+  month: number,
+  year: number,
+  now: Date = new Date(),
+): Promise<{ availableCount: number; credits: BalanceCredit[] }> {
+  const since = new Date(now.getTime() - 120 * MS_PER_DAY);
+  const [rows, redemptions] = await Promise.all([
+    prisma.compensationCredit.findMany({
+      where: { employeeId, OR: [{ consumedAt: null, expiresAt: { gte: since } }, { consumedAt: { gte: since } }] },
+      orderBy: { earnedDate: "desc" },
+      take: 30,
+    }),
+    computeCompensationRedemption(employeeId, month, year),
+  ]);
+  const covering = new Map(redemptions.map((r) => [r.creditId, r]));
+
+  const credits: BalanceCredit[] = rows.map((c) => {
+    const base = {
+      id: c.id,
+      earnedDate: dayKey(c.earnedDate),
+      expiresAt: dayKey(c.expiresAt),
+      workLocation: c.workLocation,
+    };
+    if (c.consumedAt) {
+      return {
+        ...base,
+        status: "used" as const,
+        ...(c.consumedForDate ? { coversDate: dayKey(c.consumedForDate) } : {}),
+      };
+    }
+    if (c.expiresAt.getTime() < now.getTime()) return { ...base, status: "expired" as const };
+    const r = covering.get(c.id);
+    return r
+      ? { ...base, status: "covering" as const, coversDate: dayKey(r.date), coversKind: r.kind }
+      : { ...base, status: "available" as const };
+  });
+  return { availableCount: credits.filter((c) => c.status === "available" || c.status === "covering").length, credits };
 }
 
 /** Credits that expired having covered nothing at all in their 60-day

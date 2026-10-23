@@ -82,7 +82,7 @@ export async function GET(req: Request) {
       // "on a break" (an open session), and show the day's real worked time
       // rather than last-out minus first-in.
       sessions: {
-        select: { id: true, clockIn: true, clockOut: true, workLocation: true },
+        select: { id: true, clockIn: true, clockOut: true, workLocation: true, autoClosed: true },
         orderBy: { clockIn: "asc" },
       },
     },

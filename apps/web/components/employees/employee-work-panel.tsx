@@ -111,7 +111,7 @@ export function EmployeeWorkPanel({ employeeId, isMetric }: { employeeId: string
               </span>
             </div>
           ))}
-          <form onSubmit={upload} className="grid gap-2 sm:grid-cols-3">
+          <form onSubmit={upload} className="grid grid-cols-1 gap-2 sm:grid-cols-3">
             <div className="flex flex-col gap-1.5">
               <Label>Document type</Label>
               <Input

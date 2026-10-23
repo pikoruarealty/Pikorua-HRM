@@ -224,6 +224,7 @@ model User {
 
   // Back-relations for audit "actor" columns.
   approvedAttendance     AttendanceRecord[]   @relation("AttendanceApprover")
+  wfhWeeklyApprovals     WfhWeeklyApproval[]  @relation("WfhWeeklyApprover")
   approvedRequests       Request[]            @relation("RequestApprover")
   generatedPayslips      Payslip[]            @relation("PayslipGenerator")
   notifications          Notification[]
@@ -391,6 +392,7 @@ model Employee {
   eventInvitees           EventInvitee[]
   weeklyOffMoves          WeeklyOffMove[]
   unpaidDayDeclarations   UnpaidDayDeclaration[]
+  wfhWeeklyApprovals      WfhWeeklyApproval[]
   salesActivitySyncs     SalesActivitySync[]
   offlineClaims           OfflineActivityClaim[]          @relation("OfflineClaimSubject")
   offlineClaimsReviewed   OfflineActivityClaim[]          @relation("OfflineClaimReviewer")
@@ -771,6 +773,10 @@ model AttendanceSession {
   clockOut     DateTime?        @map("clock_out") @db.Timestamptz(6)
   source       AttendanceSource @default(manual)
   workLocation WorkLocation     @default(office) @map("work_location")
+  // True when the system, not the employee, closed this session — a WFH session
+  // left open past WFH_MAX_SESSION_HOURS (lib/attendance/wfh-autoclose.ts). The
+  // employee can simply clock back in; the flag lets the UI say what happened.
+  autoClosed   Boolean          @default(false) @map("auto_closed")
   createdAt    DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
   rawPunches   DevicePunchRaw[]
 
@@ -859,10 +865,35 @@ model CompensationCredit {
   consumedForDate      DateTime?        @map("consumed_for_date") @db.Date
   consumedForRequestId String?          @map("consumed_for_request_id") @db.Uuid
   consumedForRequest   Request?         @relation(fields: [consumedForRequestId], references: [id])
+  // Where the earning day was worked (2026-10-24, owner rule): an OFFICE credit
+  // can cover any unpaid day, a WFH credit only a day that was itself a WFH day
+  // — a missed in-office day is made up in the office only. See
+  // lib/attendance/compensation-credits.ts (canCreditCover).
+  workLocation         WorkLocation     @default(office) @map("work_location")
   createdAt            DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
 
   @@index([employeeId, consumedAt])
   @@map("compensation_credits")
+}
+
+// Extra WFH hours an Admin has chosen to count for one week, over the weekly cap
+// (PayrollConfig.wfhWeeklyCapHours). The counted hours for a week are
+// min(actual, cap + extra_hours). Tracking only — see lib/attendance/wfh-hours.ts.
+model WfhWeeklyApproval {
+  id           String   @id @default(uuid()) @db.Uuid
+  employeeId   String   @map("employee_id") @db.Uuid
+  employee     Employee @relation(fields: [employeeId], references: [id])
+  // The Monday of the ISO week.
+  weekStart    DateTime @map("week_start") @db.Date
+  extraHours   Decimal  @map("extra_hours") @db.Decimal(5, 2)
+  approvedById String   @map("approved_by") @db.Uuid
+  approvedBy   User     @relation("WfhWeeklyApprover", fields: [approvedById], references: [id])
+  reason       String?
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@unique([employeeId, weekStart])
+  @@map("wfh_weekly_approvals")
 }
 
 // TeamOffice biometric integration (2026-08-12). The vendor's incremental
@@ -925,6 +956,11 @@ model PayrollConfig {
   // prior behaviour. Snapshotted per effective_from like the deduction rate,
   // so past payslips reproduce the grace that was in force.
   lateGraceMinutes     Int      @default(0) @map("late_grace_minutes")
+  // Most WFH hours per ISO week that count toward an employee's WFH-hours target
+  // (2026-10-24). Hours beyond it are still recorded and shown, and Admin can
+  // approve extra for a week (WfhWeeklyApproval). Tracking only — a WFH day is
+  // still paid as a normal day.
+  wfhWeeklyCapHours    Decimal  @default(10) @map("wfh_weekly_cap_hours") @db.Decimal(5, 2)
   effectiveFrom        DateTime @map("effective_from") @db.Date
   // Tiebreaker for same-day edits — see SalesTargetConfig.createdAt.
   createdAt            DateTime @default(now()) @map("created_at")
