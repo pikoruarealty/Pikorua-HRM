@@ -31,6 +31,7 @@ type BalanceCredit = {
   status: "available" | "used" | "expired";
   coversDate?: string;
   applied?: boolean;
+  auto?: boolean;
 };
 
 type MadeUpEntry = {
@@ -786,7 +787,7 @@ function BalanceDays({
           Balance days <span className="tabular-nums text-muted-foreground">· {balance.availableCount} available</span>
         </div>
         <div className="text-[11px] text-muted-foreground">
-          Days worked in advance · not paid until used · use within 60 days on an absent or unpaid day
+          Days worked in advance · not paid until used · cover your next absence within 60 days
         </div>
       </div>
       {open.length > 0 ? (
@@ -873,7 +874,7 @@ function BalanceDays({
             <li key={c.id}>
               {shortDate(c.earnedDate)} ({c.workLocation === "wfh" ? "WFH" : "office"}) —{" "}
               {c.status === "used"
-                ? `used${c.coversDate ? ` for ${shortDate(c.coversDate)}` : ""}`
+                ? `used for ${c.coversDate ? shortDate(c.coversDate) : "a missed day"}${c.auto ? " (automatically)" : ""}`
                 : "expired unused (added to leave balance)"}
             </li>
           ))}
@@ -881,7 +882,8 @@ function BalanceDays({
       )}
       <p className="mt-2 text-[11px] text-muted-foreground">
         A day worked beyond what you owe is paid once: it first makes up an earlier missed day (up to 60 days back),
-        otherwise it waits here. A missed office day can only be made up by an office day.
+        otherwise it waits here and covers your next absent day automatically. A missed office day can only be made up
+        by an office day.
       </p>
     </div>
   );

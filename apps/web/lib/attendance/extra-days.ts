@@ -15,21 +15,27 @@
 //     already have been paid without it. The missed day keeps its status (absent /
 //     unpaid, 0) and reads "made up on <day>". Oldest missed day first; absences and
 //     quota shortfalls before unpaid-leave days.
-//  2. BANKED (advance) — nothing to make up. Shown as Present ("worked in advance"),
-//     worth 0 now, and banked as a balance day for 60 days. The employee may ask to
-//     use it on a later absent / unpaid-leave day (a `balance_day` request, approved
-//     by Admin/HR); that day then counts as paid ("Balance · earned <day>"). A balance
-//     day nobody used tops up the leave balance once it expires.
+//  2. BANKED (advance) — nothing to make up yet. Shown as Present ("worked in
+//     advance"), worth 0 now, banked as a balance day for 60 days. The next missed
+//     day after it — a plain absence, or a part-timer's short-week day; never a day
+//     that already carries leave — is COVERED by it automatically (owner, 2026-11-01:
+//     "yes automatically, if the weekly off is already claimed for that week and no
+//     leave is marked on that day"; a full-timer's no-show is only "absent" once the
+//     week's off is used elsewhere, so that holds by construction). The covered day is
+//     paid in its own month, shown "Balance · earned <day>". A balance-day request can
+//     still put one on a specific day. One nobody used tops up the leave balance.
 //
-// Either way the extra day is paid exactly once, in the month the make-up happens.
+// Either way the extra day is paid exactly once, in the month the pairing happens.
+// Weeks are Monday to Sunday everywhere (quota, weekly off, WFH cap); a part-timer's
+// extra days are the ones worked after the week's quota was already met.
 //
-// Where the work happened (2026-10-24 owner rule) still applies to both: a missed
-// in-office day can only be made up by an office day; a missed WFH day by either.
+// Where the work happened (2026-10-24 owner rule) still applies: a missed in-office
+// day can only be made up / covered by an office day; a missed WFH day by either.
 //
 // The rule starts on EXTRA_DAY_RULE_FROM. Extra days before it keep the treatment
-// they were paid under (a full day each) and take no part in matching; missed days
-// up to 60 days before it CAN be made up by an extra day after it (the "last month's
-// absence made up this month" case).
+// they were paid under (a full day each) and only settle missed days of that period
+// (it balanced itself); missed days up to 60 days before the rule that nothing settled
+// CAN be made up by an extra day after it ("last month's absence made up this month").
 //
 // Everything here is pure: the attendance walk (monthly-breakdown.ts) lists the
 // missed units and extra days, this file pairs them, and the walk then labels and
@@ -88,6 +94,10 @@ export type MissedUnit = {
   kind: "absence" | "unpaid_leave" | "shortfall";
   location: Place;
   weekStart?: string;
+  /** For a shortfall day: the not-worked day of that week (in the month that owns the
+   *  week) that a banked day would be put on if it covers this unit automatically —
+   *  so the pay lands on a real calendar day. None when the week has no such day. */
+  coverDate?: string;
 };
 
 export type ExtraDay = {
@@ -104,10 +114,13 @@ export type BankedDay = {
   location: Place;
   /** Last day it can be used on (earned + 60 days). */
   expires: string;
-  /** available: can still be used; used: spent on `usedFor` (an approved request);
-   *  expired: lapsed unused (it tops up the leave balance instead). */
+  /** available: can still be used; used: spent on `usedFor` (automatically on a later
+   *  missed day, or through an approved request); expired: lapsed unused (it tops up
+   *  the leave balance instead). */
   status: "available" | "used" | "expired";
   usedFor?: string;
+  /** Spent automatically by the ledger (not through a request). */
+  auto?: boolean;
 };
 
 export type ExtraVerdict =
@@ -117,20 +130,33 @@ export type ExtraVerdict =
 export type ExtraDayLedger = {
   /** Extra day date -> what it did. */
   verdicts: Map<string, ExtraVerdict>;
-  /** Missed unit id -> the extra day that made it up. */
+  /** Missed unit id -> the LATER extra day that made it up (compensation), or the
+   *  pre-rule extra day that settled it. */
   madeUpOn: Map<string, string>;
+  /** Missed unit id -> the EARLIER banked day that covered it automatically, and the
+   *  calendar day the cover is put on (the missed day itself, or for a shortfall the
+   *  week's chosen not-worked day). That day is paid in its own month. */
+  coveredBy: Map<string, { by: string; date: string }>;
   /** Every banked day, oldest first. */
   bank: BankedDay[];
 };
 
+const byDate = <T extends { date: string }>(a: T, b: T) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+
 /**
- * Pairs extra days with earlier missed days. Pure.
+ * Nets extra days against missed days. Pure. In date order (2026-11-01 rule):
+ *  - a missed day with a banked day before it (within its 60 days, office/WFH rule) is
+ *    covered by that banked day automatically — an absence or a short-week day only;
+ *    a day that already carries leave is left as the leave says (owner);
+ *  - an extra day with an uncovered missed day before it (within 60 days) makes it up
+ *    (compensation) — absences and short-week days first, then unpaid-leave days;
+ *  - an extra day with nothing to make up is banked.
+ * So every extra day is paid once, in the month the pairing happens, whichever came
+ * first. Pre-rule extra days (already paid as days) only settle pre-rule missed days.
  *
  * `usedBalance` maps an extra day to the day it was spent on through an approved
- * balance-day request: such an extra day is banked by definition (the request was
- * approved against it) and is never re-used as compensation, so an approval can't be
- * undone by a later recalculation. The day it covered is a paid day in the walk, so
- * it is not in `missed` at all.
+ * balance-day request: it stays spent on that day (an approval is never undone by a
+ * recalculation), and that day is a paid day in the walk, so not in `missed`.
  */
 export function matchExtraDays(input: {
   missed: MissedUnit[];
@@ -143,14 +169,17 @@ export function matchExtraDays(input: {
   const ruleFrom = input.ruleFrom ?? EXTRA_DAY_RULE_FROM;
   const used = input.usedBalance ?? new Map<string, string>();
   const order = (k: MissedUnit["kind"]) => (k === "unpaid_leave" ? 1 : 0);
+  // The pool an extra day makes up from: oldest first, absences before unpaid days.
   const missed = [...input.missed].sort((a, b) =>
-    order(a.kind) !== order(b.kind) ? order(a.kind) - order(b.kind) : a.date < b.date ? -1 : a.date > b.date ? 1 : 0,
+    order(a.kind) !== order(b.kind) ? order(a.kind) - order(b.kind) : byDate(a, b),
   );
-  const extras = [...input.extras].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  const extras = [...input.extras].sort(byDate);
 
   const verdicts = new Map<string, ExtraVerdict>();
   const madeUpOn = new Map<string, string>();
+  const coveredBy = new Map<string, { by: string; date: string }>();
   const bank: BankedDay[] = [];
+  const settled = (m: MissedUnit) => madeUpOn.has(m.id) || coveredBy.has(m.id);
 
   // Before the rule an extra day was paid as a day, and the missed days around it were
   // deducted — so that period already balances (owner, 2026-11-01: "I didn't come
@@ -168,14 +197,49 @@ export function matchExtraDays(input: {
     if (match) madeUpOn.set(match.id, extra.date);
   }
 
-  for (const extra of extras) {
-    if (extra.legacy || verdicts.has(extra.date)) continue;
+  // One timeline: missed days and (post-rule) extra days in date order. A missed day
+  // dated the same day as an extra day is handled first — they can't both be in one
+  // part-timer week, and a full-timer's absence and worked day are different dates.
+  type Event = { date: string; missed?: MissedUnit; extra?: ExtraDay };
+  const events: Event[] = [
+    ...input.missed.map((m): Event => ({ date: m.date, missed: m })),
+    ...extras.filter((e) => !e.legacy).map((e): Event => ({ date: e.date, extra: e })),
+  ];
+  events.sort((a, b) => byDate(a, b) || (a.missed ? -1 : 1) - (b.missed ? -1 : 1));
+
+  for (const ev of events) {
+    if (ev.missed) {
+      const m = ev.missed;
+      if (settled(m)) continue;
+      // Automatic cover only for a plain absence / short-week day, on a real day.
+      const coverDate = m.kind === "absence" ? m.date : m.kind === "shortfall" ? m.coverDate : undefined;
+      if (!coverDate) continue;
+      const b = bank
+        .filter(
+          (x) =>
+            x.status === "available" &&
+            x.date < m.date &&
+            m.date <= x.expires &&
+            canCreditCover(x.location, m.location),
+        )
+        .sort((x, y) => (x.expires < y.expires ? -1 : x.expires > y.expires ? 1 : 0))[0];
+      if (b) {
+        b.status = "used";
+        b.usedFor = coverDate;
+        b.auto = true;
+        coveredBy.set(m.id, { by: b.date, date: coverDate });
+      }
+      continue;
+    }
+
+    const extra = ev.extra!;
+    if (verdicts.has(extra.date)) continue;
     const usedFor = used.get(extra.date);
     const match = usedFor
       ? undefined
       : missed.find(
           (m) =>
-            !madeUpOn.has(m.id) &&
+            !settled(m) &&
             m.date < extra.date &&
             daysBetween(m.date, extra.date) <= BALANCE_WINDOW_DAYS &&
             canCreditCover(extra.location, m.location),
@@ -185,19 +249,21 @@ export function matchExtraDays(input: {
       verdicts.set(extra.date, { kind: "compensation", missed: match });
       continue;
     }
-    const expires = addDaysKey(extra.date, BALANCE_WINDOW_DAYS);
-    const banked: BankedDay = {
+    bank.push({
       date: extra.date,
       location: extra.location,
-      expires,
-      status: usedFor ? "used" : expires < input.todayKey ? "expired" : "available",
+      expires: addDaysKey(extra.date, BALANCE_WINDOW_DAYS),
+      status: usedFor ? "used" : "available",
       ...(usedFor ? { usedFor } : {}),
-    };
-    bank.push(banked);
-    verdicts.set(extra.date, { kind: "banked", ...banked });
+    });
   }
 
-  return { verdicts, madeUpOn, bank };
+  // What is left unspent lapses after its 60 days.
+  for (const b of bank) {
+    if (b.status === "available" && b.expires < input.todayKey) b.status = "expired";
+    verdicts.set(b.date, { kind: "banked", ...b });
+  }
+  return { verdicts, madeUpOn, coveredBy, bank };
 }
 
 /** The banked day a request would spend on `day` (owed at `place`): an available one

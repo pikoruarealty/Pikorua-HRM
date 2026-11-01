@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { Fragment } from "react";
 import { Document, Page, Text, View, Image, StyleSheet } from "@react-pdf/renderer";
 import { COMPANY_INFO } from "@/lib/payroll/company-info";
 import type { AttendanceReportEmployee, ReportDay, ReportTone } from "@/lib/attendance/report";
@@ -119,6 +120,9 @@ const styles = StyleSheet.create({
   th: { fontSize: 6.8, fontWeight: 700, color: "#374151", paddingVertical: 3, paddingHorizontal: 4 },
   tr: { flexDirection: "row", borderBottom: `0.5 solid ${RULE}`, alignItems: "center", height: 14.2, flexShrink: 0 },
   trAlt: { backgroundColor: "#fafafa" },
+  // A part-timer's week, as its quota was judged — under the week's last day.
+  weekRow: { flexDirection: "row", alignItems: "center", height: 12.5, flexShrink: 0, backgroundColor: "#eef2ff", borderBottom: `0.5 solid #c7d2fe`, paddingHorizontal: 4 },
+  weekText: { fontSize: 6.6, color: "#3730a3", fontWeight: 700 },
   td: { fontSize: 7.4, paddingHorizontal: 4 },
   statusPill: { fontSize: 7, fontWeight: 700, paddingVertical: 1.2, paddingHorizontal: 4, borderRadius: 2.5 },
 
@@ -147,13 +151,6 @@ const styles = StyleSheet.create({
   sumCardRow: { marginTop: 4 },
   sumCardName: { fontSize: 7.6, fontWeight: 700, color: INK },
   sumCardText: { fontSize: 7.2, color: "#374151", lineHeight: 1.4 },
-  glossary: { marginTop: 8, border: `1 solid ${RULE}`, borderRadius: 4, paddingVertical: 6, paddingHorizontal: 8 },
-  glossaryTitle: { fontSize: 8.4, fontWeight: 700, marginBottom: 4 },
-  glossaryGrid: { flexDirection: "row" },
-  glossaryHead: { width: "8%", paddingRight: 6 },
-  glossaryItem: { width: "15.33%", paddingRight: 8 },
-  glossaryTerm: { fontSize: 7, fontWeight: 700, color: BRAND },
-  glossaryText: { fontSize: 6.4, color: "#374151", lineHeight: 1.3, marginTop: 1 },
 
   flags: { marginTop: 6, backgroundColor: "#fffbeb", border: "1 solid #fde68a", borderRadius: 4, padding: 5 },
   flagText: { fontSize: 7, color: "#92400e", lineHeight: 1.35 },
@@ -338,14 +335,6 @@ function SumCell({ cell, w }: { cell: Cell; w: string }) {
   );
 }
 
-const GLOSSARY: { term: string; text: string }[] = [
-  { term: "Payable days", text: "What pay is based on — the total of the Pay column on each employee's page." },
-  { term: "In advance", text: "Extra day with nothing to make up: not paid now, banked as a balance day for 60 days." },
-  { term: "Compensation", text: "Extra day that made up an earlier missed day (even last month's); paid when worked." },
-  { term: "Made up", text: "A missed day a later extra day covered — still unpaid in its own month." },
-  { term: "Balance left", text: "Banked office days still usable, through a request Admin/HR approve." },
-  { term: "Part-timers", text: "Owe office days a week; WFH-only days and holidays don't count; a week pays up to its quota." },
-];
 
 function SummaryPage({
   employees,
@@ -379,7 +368,9 @@ function SummaryPage({
   };
   const withAbsence = employees.filter((r) => r.summary.absent > r.summary.madeUpAbsent).length;
   const toCheck = employees.filter((r) => r.flags.length > 0);
-  const ledger = employees.filter((r) => r.madeUp.length > 0 || r.balanceAvailable.length > 0 || r.summary.balanceUsed > 0);
+  const ledger = employees.filter(
+    (r) => r.madeUp.length > 0 || r.balanceAvailable.length > 0 || r.balanceCovers.length > 0,
+  );
   const totals: Record<SumKey, Cell> = {
     name: { main: "Total", sub: `${employees.length} employee${employees.length === 1 ? "" : "s"}`, tone: "strong" },
     office: daysCell(sum((r) => r.summary.officeFull), sum((r) => r.summary.officeHalf)),
@@ -512,13 +503,11 @@ function SummaryPage({
                       {paidWhere(g, r.days[0]?.date.slice(0, 7))}
                     </Text>
                   ))}
-                  {r.crossMonth
-                    .filter((c) => c.includes("balance day earned"))
-                    .map((c) => (
-                      <Text key={c} style={styles.sumCardText}>
-                        • {c}
-                      </Text>
-                    ))}
+                  {r.balanceCovers.map((c) => (
+                    <Text key={c.date} style={styles.sumCardText}>
+                      • {shortDate(c.date)} paid from the balance day of {shortDate(c.earned)}
+                    </Text>
+                  ))}
                   <Text style={styles.sumCardText}>
                     • Balance left:{" "}
                     {usable.length === 0
@@ -531,21 +520,6 @@ function SummaryPage({
             })}
           </View>
         )}
-      </View>
-
-      {/* 4. The terms, once. */}
-      <View style={styles.glossary} wrap={false}>
-        <View style={styles.glossaryGrid}>
-          <View style={styles.glossaryHead}>
-            <Text style={styles.glossaryTitle}>How to read this</Text>
-          </View>
-          {GLOSSARY.map((g) => (
-            <View key={g.term} style={styles.glossaryItem}>
-              <Text style={styles.glossaryTerm}>{g.term}</Text>
-              <Text style={styles.glossaryText}>{g.text}</Text>
-            </View>
-          ))}
-        </View>
       </View>
 
       <View style={styles.footer} fixed>
@@ -671,7 +645,7 @@ function EmployeePage({
 
   const ledgerLines = [
     ...groupMadeUp(report.madeUp).map((g) => `${madeUpSentence(g)}${paidWhere(g, report.days[0]?.date.slice(0, 7))}`),
-    ...report.crossMonth.filter((c) => c.includes("balance day earned")),
+    ...report.balanceCovers.map((c) => `${shortDate(c.date)} paid from the balance day of ${shortDate(c.earned)}`),
     `Balance left: ${
       report.balanceAvailable.length === 0
         ? "none"
@@ -769,7 +743,16 @@ function EmployeePage({
           <Text style={[styles.th, { width: COLS.note }]}>Note</Text>
         </View>
         {report.days.map((d, i) => (
-          <DayRow key={d.date} day={d} alt={i % 2 === 1} />
+          <Fragment key={d.date}>
+            <DayRow day={d} alt={i % 2 === 1} />
+            {report.weekLines
+              .filter((w) => w.after === d.date)
+              .map((w) => (
+                <View key={w.text} style={styles.weekRow} wrap={false}>
+                  <Text style={styles.weekText}>{w.text}</Text>
+                </View>
+              ))}
+          </Fragment>
         ))}
       </View>
 

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { AttendanceApprovalStatus, WorkLocation } from "@prisma/client";
 import { buildAttendanceCalendar, type CalendarRecord } from "./calendar";
 import { classifyMonth } from "./monthly-breakdown";
-import { assembleReportEmployee, toReportDay, type ReportEmployeeSource } from "./report";
+import { assembleReportEmployee, buildWeekLines, toReportDay, type ReportEmployeeSource } from "./report";
 import type { CalendarDay } from "./calendar";
 
 // The attendance PDF prints exactly what the attendance page computes. These pin the
@@ -308,5 +308,37 @@ describe("a summary row adds up to payable days", () => {
     );
     expect(s.compensation + s.banked).toBeGreaterThan(0);
     addsUp(s);
+  });
+});
+
+describe("buildWeekLines — one line per part-timer week, as it was judged", () => {
+  const week = (over: Partial<import("./monthly-breakdown").WeekSummary>) => ({
+    weekStart: "2026-10-05", weekEnd: "2026-10-11", target: 3, officeFull: 2, officeHalf: 0, wfhOnly: 3,
+    extraDays: [], short: 1, owned: true, ...over,
+  });
+  test("a short week covered automatically by an earlier banked day", () => {
+    const [line] = buildWeekLines(
+      [week({ short: 0 })],
+      [{ date: "2026-10-10", status: "paid_leave", note: "balance", balanceEarned: "2026-10-04" }, { date: "2026-10-31", status: "no_record", note: null, balanceEarned: null }],
+      [],
+      "2026-10",
+    );
+    expect(line).toEqual({
+      after: "2026-10-11",
+      text: "Week of 5 Oct: 2 office days of 3 (+ 3 WFH-only, not counted) · 1 short — covered by the balance day of 4 Oct",
+    });
+  });
+  test("an over-quota week names its extra day; a week another month settles says so", () => {
+    const lines = buildWeekLines(
+      [week({ weekStart: "2026-10-12", weekEnd: "2026-10-18", officeFull: 4, wfhOnly: 0, extraDays: ["2026-10-18"], short: 0 }), week({ weekStart: "2026-10-26", weekEnd: "2026-11-01", short: null, owned: false, wfhOnly: 0 })],
+      [{ date: "2026-10-31", status: "no_record", note: null, balanceEarned: null }],
+      [],
+      "2026-10",
+    );
+    expect(lines.map((l) => l.text)).toEqual([
+      "Week of 12 Oct: 4 office days of 3 · extra: 18 Oct · quota met",
+      "Week of 26 Oct: 2 office days of 3 · settled in November",
+    ]);
+    expect(lines[1]!.after).toBe("2026-10-31");
   });
 });

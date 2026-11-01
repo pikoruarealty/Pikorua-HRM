@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db/prisma";
 import { getAttendanceSummary } from "@/lib/attendance/summary";
-import { getMonthlyAttendanceWithLedger, type MonthlyBreakdown } from "@/lib/attendance/monthly-breakdown";
+import { getMonthlyAttendanceWithLedger, type MonthlyBreakdown, type WeekSummary } from "@/lib/attendance/monthly-breakdown";
 import { madeUpEntries, type MadeUpEntry } from "@/lib/attendance/compensation-credits";
 import type { BankedDay } from "@/lib/attendance/extra-days";
 import {
@@ -122,6 +122,11 @@ export type AttendanceReportEmployee = {
   balanceAvailable: { earned: string; expires: string; location: string; usable: boolean }[];
   /** Make-ups / balance days that cross a month — which month pays them. */
   crossMonth: string[];
+  /** Days paid from a balance day (automatically or through a request) this month. */
+  balanceCovers: { date: string; earned: string }[];
+  /** A part-timer's weeks, each with one line saying how it was judged — printed under
+   *  the week's last day in the day table. Empty for a fixed schedule. */
+  weekLines: { after: string; text: string }[];
   /** Things worth a second look before paying from this page. */
   flags: string[];
 };
@@ -140,6 +145,8 @@ const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct
 function shortDay(key: string): string {
   return `${Number(key.slice(8, 10))} ${MON[Number(key.slice(5, 7)) - 1]}`;
 }
+
+const num = (n: number) => (Number.isInteger(n) ? String(n) : String(Math.round(n * 100) / 100));
 
 const frac = (n: number) => (Number.isInteger(n) ? String(n) : n === 0.5 ? "½" : String(n).replace(/\.5$/, "½"));
 
@@ -383,6 +390,7 @@ export function assembleReportEmployee(input: {
     | "overQuotaHalfDays"
     | "balanceDays"
     | "madeUp"
+    | "weeks"
     | "halfDays"
     | "compensationDays"
     | "absentDays"
@@ -497,8 +505,52 @@ export function assembleReportEmployee(input: {
       .filter((b) => b.status === "available")
       .map((b) => ({ earned: b.date, expires: b.expires, location: b.location, usable: b.location === "office" })),
     crossMonth,
+    balanceCovers: calendar.days
+      .filter((d) => d.status === "paid_leave" && d.note === "balance" && d.balanceEarned)
+      .map((d) => ({ date: d.date, earned: d.balanceEarned! })),
+    weekLines: buildWeekLines(breakdown.weeks, calendar.days, madeUp, monthKey),
     flags,
   };
+}
+
+/** "Week of 5 Oct: 2 office days of 3 — 1 short, covered by the balance day of 4 Oct". */
+export function buildWeekLines(
+  weeks: WeekSummary[],
+  days: Pick<CalendarDay, "date" | "status" | "note" | "balanceEarned">[],
+  madeUp: MadeUpEntry[],
+  monthKey: string,
+): { after: string; text: string }[] {
+  const lastDay = days[days.length - 1]?.date ?? "";
+  return weeks.map((w) => {
+    const after = w.weekEnd <= lastDay ? w.weekEnd : lastDay;
+    const worked = `${num(w.officeFull)}${w.officeHalf > 0 ? ` + ${num(w.officeHalf)} half` : ""} office day${w.officeFull === 1 && w.officeHalf === 0 ? "" : "s"} of ${num(w.target)}`;
+    const wfh = w.wfhOnly > 0 ? ` (+ ${w.wfhOnly} WFH-only, not counted)` : "";
+    const parts: string[] = [];
+    if (w.extraDays.length > 0) parts.push(`extra: ${w.extraDays.map(shortDay).join(", ")}`);
+    if (!w.owned) {
+      parts.push(`settled in ${monthName(w.weekEnd)}`);
+    } else if (w.short === null) {
+      parts.push("week still running");
+    } else {
+      const inWeek = (d: string) => d >= w.weekStart && d <= w.weekEnd;
+      const covers = days.filter((d) => inWeek(d.date) && d.note === "balance" && d.balanceEarned);
+      const madeUps = madeUp.filter((m) => m.weekStart === w.weekStart);
+      const fixes = [
+        ...covers.map((d) => `covered by the balance day of ${shortDay(d.balanceEarned!)}`),
+        ...madeUps.map((m) => `made up on ${shortDay(m.on)}${m.on.startsWith(monthKey) ? "" : ` (${monthName(m.on)})`}`),
+      ];
+      const shortTotal = w.short + covers.length;
+      if (shortTotal === 0) parts.push("quota met");
+      else parts.push(`${num(shortTotal)} short${fixes.length > 0 ? ` — ${fixes.join(", ")}` : ""}`);
+    }
+    return { after, text: `Week of ${shortDay(w.weekStart)}: ${worked}${wfh} · ${parts.join(" · ")}` };
+  });
+}
+
+function monthName(key: string): string {
+  return ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][
+    Number(key.slice(5, 7)) - 1
+  ]!;
 }
 
 /** All employees whose attendance is tracked (active, not attendance-exempt), by name. */

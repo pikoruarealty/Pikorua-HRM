@@ -476,8 +476,10 @@ export type BalanceCredit = {
    *  balance-day request; expired: lapsed unused (it tops up the leave balance). */
   status: "available" | "used" | "expired";
   coversDate?: string;
-  /** Spent through an approved request (always true for `used`). */
+  /** Spent through an approved request. */
   applied?: boolean;
+  /** Spent automatically on a later missed day (no request). */
+  auto?: boolean;
 };
 
 /** A day a balance day could be used on: over, nothing worked or paid on it, not
@@ -627,7 +629,7 @@ export async function getCompensationBalance(
       expiresAt: b.expires,
       workLocation: b.location as WorkLocation,
       status: b.status,
-      ...(b.usedFor ? { coversDate: b.usedFor, applied: true } : {}),
+      ...(b.usedFor ? { coversDate: b.usedFor, ...(b.auto ? { auto: true } : { applied: true }) } : {}),
     }));
 
   const eligibleDays: BalanceEligibleDay[] = [];

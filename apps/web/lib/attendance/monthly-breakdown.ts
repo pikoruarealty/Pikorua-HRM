@@ -83,6 +83,25 @@ const ALL_LEAVE_TYPES: RequestType[] = [RequestType.leave_casual, RequestType.le
 // exactly into one extra day in one month and one missed day in the other. The week's
 // shortfall belongs to the month the week ends in.
 
+/** How one part-timer week was judged. */
+export type WeekSummary = {
+  weekStart: string;
+  weekEnd: string;
+  /** Office days owed that week (quota; less for a long holiday / the joining week). */
+  target: number;
+  /** Office days worked in full / half, the whole week (both months). */
+  officeFull: number;
+  officeHalf: number;
+  /** Days worked only from home — not quota days. */
+  wfhOnly: number;
+  /** Worked days beyond the quota (they make up / bank). */
+  extraDays: string[];
+  /** Days short, once the week is over; null while it runs or when another month owns it. */
+  short: number | null;
+  /** This month settles the week (it ends in this month). */
+  owned: boolean;
+};
+
 export type MonthlyBreakdown = {
   presentDays: number;
   halfDays: number;
@@ -150,6 +169,9 @@ export type MonthlyBreakdown = {
   /** This month's missed days that a later extra day made up, and on which day —
    *  possibly in a later month. */
   madeUp: { missed: MissedUnit; on: string }[];
+  /** A part-timer's weeks touching this month (Monday to Sunday), as the quota was
+   *  judged — for the per-week line in the PDF. Empty for a fixed schedule. */
+  weeks: WeekSummary[];
   /** One entry per day that was actually evaluated (joining date..today), in date
    *  order — the same walk that produced the counts above, so a calendar built
    *  from it can never disagree with the tiles. Days not listed (before the
@@ -259,6 +281,8 @@ type MonthLookups = {
   extraVerdicts?: Map<string, ExtraVerdict>;
   /** Missed unit id -> the extra day that made it up. */
   madeUpOn?: Map<string, string>;
+  /** Missed unit ids a banked day covered automatically (their day is in balanceDates). */
+  coveredUnits?: Set<string>;
   /** Overrides "today" — for tests; defaults to the real date. */
   today?: Date;
 };
@@ -350,6 +374,7 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
     extraDays: [],
     missedUnits: [],
     madeUp: [],
+    weeks: [],
     days: [],
   };
 
@@ -819,6 +844,18 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
       }
     }
 
+    const summary: WeekSummary = {
+      weekStart: wKey,
+      weekEnd: weekEndKey,
+      target,
+      officeFull: weekPresent,
+      officeHalf: entries.filter((e) => e.kind === "half").length,
+      wfhOnly: entries.filter((e) => e.kind === "wfh").length,
+      extraDays: [...extraKeys, ...entries.filter((e) => e.kind === "flagged").map((e) => e.key)].sort(),
+      short: null,
+      owned: ownsWeek,
+    };
+    result.weeks.push(summary);
     if (!ownsWeek) return 0;
 
     // The week's shortfall, once, in the month the week ends in. A shortfall an
@@ -826,13 +863,35 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
     const absentShortfall = (shortfall: number) => shortfall - Math.min(shortfall, weekUnpaid);
     if (creditedDays > target) {
       result.workingDaysElapsed += target;
+      if (weekEndKey < todayKey) summary.short = 0;
     } else if (weekEndKey < todayKey) {
       const absent = absentShortfall(Math.max(0, target - creditedDays));
       result.absentDays += absent;
       result.workingDaysElapsed += target;
-      // Each whole day short is a missed day a later extra day can make up.
-      for (let i = 0; i < Math.floor(absent + 1e-9); i++) {
-        addMissed({ id: `${wKey}#${i + 1}`, date: weekEndKey, kind: "shortfall", location: "office", weekStart: wKey });
+      summary.short = absent;
+      // Each whole day short is a missed day: a later extra day can make it up, or an
+      // earlier banked day covers it automatically — put on one of the week's
+      // not-worked days in this month (latest first), so the pay is on a real day.
+      // Days a banked day already covered are paid now (balance) and no longer short,
+      // so their ids are skipped to keep the others' ids stable.
+      const covered = [...(lookups.coveredUnits ?? [])].filter((id) => id.startsWith(`${wKey}#`)).length;
+      const coverDays = entries
+        .filter((e) => e.here && e.kind === "none" && e.key < todayKey)
+        .map((e) => e.key)
+        .reverse();
+      let n = 0;
+      for (let i = 0; i < Math.floor(absent + 1e-9) + covered; i++) {
+        const id = `${wKey}#${i + 1}`;
+        if (lookups.coveredUnits?.has(id)) continue;
+        const coverDate = coverDays[n++];
+        addMissed({
+          id,
+          date: weekEndKey,
+          kind: "shortfall",
+          location: "office",
+          weekStart: wKey,
+          ...(coverDate ? { coverDate } : {}),
+        });
       }
     } else {
       // The week is still running: only count a shortfall that can no longer be
@@ -1348,6 +1407,27 @@ export function buildExtraDayLedger(lookups: MonthLookups, now: Date = new Date(
   return matchExtraDays({ missed, extras, usedBalance, todayKey });
 }
 
+/** The lookups a month is valued with once the ledger is known: its verdicts, and the
+ *  days banked days covered automatically added to the balance-covered days (each
+ *  then paid in its own month, "Balance · earned <day>"). */
+export function withLedger(lookups: MonthLookups, ledger: ExtraDayLedger, now: Date): MonthLookups {
+  const balanceDates = new Set(lookups.balanceDates ?? []);
+  const balanceEarnedFor = new Map(lookups.balanceEarnedFor ?? []);
+  for (const { by, date } of ledger.coveredBy.values()) {
+    balanceDates.add(date);
+    balanceEarnedFor.set(date, by);
+  }
+  return {
+    ...lookups,
+    balanceDates,
+    balanceEarnedFor,
+    coveredUnits: new Set(ledger.coveredBy.keys()),
+    extraVerdicts: ledger.verdicts,
+    madeUpOn: ledger.madeUpOn,
+    today: now,
+  };
+}
+
 /** One month, with the extra-day ledger it was valued by. */
 function classifyWithLedger(
   month: number,
@@ -1356,16 +1436,11 @@ function classifyWithLedger(
   now: Date,
 ): { breakdown: MonthlyBreakdown; ledger: ExtraDayLedger } {
   const ledger = buildExtraDayLedger(lookups, now);
-  const breakdown = classifyMonth(month, year, {
-    ...lookups,
-    extraVerdicts: ledger.verdicts,
-    madeUpOn: ledger.madeUpOn,
-    today: now,
-  });
+  const breakdown = classifyMonth(month, year, withLedger(lookups, ledger, now));
   return { breakdown, ledger };
 }
 
-const EMPTY_LEDGER: ExtraDayLedger = { verdicts: new Map(), madeUpOn: new Map(), bank: [] };
+const EMPTY_LEDGER: ExtraDayLedger = { verdicts: new Map(), madeUpOn: new Map(), coveredBy: new Map(), bank: [] };
 
 /** One employee's month plus the extra-day ledger (balance days, make-ups) behind it. */
 export async function getMonthlyAttendanceWithLedger(

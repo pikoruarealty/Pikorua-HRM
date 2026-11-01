@@ -101,7 +101,9 @@ function useTouchOnly(): boolean {
   return touch;
 }
 
-const WEEKDAYS =["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+// Monday first (owner, 2026-11-01): a row is exactly the week the attendance is
+// judged on — a part-timer's quota, the weekly off and the WFH cap are all Mon-Sun.
+const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 /** Shared by the calendar, its legend and the stat tiles so a colour means one thing. */
 export const LOCATION_STYLE = {
@@ -444,7 +446,8 @@ export function AttendanceCalendar({
   useEffect(() => {
     setDetailDate((cur) => (cur && days.some((d) => d.date === cur) ? cur : null));
   }, [days]);
-  const firstWeekday = new Date(Date.UTC(year, month - 1, 1)).getUTCDay();
+  // Column of the 1st, Monday = 0.
+  const firstWeekday = (new Date(Date.UTC(year, month - 1, 1)).getUTCDay() + 6) % 7;
   const cells: (CalendarDay | null)[] = [...Array<null>(firstWeekday).fill(null), ...days];
 
   return (
