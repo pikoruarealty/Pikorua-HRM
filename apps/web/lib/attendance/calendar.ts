@@ -50,6 +50,16 @@ export type CalendarDay = {
   leaveUnpaid: number;
   /** The part of the day counted absent when only part of it is (see ClassifiedDay). */
   absentPart: number | null;
+  /** Extra-day bookkeeping from the walk (lib/attendance/extra-days.ts): a day worked
+   *  in advance banked as a balance day (not paid), its expiry / the day it was used
+   *  on; the missed day a compensation day made up; the day that made a missed day up;
+   *  when a balance-covered day's balance day was earned. */
+  banked: boolean;
+  bankExpires: string | null;
+  bankUsedFor: string | null;
+  madeUpFor: ClassifiedDay["madeUpFor"] | null;
+  madeUpOn: string | null;
+  balanceEarned: string | null;
 };
 
 /** What buildAttendanceCalendar reads from the walk; only date and status are required. */
@@ -272,6 +282,12 @@ export function buildAttendanceCalendar(args: {
       leavePaid: walked?.leavePaid ?? 0,
       leaveUnpaid: walked?.leaveUnpaid ?? 0,
       absentPart: walked?.absentPart ?? null,
+      banked: walked?.banked ?? false,
+      bankExpires: walked?.bankExpires ?? null,
+      bankUsedFor: walked?.bankUsedFor ?? null,
+      madeUpFor: walked?.madeUpFor ?? null,
+      madeUpOn: walked?.madeUpOn ?? null,
+      balanceEarned: walked?.balanceEarned ?? null,
     });
   }
 

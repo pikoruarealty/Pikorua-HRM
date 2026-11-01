@@ -72,7 +72,7 @@ export function EmployeeLeaveBalancePanel({ employeeId }: { employeeId: string }
               {(balance.month.compensated > 0 || balance.year.compensated > 0) && (
                 <>
                   {" "}
-                  Includes {balance.year.compensated} compensation credit{balance.year.compensated === 1 ? "" : "s"}{" "}
+                  Includes {balance.year.compensated} balance day{balance.year.compensated === 1 ? "" : "s"}{" "}
                   that expired unused and were credited back this year.
                 </>
               )}

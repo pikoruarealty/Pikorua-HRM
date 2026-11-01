@@ -14,6 +14,8 @@ import {
 
 // Admin/HR monthly companion to the daily AttendanceOverviewPanel: per-
 // employee present/absent/leave/compensation counts for a whole month.
+// 2026-11-01: plus banked days (worked in advance, not paid yet) and payable days —
+// the figure pay is worked out from (lib/attendance/extra-days.ts).
 // Data from GET /api/v1/attendance/monthly-overview (finance-only).
 
 type Row = {
@@ -28,6 +30,12 @@ type Row = {
   unpaidLeaveDays: number;
   absentDays: number;
   compensationDays: number;
+  /** Worked in advance and banked — inside presentDays, not paid. */
+  bankedDays: number;
+  /** Absent / unpaid days covered by an approved balance day — inside paidLeaveDays. */
+  balanceDays: number;
+  /** (present − banked) + half×0.5 + paid leave + holidays + compensation. */
+  payableDays: number;
   weeklyOffDays: number;
   /** present + half×0.5 + compensation. */
   daysWorked: number;
@@ -78,9 +86,11 @@ export function AttendanceMonthlyPanel() {
         { label: "Paid leave", value: overview.totals.paidLeaveDays },
         { label: "Unpaid leave", value: overview.totals.unpaidLeaveDays },
         { label: "Compensation", value: overview.totals.compensationDays },
+        { label: "Banked (not paid)", value: overview.totals.bankedDays },
         { label: "Holidays", value: overview.totals.holidayDays },
         { label: "Weekly offs", value: overview.totals.weeklyOffDays },
         { label: "Days worked", value: overview.totals.daysWorked },
+        { label: "Payable days", value: overview.totals.payableDays },
       ]
     : [];
 
@@ -105,7 +115,7 @@ export function AttendanceMonthlyPanel() {
           <p className="text-sm text-muted-foreground">Loading…</p>
         ) : overview ? (
           <>
-            <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-9">
+            <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6">
               {tiles.map((t) => (
                 <div key={t.label} className="rounded-lg border p-3">
                   <dt className="text-xs text-muted-foreground">{t.label}</dt>
@@ -116,9 +126,11 @@ export function AttendanceMonthlyPanel() {
               ))}
             </dl>
             <p className="text-xs text-muted-foreground">
-              Sundays are treated as off unless an employee clocks in — that counts as a compensation
-              day instead of a normal present day. Saturdays are regular working days. Days worked =
-              present + half-days × 0.5 + compensation days (leave and holidays are paid, not worked).
+              A day worked beyond what was owed (the weekly off, or a part-timer&apos;s day over quota) is paid
+              once: if there is an earlier missed day in the last 60 days it is a compensation day that makes
+              that day up; otherwise it shows as present but is banked as a balance day, not paid, until it is
+              used on a later absent day. Days worked = present + half-days × 0.5 + compensation. Payable days
+              = present (not banked) + half-days × 0.5 + paid leave + holidays + compensation.
             </p>
             {/* Phones: a card per person with the counts as small chips. */}
             <ul className="flex flex-col divide-y rounded-lg border md:hidden">
@@ -144,61 +156,72 @@ export function AttendanceMonthlyPanel() {
                     {r.paidLeaveDays > 0 && <span className="rounded-full border px-2 py-0.5">{r.paidLeaveDays} paid leave</span>}
                     {r.unpaidLeaveDays > 0 && <span className="rounded-full border px-2 py-0.5">{r.unpaidLeaveDays} unpaid</span>}
                     {r.compensationDays > 0 && <span className="rounded-full border px-2 py-0.5">{r.compensationDays} comp</span>}
+                    {r.bankedDays > 0 && <span className="rounded-full border px-2 py-0.5">{r.bankedDays} banked</span>}
+                    <span className="rounded-full border border-primary/40 px-2 py-0.5 font-medium">{r.payableDays} payable</span>
                     {r.holidayDays > 0 && <span className="rounded-full border px-2 py-0.5">{r.holidayDays} holiday</span>}
                     {r.weeklyOffDays > 0 && <span className="rounded-full border px-2 py-0.5">{r.weeklyOffDays} weekly off</span>}
                   </div>
                 </li>
               ))}
             </ul>
+            {/* Desktop: one compact row per person (team under the name, short
+                headers, numbers right-aligned) so all columns fit without wrapping;
+                the table still scrolls sideways rather than overflow the page. */}
             <div className="hidden md:block">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Employee</TableHead>
-                  <TableHead>Team</TableHead>
-                  <TableHead>Present</TableHead>
-                  <TableHead>Half-day</TableHead>
-                  <TableHead>Absent</TableHead>
-                  <TableHead>Paid leave</TableHead>
-                  <TableHead>Unpaid leave</TableHead>
-                  <TableHead>Compensation</TableHead>
-                  <TableHead>Holidays</TableHead>
-                  <TableHead>Weekly offs</TableHead>
-                  <TableHead title="Present + half-days × 0.5 + compensation days">Days worked</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {overview.rows.map((r) => (
-                  <TableRow key={r.employeeId}>
-                    <TableCell>
-                      <Link href={`/employees/${r.employeeId}`} className="hover:underline">
-                        {r.fullName}
-                      </Link>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {r.team ? (
-                        <Link href={`/teams/${r.team.id}`} className="hover:underline">
-                          {r.team.name}
-                        </Link>
-                      ) : (
-                        "—"
-                      )}
-                    </TableCell>
-                    <TableCell>{r.presentDays}</TableCell>
-                    <TableCell>{r.halfDays}</TableCell>
-                    <TableCell className={r.absentDays > 0 ? "text-destructive" : undefined}>
-                      {r.absentDays}
-                    </TableCell>
-                    <TableCell>{r.paidLeaveDays}</TableCell>
-                    <TableCell>{r.unpaidLeaveDays}</TableCell>
-                    <TableCell>{r.compensationDays}</TableCell>
-                    <TableCell>{r.holidayDays}</TableCell>
-                    <TableCell>{r.weeklyOffDays}</TableCell>
-                    <TableCell className="font-semibold tabular-nums">{r.daysWorked}</TableCell>
+              <Table className="text-xs lg:text-sm">
+                <TableHeader>
+                  <TableRow className="[&>th]:h-9 [&>th]:whitespace-nowrap [&>th]:px-2 [&>th:not(:first-child)]:text-right">
+                    <TableHead>Employee</TableHead>
+                    <TableHead>Present</TableHead>
+                    <TableHead>Half</TableHead>
+                    <TableHead>Absent</TableHead>
+                    <TableHead title="Paid leave">Paid lv.</TableHead>
+                    <TableHead title="Unpaid leave">Unpaid</TableHead>
+                    <TableHead title="Compensation: extra days that made up an earlier missed day">Comp.</TableHead>
+                    <TableHead title="Worked in advance: present, banked as a balance day, not paid yet">Banked</TableHead>
+                    <TableHead title="Holidays">Hol.</TableHead>
+                    <TableHead title="Weekly offs">Offs</TableHead>
+                    <TableHead title="Days worked: present + half-days × 0.5 + compensation">Worked</TableHead>
+                    <TableHead title="Present (not banked) + half-days × 0.5 + paid leave + holidays + compensation">
+                      Payable
+                    </TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {overview.rows.map((r) => (
+                    <TableRow
+                      key={r.employeeId}
+                      className="[&>td]:px-2 [&>td]:py-2 [&>td:not(:first-child)]:text-right [&>td]:tabular-nums"
+                    >
+                      <TableCell className="max-w-[14rem]">
+                        <Link href={`/employees/${r.employeeId}`} className="block truncate font-medium hover:underline">
+                          {r.fullName}
+                        </Link>
+                        <span className="block truncate text-[11px] text-muted-foreground">
+                          {r.team ? (
+                            <Link href={`/teams/${r.team.id}`} className="hover:underline">
+                              {r.team.name}
+                            </Link>
+                          ) : (
+                            "No team"
+                          )}
+                        </span>
+                      </TableCell>
+                      <TableCell>{r.presentDays}</TableCell>
+                      <TableCell>{r.halfDays}</TableCell>
+                      <TableCell className={r.absentDays > 0 ? "text-destructive" : undefined}>{r.absentDays}</TableCell>
+                      <TableCell>{r.paidLeaveDays}</TableCell>
+                      <TableCell>{r.unpaidLeaveDays}</TableCell>
+                      <TableCell>{r.compensationDays}</TableCell>
+                      <TableCell>{r.bankedDays}</TableCell>
+                      <TableCell>{r.holidayDays}</TableCell>
+                      <TableCell>{r.weeklyOffDays}</TableCell>
+                      <TableCell>{r.daysWorked}</TableCell>
+                      <TableCell className="font-semibold">{r.payableDays}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             </div>
           </>
         ) : null}

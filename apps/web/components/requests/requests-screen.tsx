@@ -380,19 +380,19 @@ export function RequestsScreen() {
             )}
             {(balance.month.compensated > 0 || balance.year.compensated > 0) && (
               <p className="mt-3 text-xs text-muted-foreground">
-                Includes {balance.year.compensated} compensation credit{balance.year.compensated === 1 ? "" : "s"} that
+                Includes {balance.year.compensated} balance day{balance.year.compensated === 1 ? "" : "s"} that
                 expired unused and were credited back this year.
               </p>
             )}
             {balance.compensationCredits.activeCount > 0 && (
               <p className="mt-1 text-xs text-muted-foreground">
-                You have {balance.compensationCredits.activeCount} compensation credit
-                {balance.compensationCredits.activeCount === 1 ? "" : "s"} available for coming in on a weekly off
+                You have {balance.compensationCredits.activeCount} balance day
+                {balance.compensationCredits.activeCount === 1 ? "" : "s"} from working in advance
                 {balance.compensationCredits.nearestExpiry && (
                   <> — the soonest expires {fmtDate(balance.compensationCredits.nearestExpiry)}</>
                 )}
-                . Each credit first covers an absent day, then an approved unpaid-leave day, within 60 days of being
-                earned — only if it expires without covering anything does it add to your leave balance instead.
+                . Use one on an absent or unpaid day from your attendance page (Admin/HR approve it); one that expires
+                unused adds to your leave balance instead.
               </p>
             )}
           </CardContent>

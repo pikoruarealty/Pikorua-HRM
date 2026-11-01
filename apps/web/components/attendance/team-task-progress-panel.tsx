@@ -10,6 +10,7 @@ import { EmployeeAvatar } from "@/components/employees/employee-avatar";
 import { WorkItemStatusBadge } from "@/components/work/status-badge";
 import { RemindButton } from "@/components/notifications/remind-button";
 import { formatTime } from "@/lib/format-date";
+import { cn } from "@/lib/utils";
 
 // Lead/Admin "what is everyone doing right now" live view (companion to the
 // employee-facing planning-screen.tsx EOD card): every scoped employee's
@@ -101,43 +102,70 @@ export function TeamTaskProgressPanel({ canRemind = false }: { canRemind?: boole
             const isOpen = !!expanded[r.employeeId];
             return (
               <div key={r.employeeId} className="rounded-lg border p-3">
-                <div className="flex flex-wrap items-center gap-3">
-                  <EmployeeAvatar photoUrl={r.photoUrl} fullName={r.fullName} size="sm" />
-                  <div className="min-w-[10rem] flex-1">
-                    <Link href={`/employees/${r.employeeId}`} className="text-sm font-medium hover:underline">
-                      {r.fullName}
-                    </Link>
-                    <div className="text-xs text-muted-foreground">
-                      In {fmtTime(r.clockIn)} · Out {fmtTime(r.clockOut)}
+                {/* Fixed columns from xl up (name | status | progress | points | tasks
+                    link | remind), every cell present even when empty, so the rows line
+                    up. On a phone: name + remind on the first line, the rest below. */}
+                <div
+                  className={cn(
+                    "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2",
+                    canRemind
+                      ? "xl:grid-cols-[minmax(0,1fr)_7.5rem_10rem_6.5rem_5.5rem_2.25rem]"
+                      : "xl:grid-cols-[minmax(0,1fr)_7.5rem_10rem_6.5rem_5.5rem]",
+                  )}
+                >
+                  <div className="flex min-w-0 items-center gap-3">
+                    <EmployeeAvatar photoUrl={r.photoUrl} fullName={r.fullName} size="sm" />
+                    <div className="min-w-0">
+                      <Link
+                        href={`/employees/${r.employeeId}`}
+                        className="block truncate text-sm font-medium hover:underline"
+                      >
+                        {r.fullName}
+                      </Link>
+                      <div className="truncate text-xs text-muted-foreground">
+                        In {fmtTime(r.clockIn)} · Out {fmtTime(r.clockOut)}
+                      </div>
                     </div>
                   </div>
-                  <Badge variant={r.clockOut ? "outline" : r.clockIn ? "default" : "outline"}>
-                    {r.clockOut ? "clocked out" : r.clockIn ? "clocked in" : "not clocked in"}
-                  </Badge>
-                  <div className="flex w-40 flex-col gap-1">
-                    <Progress value={pct} />
-                    <span className="text-xs text-muted-foreground">
-                      {r.completedCount}/{r.plannedCount} tasks
-                      {r.inReviewCount > 0 && ` · ${r.inReviewCount} to review`}
+                  <div className="col-span-2 flex items-center gap-3 xl:contents">
+                    <div className="shrink-0 xl:justify-self-start">
+                      <Badge variant={r.clockOut ? "outline" : r.clockIn ? "default" : "outline"} className="whitespace-nowrap">
+                        {r.clockOut ? "clocked out" : r.clockIn ? "clocked in" : "not clocked in"}
+                      </Badge>
+                    </div>
+                    <div className="flex min-w-[4rem] flex-1 flex-col gap-1 xl:w-full">
+                      <Progress value={pct} />
+                      <span className="truncate text-xs text-muted-foreground">
+                        {r.completedCount}/{r.plannedCount} tasks
+                        {r.inReviewCount > 0 && ` · ${r.inReviewCount} to review`}
+                      </span>
+                    </div>
+                    <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground empty:hidden xl:empty:block xl:text-right">
+                      {r.isMetric ? null : (
+                        <>
+                          +{r.pointsEarnedToday} pts<span className="hidden sm:inline"> today</span>
+                        </>
+                      )}
+                    </span>
+                    <span className="shrink-0 empty:hidden xl:empty:block xl:text-right">
+                      {r.items.length > 0 && (
+                        <button
+                          type="button"
+                          className="whitespace-nowrap text-xs text-muted-foreground underline"
+                          onClick={() => setExpanded((c) => ({ ...c, [r.employeeId]: !isOpen }))}
+                        >
+                          {isOpen ? "Hide tasks" : "View tasks"}
+                        </button>
+                      )}
                     </span>
                   </div>
-                  {!r.isMetric && (
-                    <span className="text-xs text-muted-foreground">+{r.pointsEarnedToday} pts today</span>
-                  )}
-                  {r.items.length > 0 && (
-                    <button
-                      type="button"
-                      className="text-xs text-muted-foreground underline"
-                      onClick={() => setExpanded((c) => ({ ...c, [r.employeeId]: !isOpen }))}
-                    >
-                      {isOpen ? "Hide tasks" : "View tasks"}
-                    </button>
-                  )}
                   {canRemind && (
-                    <RemindButton
-                      endpoint={`/employees/${r.employeeId}/remind-tasks`}
-                      label={`Remind ${r.fullName} about their open tasks`}
-                    />
+                    <div className="col-start-2 row-start-1 justify-self-end xl:col-start-auto xl:row-start-auto">
+                      <RemindButton
+                        endpoint={`/employees/${r.employeeId}/remind-tasks`}
+                        label={`Remind ${r.fullName} about their open tasks`}
+                      />
+                    </div>
                   )}
                 </div>
                 {isOpen && (

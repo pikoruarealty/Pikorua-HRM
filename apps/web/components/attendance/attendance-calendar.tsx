@@ -52,7 +52,29 @@ export type CalendarDay = {
   leaveUnpaid?: number;
   /** The part of the day counted absent when only part of it is. */
   absentPart?: number | null;
+  /** Worked in advance and banked as a balance day — present, but not paid now. */
+  banked?: boolean;
+  bankExpires?: string | null;
+  bankUsedFor?: string | null;
+  /** A compensation day: the missed day it made up (a part-timer's short week has
+   *  `weekStart`; its date is the end of that week). */
+  madeUpFor?: { date: string; kind: "absence" | "unpaid_leave" | "shortfall"; weekStart?: string } | null;
+  /** An absent / unpaid day that a later extra day made up (paid on that day). */
+  madeUpOn?: string | null;
+  /** A balance-covered day: when its balance day was earned. */
+  balanceEarned?: string | null;
 };
+
+/** "18 Sep" */
+function shortDay(date: string): string {
+  return new Date(`${date}T00:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+}
+
+/** What a compensation day made up, in words. */
+export function madeUpForLabel(m: NonNullable<CalendarDay["madeUpFor"]>): string {
+  if (m.kind === "shortfall" && m.weekStart) return `a day short in the week of ${shortDay(m.weekStart)}`;
+  return `${m.kind === "unpaid_leave" ? "the unpaid day" : "the absence"} on ${shortDay(m.date)}`;
+}
 
 /** 0.5 -> "½", 1 -> "1". Leave is only ever whole or half days. */
 function fracDays(n: number): string {
@@ -112,7 +134,7 @@ const STATUS_STYLE: Record<Exclude<CalendarDayStatus, "present">, StatusStyle> =
     cell: "border-amber-500/40 bg-amber-500/15 text-amber-800 dark:text-amber-200",
   },
   compensation: {
-    label: "Compensation day",
+    label: "Compensation (made up a missed day)",
     short: "Comp",
     cell: "border-violet-500/40 bg-violet-500/15 text-violet-800 dark:text-violet-200",
   },
@@ -249,6 +271,11 @@ function cellLabel(day: CalendarDay): { full: string; tiny: string } {
   }
   // A day covered by a balance day used on purpose reads "Balance", not "Leave".
   if (day.status === "paid_leave" && day.note === "balance") return { full: "Balance", tiny: "Bal" };
+  // A missed day a later extra day made up: still unpaid here (paid on that day).
+  if ((day.status === "absent" || day.status === "unpaid_leave") && day.madeUpOn) {
+    // Only a tick on the cell; which day made it up is in the tooltip.
+    return { full: `${STATUS_STYLE[day.status].short} ✓`, tiny: `${TINY_LABEL[day.status]}✓` };
+  }
   if ((day.status === "paid_leave" || day.status === "unpaid_leave") && partial) {
     return {
       full: `${STATUS_STYLE[day.status].short} ${fracDays(leaveTotal)}`,
@@ -306,7 +333,22 @@ function DayTooltip({ day }: { day: CalendarDay }) {
             </span>
           )}
           {day.sessionCount > 1 && <span>{day.sessionCount} sessions (breaks not counted)</span>}
-          {day.note === "advance" && <span>Worked in advance — earned a balance day (see Balance days).</span>}
+          {day.note === "advance" &&
+            (day.banked ? (
+              <span>
+                Worked in advance — not paid now, banked as a balance day
+                {day.bankUsedFor
+                  ? `, used on ${shortDay(day.bankUsedFor)}.`
+                  : day.bankExpires
+                    ? ` (use by ${shortDay(day.bankExpires)}).`
+                    : "."}
+              </span>
+            ) : (
+              <span>Worked on the weekly off (paid as a day, before the 1 Oct 2026 rule).</span>
+            ))}
+          {status === "compensation" && day.madeUpFor && (
+            <span className="font-medium text-foreground">Made up {madeUpForLabel(day.madeUpFor)} — paid here.</span>
+          )}
           {day.isCompensation && status !== "compensation" && day.note !== "advance" && (
             <span>Marked as a compensation day</span>
           )}
@@ -316,7 +358,9 @@ function DayTooltip({ day }: { day: CalendarDay }) {
       ) : (
         <p className="text-muted-foreground">
           {day.note === "balance"
-            ? "Covered by a balance day (earned by working in advance; approved by Admin/HR)."
+            ? `Covered by a balance day${day.balanceEarned ? ` earned on ${shortDay(day.balanceEarned)}` : ""} (approved by Admin/HR).`
+            : day.madeUpOn
+            ? `${status === "absent" ? "Absent" : "Unpaid"} — made up by the extra day worked on ${shortDay(day.madeUpOn)} (paid on that day).`
             : day.note === "declared_unpaid"
             ? "Switched to unpaid leave."
             : day.note === "auto_off"
@@ -431,6 +475,18 @@ export function AttendanceCalendar({
             >
               <div className="flex items-start justify-between">
                 <span className="text-xs font-semibold tabular-nums sm:text-sm">{dayNumber(day.date)}</span>
+                {day.banked && (
+                  <>
+                    {/* A phone cell has no room for the word next to the date: a dot. */}
+                    <span className="mt-0.5 h-2 w-2 shrink-0 rounded-full bg-violet-500 sm:hidden" aria-hidden />
+                    <span
+                      className="hidden shrink-0 rounded border border-violet-500/40 px-0.5 text-[10px] font-semibold leading-tight text-violet-700 dark:text-violet-300 sm:inline"
+                      title="Worked in advance — banked as a balance day"
+                    >
+                      Adv
+                    </span>
+                  </>
+                )}
                 {day.location &&
                   (day.status === "half_day" ||
                     day.status === "compensation" ||
@@ -506,7 +562,7 @@ const LEGEND: { key: string; label: string; swatch: string }[] = [
   { key: "office", label: "In office", swatch: LOCATION_STYLE.office.cell },
   { key: "wfh", label: "Work from home", swatch: LOCATION_STYLE.wfh.cell },
   { key: "half", label: "Half day", swatch: STATUS_STYLE.half_day.cell },
-  { key: "comp", label: "Compensation", swatch: STATUS_STYLE.compensation.cell },
+  { key: "comp", label: "Compensation (made up a missed day)", swatch: STATUS_STYLE.compensation.cell },
   { key: "absent", label: "Absent", swatch: STATUS_STYLE.absent.cell },
   { key: "paid", label: "Paid leave", swatch: STATUS_STYLE.paid_leave.cell },
   { key: "unpaid", label: "Unpaid leave", swatch: STATUS_STYLE.unpaid_leave.cell },
@@ -525,6 +581,13 @@ export function AttendanceLegend() {
           {l.label}
         </li>
       ))}
+      <li className="flex items-center gap-1.5">
+        <span className="h-2 w-2 rounded-full bg-violet-500 sm:hidden" aria-hidden />
+        <span className="hidden rounded border border-violet-500/40 px-0.5 text-[10px] font-semibold leading-tight text-violet-700 dark:text-violet-300 sm:inline">
+          Adv
+        </span>
+        Worked in advance (banked, not paid yet)
+      </li>
     </ul>
   );
 }

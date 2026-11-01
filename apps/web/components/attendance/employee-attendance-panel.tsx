@@ -27,10 +27,23 @@ type BalanceCredit = {
   earnedDate: string;
   expiresAt: string;
   workLocation: "office" | "wfh";
-  status: "available" | "covering" | "used" | "expired";
+  status: "available" | "used" | "expired";
   coversDate?: string;
-  coversKind?: "absence" | "unpaid_leave";
   applied?: boolean;
+};
+
+type MadeUpEntry = {
+  on: string;
+  missedDate: string;
+  missedKind: "absence" | "unpaid_leave" | "shortfall";
+  weekStart?: string;
+};
+
+type BalanceInfo = {
+  availableCount: number;
+  credits: BalanceCredit[];
+  eligibleDays: BalanceEligibleDay[];
+  madeUp: MadeUpEntry[];
 };
 
 type Summary = {
@@ -43,16 +56,22 @@ type Summary = {
   half_days: number;
   paid_leave_days: number;
   unpaid_leave_days: number;
-  /** A part-timer's over-quota days. Days worked in advance are in present_days. */
+  /** Extra days that made up an earlier missed day (paid). */
   compensation_days: number;
-  /** Days worked in advance (weekly off / flagged) — counted in present_days. */
+  /** Days worked in advance — counted in present_days. */
   advance_days: number;
+  /** Of advance_days, the ones banked as balance days and not paid. */
+  banked_days: number;
   /** Absent / unpaid days covered by an approved balance day — counted in paid_leave_days. */
   balance_days: number;
-  compensation_balance: { availableCount: number; credits: BalanceCredit[]; eligibleDays: BalanceEligibleDay[] };
+  /** Of absent / unpaid: days a later extra day made up (paid on that day). */
+  made_up: { absent: number; unpaid: number };
+  /** A part-timer's days owed this month; null for a fixed schedule. */
+  days_owed: number | null;
+  compensation_balance: BalanceInfo;
   holiday_days: number;
   working_days_elapsed: number;
-  /** Days that count toward pay: present + ½ × half-days + paid leave + holidays + compensation. */
+  /** Days that count toward pay: present (not banked) + ½ × half-days + paid leave + holidays + compensation. */
   payable_days: number;
   hours: { office: number; wfh: number; total: number };
   expected_hours: { month: number; weekly: number | null; wfhWeekly: number | null } | null;
@@ -294,18 +313,38 @@ export function EmployeeAttendancePanel({
                 label="Present"
                 value={summary.present_days}
                 split={summary.by_status.present}
-                hint={summary.advance_days > 0 ? `incl. ${summary.advance_days} worked in advance` : undefined}
+                hint={
+                  summary.banked_days > 0
+                    ? `incl. ${summary.banked_days} in advance (banked, not paid)`
+                    : summary.advance_days > 0
+                      ? `incl. ${summary.advance_days} worked in advance`
+                      : undefined
+                }
               />
               <Stat label="Half-day" value={summary.half_days} split={summary.by_status.half_day} />
-              <Stat label="Absent" value={summary.absent_days} alert={summary.absent_days > 0} />
+              <Stat
+                label="Absent"
+                value={summary.absent_days}
+                alert={summary.absent_days > summary.made_up.absent}
+                hint={summary.made_up.absent > 0 ? `${summary.made_up.absent} made up` : undefined}
+              />
               <Stat label="Late (approved)" value={summary.late_count} />
               <Stat
                 label="Paid leave"
                 value={summary.paid_leave_days}
                 hint={summary.balance_days > 0 ? `incl. ${summary.balance_days} balance day${summary.balance_days === 1 ? "" : "s"}` : undefined}
               />
-              <Stat label="Unpaid leave" value={summary.unpaid_leave_days} />
-              <Stat label="Compensation" value={summary.compensation_days} split={summary.by_status.compensation} />
+              <Stat
+                label="Unpaid leave"
+                value={summary.unpaid_leave_days}
+                hint={summary.made_up.unpaid > 0 ? `${summary.made_up.unpaid} made up` : undefined}
+              />
+              <Stat
+                label="Compensation"
+                value={summary.compensation_days}
+                split={summary.by_status.compensation}
+                hint={summary.compensation_days > 0 ? "made up missed days" : undefined}
+              />
               <Stat label="Holidays" value={summary.holiday_days} />
             </div>
 
@@ -335,9 +374,14 @@ export function EmployeeAttendancePanel({
               />
               <div className="rounded-lg border p-3">
                 <div className="text-xs text-muted-foreground">Payable days</div>
-                <div className="mt-1 text-xl font-semibold tabular-nums sm:text-2xl">{summary.payable_days}</div>
+                <div className="mt-1 flex flex-wrap items-baseline gap-x-2">
+                  <span className="text-xl font-semibold tabular-nums sm:text-2xl">{summary.payable_days}</span>
+                  {summary.days_owed != null && (
+                    <span className="text-[11px] text-muted-foreground">of {summary.days_owed} owed</span>
+                  )}
+                </div>
                 <div className="mt-0.5 text-[11px] text-muted-foreground">
-                  present + ½ half-days + leave + holidays + comp
+                  present{summary.banked_days > 0 ? " (not banked)" : ""} + ½ half-days + leave + holidays + comp
                 </div>
               </div>
             </div>
@@ -669,28 +713,32 @@ function WfhCapRow({
   );
 }
 
-const KIND_LABEL = { absence: "an absent day", unpaid_leave: "an unpaid-leave day" } as const;
+function missedLabel(m: MadeUpEntry): string {
+  if (m.missedKind === "shortfall" && m.weekStart) return `a day short in the week of ${shortDate(m.weekStart)}`;
+  return `${m.missedKind === "unpaid_leave" ? "unpaid day" : "absence"} on ${shortDate(m.missedDate)}`;
+}
 
-/** Balance days: one per day worked in advance, usable against an absent or
- *  unpaid-leave day for 60 days. The employee asks to use one on a specific day;
- *  Admin/HR approve it in Requests, and only then does the day count as covered
- *  (shown as "Balance" on the calendar, inside Paid leave in the tiles). Office-
- *  earned days cover any day; a day earned working from home only covers a day
- *  that was itself a WFH day. */
+/** Balance days and make-ups (2026-11-01 rule, lib/attendance/extra-days.ts). A day
+ *  worked beyond what was owed is paid once: if there was an earlier missed day (up to
+ *  60 days back) it makes that day up automatically — listed under "Made up"; if not,
+ *  it is banked here for 60 days. The employee asks to use a banked day on a specific
+ *  absent / unpaid day; Admin/HR approve it in Requests, and only then does the day
+ *  count as paid ("Balance" on the calendar, inside Paid leave in the tiles). An
+ *  office-earned day covers any day; one earned from home only a WFH day. */
 function BalanceDays({
   balance,
   canRequest,
   onRequested,
 }: {
-  balance: { availableCount: number; credits: BalanceCredit[]; eligibleDays: BalanceEligibleDay[] };
+  balance: BalanceInfo;
   canRequest: boolean;
   onRequested: () => void;
 }) {
   const [day, setDay] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  if (balance.credits.length === 0) return null;
-  const open = balance.credits.filter((c) => c.status === "available" || c.status === "covering");
+  if (balance.credits.length === 0 && balance.madeUp.length === 0) return null;
+  const open = balance.credits.filter((c) => c.status === "available");
   const past = balance.credits.filter((c) => c.status === "used" || c.status === "expired").slice(0, 4);
   const requestable = balance.eligibleDays.filter((d) => !d.pending);
   const waiting = balance.eligibleDays.filter((d) => d.pending);
@@ -724,7 +772,7 @@ function BalanceDays({
           Balance days <span className="tabular-nums text-muted-foreground">· {balance.availableCount} available</span>
         </div>
         <div className="text-[11px] text-muted-foreground">
-          Earned by working in advance · use within 60 days on an absent or unpaid-leave day
+          Days worked in advance · not paid until used · use within 60 days on an absent or unpaid day
         </div>
       </div>
       {open.length > 0 ? (
@@ -741,11 +789,6 @@ function BalanceDays({
               </span>
               <span>Worked {shortDate(c.earnedDate)}</span>
               <span className="text-muted-foreground">· use by {shortDate(c.expiresAt)}</span>
-              {c.status === "covering" && c.coversDate && (
-                <span className="text-muted-foreground">
-                  · would cover {KIND_LABEL[c.coversKind ?? "absence"]} on {shortDate(c.coversDate)}
-                </span>
-              )}
             </li>
           ))}
         </ul>
@@ -777,10 +820,31 @@ function BalanceDays({
           <Button size="sm" className="h-8" disabled={busy || !day} onClick={request}>
             {busy ? "Sending…" : "Request"}
           </Button>
-          <span className="text-[11px] text-muted-foreground">Admin/HR approve it; then the day counts as covered.</span>
+          <span className="text-[11px] text-muted-foreground">Admin/HR approve it; then the day counts as paid.</span>
         </div>
       )}
+      {canRequest && open.length > 0 && requestable.length === 0 && waiting.length === 0 && (
+        <p className="mt-2 border-t pt-2 text-[11px] text-muted-foreground">
+          Nothing to use one on this month: there is no absent or unpaid day it can cover.
+        </p>
+      )}
       {msg && <p className={cn("mt-1.5 text-xs", msg.ok ? "text-muted-foreground" : "text-destructive")}>{msg.text}</p>}
+
+      {balance.madeUp.length > 0 && (
+        <div className="mt-2 border-t pt-2">
+          <div className="text-xs font-medium">Made up</div>
+          <ul className="mt-1 flex flex-col gap-0.5 text-xs text-muted-foreground">
+            {balance.madeUp.map((m) => (
+              <li key={`${m.on}-${m.missedDate}-${m.weekStart ?? ""}`}>
+                <span className="text-foreground">{shortDate(m.on)}</span> made up the {missedLabel(m)}
+                {m.on.slice(0, 7) !== m.missedDate.slice(0, 7) && (
+                  <span> — paid in {new Date(`${m.on}T00:00:00Z`).toLocaleDateString("en-GB", { month: "long", timeZone: "UTC" })}</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {past.length > 0 && (
         <ul className="mt-2 flex flex-col gap-0.5 border-t pt-2 text-[11px] text-muted-foreground">
@@ -788,15 +852,15 @@ function BalanceDays({
             <li key={c.id}>
               {shortDate(c.earnedDate)} ({c.workLocation === "wfh" ? "WFH" : "office"}) —{" "}
               {c.status === "used"
-                ? `used${c.coversDate ? ` for ${shortDate(c.coversDate)}` : ""}${c.applied ? " (approved)" : ""}`
+                ? `used${c.coversDate ? ` for ${shortDate(c.coversDate)}` : ""}`
                 : "expired unused (added to leave balance)"}
             </li>
           ))}
         </ul>
       )}
       <p className="mt-2 text-[11px] text-muted-foreground">
-        An office day can only be made up by working in the office; a day owed for work-from-home can be made up either
-        way, so a day earned from home only covers a WFH day.
+        A day worked beyond what you owe is paid once: it first makes up an earlier missed day (up to 60 days back),
+        otherwise it waits here. A missed office day can only be made up by an office day.
       </p>
     </div>
   );

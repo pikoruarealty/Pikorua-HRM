@@ -137,7 +137,7 @@ export function AttendanceExportButton() {
         <DialogHeader>
           <DialogTitle>Download attendance</DialogTitle>
           <DialogDescription>
-            One PDF file with a page for each selected employee: their details, the month&apos;s totals and every day.
+            One PDF: a summary page with every selected employee&apos;s totals and anything to check before paying, then a page per employee with their details, totals, balance days and every day.
           </DialogDescription>
         </DialogHeader>
 
@@ -239,7 +239,7 @@ export function AttendanceExportButton() {
             {busy
               ? "Preparing PDF…"
               : selected.size
-                ? `Download 1 PDF · ${selected.size} ${selected.size === 1 ? "page" : "pages"}`
+                ? `Download 1 PDF · ${selected.size + 1} pages`
                 : "Download PDF"}
           </Button>
         </DialogFooter>

@@ -1,6 +1,8 @@
 import { prisma } from "@/lib/db/prisma";
 import { getAttendanceSummary } from "@/lib/attendance/summary";
-import { getMonthlyAttendanceBreakdown, type MonthlyBreakdown } from "@/lib/attendance/monthly-breakdown";
+import { getMonthlyAttendanceWithLedger, type MonthlyBreakdown } from "@/lib/attendance/monthly-breakdown";
+import { madeUpEntries, type MadeUpEntry } from "@/lib/attendance/compensation-credits";
+import type { BankedDay } from "@/lib/attendance/extra-days";
 import {
   getEmployeeAttendanceCalendar,
   type AttendanceCalendar,
@@ -71,14 +73,24 @@ export type AttendanceReportEmployee = {
   };
   summary: {
     present: number;
+    /** Of `present`, days worked in advance and banked — not paid. */
+    banked: number;
     half: number;
+    /** Extra days that made up an earlier missed day (paid). */
     compensation: number;
+    /** Of `paidLeave`, days covered by a balance day. */
+    balanceUsed: number;
+    /** Of `absent` / `unpaidLeave`, days a later extra day made up (paid there). */
+    madeUpAbsent: number;
+    madeUpUnpaid: number;
+    /** A part-timer's days owed this month (null for a fixed schedule). */
+    daysOwed: number | null;
     absent: number;
     paidLeave: number;
     unpaidLeave: number;
     holidays: number;
     late: number;
-    /** present + half×0.5 + paid leave + holidays + compensation. */
+    /** (present − banked) + half×0.5 + paid leave + holidays + compensation. */
     payableDays: number;
     pendingDays: number;
     hours: { office: number; wfh: number; total: number };
@@ -86,9 +98,21 @@ export type AttendanceReportEmployee = {
     workedDays: { office: number; wfh: number };
   };
   days: ReportDay[];
+  /** Make-ups touching this month (an extra day this month making up a missed day,
+   *  possibly last month's; or a missed day this month made up later). */
+  madeUp: MadeUpEntry[];
+  /** Balance days usable as of the report (earned, still inside their 60 days). */
+  balanceAvailable: { earned: string; expires: string; location: string }[];
+  /** Make-ups / balance days that cross a month — which month pays them. */
+  crossMonth: string[];
   /** Things worth a second look before paying from this page. */
   flags: string[];
 };
+
+/** "18 Sep" */
+function shortDay(key: string): string {
+  return new Date(`${key}T00:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+}
 
 const frac = (n: number) => (Number.isInteger(n) ? String(n) : n === 0.5 ? "½" : String(n).replace(/\.5$/, "½"));
 
@@ -148,8 +172,19 @@ export function toReportDay(day: CalendarDay, joinKey: string | null): ReportDay
   const longDay = day.hours != null && day.hours > MAX_PLAUSIBLE_SHIFT_HOURS;
   const workedNotes = () => {
     if (day.sessionCount > 1) notes.push(`${day.sessionCount} sessions`);
-    if (day.note === "advance") notes.push("Worked in advance — earned a balance day");
-    else if (day.isCompensation && day.status !== "compensation") notes.push("Marked compensation");
+    if (day.note === "advance") {
+      notes.push(
+        day.banked
+          ? `In advance — banked, not paid${day.bankUsedFor ? `; used on ${shortDay(day.bankUsedFor)}` : day.bankExpires ? `; use by ${shortDay(day.bankExpires)}` : ""}`
+          : "Worked weekly off (paid)",
+      );
+    } else if (day.status === "compensation" && day.madeUpFor) {
+      notes.push(
+        day.madeUpFor.kind === "shortfall" && day.madeUpFor.weekStart
+          ? `Made up a day short, week of ${shortDay(day.madeUpFor.weekStart)}`
+          : `Made up ${day.madeUpFor.kind === "unpaid_leave" ? "unpaid day" : "absence"} of ${shortDay(day.madeUpFor.date)}`,
+      );
+    } else if (day.isCompensation && day.status !== "compensation") notes.push("Marked compensation");
     addLeaveNotes();
     if (longDay) notes.push(`Check: ${day.hours}h is unusually long`);
   };
@@ -159,7 +194,7 @@ export function toReportDay(day: CalendarDay, joinKey: string | null): ReportDay
       workedNotes();
       return {
         ...base,
-        statusLabel: "Present",
+        statusLabel: day.banked ? "Present · adv." : "Present",
         tone: day.location === "wfh" ? "wfh" : day.location === "mixed" ? "mixed" : "office",
         credit: day.credit,
         note: notes.join(" · ") || null,
@@ -172,10 +207,18 @@ export function toReportDay(day: CalendarDay, joinKey: string | null): ReportDay
       workedNotes();
       return { ...base, statusLabel: "Compensation", tone: "comp", credit: day.credit, note: notes.join(" · ") || null };
     case "absent":
-      return { ...base, statusLabel: "Absent", tone: "absent", credit: day.credit, note: null };
+      return {
+        ...base,
+        statusLabel: "Absent",
+        tone: "absent",
+        credit: day.credit,
+        note: day.madeUpOn ? `Made up on ${shortDay(day.madeUpOn)} (paid there)` : null,
+      };
     case "paid_leave":
       addLeaveNotes();
-      if (day.note === "balance") notes.push("Covered by a balance day");
+      if (day.note === "balance") {
+        notes.push(day.balanceEarned ? `Balance day earned ${shortDay(day.balanceEarned)}` : "Covered by a balance day");
+      }
       return {
         ...base,
         statusLabel: day.note === "balance" ? "Balance day" : partialLeave ? "Paid leave ½" : "Paid leave",
@@ -186,6 +229,7 @@ export function toReportDay(day: CalendarDay, joinKey: string | null): ReportDay
     case "unpaid_leave":
       addLeaveNotes();
       if (day.note === "declared_unpaid") notes.push("Switched from weekly off by employee");
+      if (day.madeUpOn) notes.push(`Made up on ${shortDay(day.madeUpOn)} (paid there)`);
       return {
         ...base,
         statusLabel: partialLeave ? "Unpaid leave ½" : "Unpaid leave",
@@ -259,9 +303,9 @@ export async function buildAttendanceReportEmployee(
   });
   if (!employee) return null;
 
-  const [summary, breakdown, expected] = await Promise.all([
+  const [summary, { breakdown, ledger }, expected] = await Promise.all([
     getAttendanceSummary(employeeId, month, year, lateGraceMinutes),
-    getMonthlyAttendanceBreakdown(employeeId, month, year),
+    getMonthlyAttendanceWithLedger(employeeId, month, year),
     getExpectedHoursForMonth(employeeId, month, year),
   ]);
   const { calendar } = await getEmployeeAttendanceCalendar(employeeId, month, year, breakdown);
@@ -272,6 +316,7 @@ export async function buildAttendanceReportEmployee(
     breakdown,
     calendar,
     expectedHours: expected?.month ?? null,
+    bank: ledger.bank,
   });
 }
 
@@ -303,6 +348,10 @@ export function assembleReportEmployee(input: {
   breakdown: Pick<
     MonthlyBreakdown,
     | "presentDays"
+    | "bankedDays"
+    | "balanceDays"
+    | "madeUp"
+    | "workingDaysElapsed"
     | "halfDays"
     | "compensationDays"
     | "absentDays"
@@ -313,6 +362,8 @@ export function assembleReportEmployee(input: {
   >;
   calendar: AttendanceCalendar;
   expectedHours: number | null;
+  /** The employee's balance days (the walk's ledger); omitted = none. */
+  bank?: BankedDay[];
 }): AttendanceReportEmployee {
   const { employee, breakdown, calendar } = input;
   const joinKey = employee.dateOfJoining ? employee.dateOfJoining.toISOString().slice(0, 10) : null;
@@ -332,6 +383,32 @@ export function assembleReportEmployee(input: {
   }
   if (calendar.days.some((d) => d.status === "live")) {
     flags.push("Today is still open — it is counted once the employee clocks out.");
+  }
+  const monthKey = calendar.days[0]?.date.slice(0, 7) ?? "";
+  const madeUp = madeUpEntries({
+    days: calendar.days.flatMap((d) =>
+      d.status === "compensation" && d.madeUpFor ? [{ date: d.date, status: "compensation" as const, credit: d.credit, madeUpFor: d.madeUpFor }] : [],
+    ),
+    madeUp: breakdown.madeUp,
+  });
+  // A make-up or balance day across months is easy to miss when paying by hand: say
+  // which month it is paid in.
+  const kindWord = (m: MadeUpEntry) =>
+    m.missedKind === "shortfall" ? "short week" : m.missedKind === "unpaid_leave" ? "unpaid day" : "absence";
+  const crossMonth: string[] = [];
+  for (const m of madeUp) {
+    if (m.on.startsWith(monthKey) && !m.missedDate.startsWith(monthKey)) {
+      crossMonth.push(
+        `${shortDay(m.on)} made up the ${kindWord(m)} of ${shortDay(m.weekStart ?? m.missedDate)} (an earlier month) — paid in this month.`,
+      );
+    } else if (!m.on.startsWith(monthKey) && m.missedDate.startsWith(monthKey)) {
+      crossMonth.push(`The ${kindWord(m)} of ${shortDay(m.weekStart ?? m.missedDate)} was made up on ${shortDay(m.on)} — paid in that month, not here.`);
+    }
+  }
+  for (const d of calendar.days) {
+    if (d.status === "paid_leave" && d.note === "balance" && d.balanceEarned && !d.balanceEarned.startsWith(monthKey)) {
+      crossMonth.push(`${shortDay(d.date)} is paid from a balance day earned on ${shortDay(d.balanceEarned)} (an earlier month).`);
+    }
   }
 
   const weeklyOffIndex = resolveDefaultOffDay(employee.defaultWeeklyOffDay, employee.team?.defaultWeeklyOffDay);
@@ -354,8 +431,16 @@ export function assembleReportEmployee(input: {
     },
     summary: {
       present: breakdown.presentDays,
+      banked: breakdown.bankedDays,
       half: breakdown.halfDays,
       compensation: breakdown.compensationDays,
+      balanceUsed: breakdown.balanceDays,
+      madeUpAbsent: breakdown.madeUp.filter((m) => m.missed.kind !== "unpaid_leave").length,
+      madeUpUnpaid: breakdown.madeUp.filter((m) => m.missed.kind === "unpaid_leave").length,
+      daysOwed:
+        employee.employmentType !== "fulltime" && employee.requiredDaysPerWeek
+          ? breakdown.workingDaysElapsed
+          : null,
       absent: breakdown.absentDays,
       paidLeave: breakdown.paidLeaveDays,
       unpaidLeave: breakdown.unpaidLeaveDays,
@@ -368,6 +453,11 @@ export function assembleReportEmployee(input: {
       workedDays: calendar.workedDays,
     },
     days,
+    madeUp,
+    balanceAvailable: (input.bank ?? [])
+      .filter((b) => b.status === "available")
+      .map((b) => ({ earned: b.date, expires: b.expires, location: b.location })),
+    crossMonth,
     flags,
   };
 }

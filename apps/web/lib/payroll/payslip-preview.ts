@@ -147,7 +147,9 @@ export async function computePayslipPreview(
 
   const earnedBasePay = computeEarnedBasePay(
     {
-      presentDays: breakdown.presentDays,
+      // A day worked in advance is present but banked, not paid (2026-11-01,
+      // lib/attendance/extra-days.ts) — pay only the present days worth a day.
+      presentDays: breakdown.presentDays - breakdown.bankedDays,
       halfDays: breakdown.halfDays,
       paidLeaveDays: breakdown.paidLeaveDays,
       holidayDays: breakdown.holidayDays,

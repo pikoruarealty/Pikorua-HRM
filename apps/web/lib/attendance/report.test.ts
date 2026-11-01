@@ -192,3 +192,41 @@ describe("assembleReportEmployee — the page's totals are the totals of its row
     expect(r.flags.some((f) => f.includes("awaiting approval"))).toBe(true);
   });
 });
+
+// 2026-11-01: the PDF spells out what the app keeps in tooltips — which missed day a
+// compensation day made up, when a day in advance can be used, where a balance day
+// came from — and flags make-ups that cross a month, since pay is done by hand.
+describe("toReportDay — extra days, make-ups and balance days", () => {
+  test("a day in advance: present, worth 0, with its use-by date", () => {
+    const r = toReportDay(day({ note: "advance", banked: true, bankExpires: "2026-08-02", credit: 0 }), null);
+    expect(r).toMatchObject({ statusLabel: "Present · adv.", credit: 0 });
+    expect(r.note).toBe("In advance — banked, not paid; use by 2 Aug");
+  });
+
+  test("a compensation day names the missed day it made up", () => {
+    const r = toReportDay(day({ status: "compensation", madeUpFor: { date: "2026-05-18", kind: "absence" } }), null);
+    expect(r).toMatchObject({ statusLabel: "Compensation", credit: 1, note: "Made up absence of 18 May" });
+    const s = toReportDay(
+      day({ status: "compensation", madeUpFor: { date: "2026-05-24", kind: "shortfall", weekStart: "2026-05-18" } }),
+      null,
+    );
+    expect(s.note).toBe("Made up a day short, week of 18 May");
+  });
+
+  test("an absence made up later says where it is paid; a balance day says when it was earned", () => {
+    const absent = day({ status: "absent", hours: null, clockIn: null, clockOut: null, location: null, credit: 0, madeUpOn: "2026-06-14" });
+    expect(toReportDay(absent, null).note).toBe("Made up on 14 Jun (paid there)");
+    const bal = day({
+      status: "paid_leave",
+      note: "balance",
+      hours: null,
+      clockIn: null,
+      clockOut: null,
+      location: null,
+      credit: 1,
+      leavePaid: 1,
+      balanceEarned: "2026-05-31",
+    });
+    expect(toReportDay(bal, null)).toMatchObject({ statusLabel: "Balance day", note: "Balance day earned 31 May" });
+  });
+});

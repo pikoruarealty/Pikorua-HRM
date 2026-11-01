@@ -6,11 +6,18 @@ import { prisma } from "@/lib/db/prisma";
  *  payslip write that depends on them. */
 type Db = typeof prisma | Prisma.TransactionClient;
 import { addDays, weekStartOf } from "@/lib/attendance/week";
-import { getMonthlyAttendanceBreakdown } from "@/lib/attendance/monthly-breakdown";
+import {
+  getMonthlyAttendanceBreakdown,
+  getMonthlyAttendanceWithLedger,
+  type ClassifiedDay,
+  type MonthlyBreakdown,
+} from "@/lib/attendance/monthly-breakdown";
 import { isFixedSchedule } from "@/lib/attendance/weekly-off";
 import { getWeekOff } from "@/lib/attendance/weekly-off";
 import { periodBounds } from "@/lib/requests/leave-math";
 import { splitHoursByLocation } from "@/lib/attendance/calendar";
+import { EXTRA_DAY_RULE_FROM, pickBankedDay, type MissedUnit, type Place } from "@/lib/attendance/extra-days";
+import { todayDateOnly } from "@/lib/attendance/time";
 
 // Compensation credit (comp-off) ledger, 2026-09-06 owner request: "if I come
 // on my weekoff, then it should compensate for my leaves in the timeframe of
@@ -71,8 +78,23 @@ import { splitHoursByLocation } from "@/lib/attendance/calendar";
 //    credit covers only a WFH day — so a day owed in the office can only be made up
 //    by working in the office. When both could cover a WFH day, the WFH credit is
 //    spent first so the more flexible office credit stays available.
+//
+// 2026-11-01 — the make-up rule (lib/attendance/extra-days.ts) replaces points 1, 4,
+// 5 and 6 for extra days on/after EXTRA_DAY_RULE_FROM. A balance day is no longer a
+// row minted when a record is approved — that missed every biometric day, whose
+// records are approved by the device sync and never went through here — it is
+// DERIVED from attendance by the walk's ledger, so it exists exactly when the walk
+// says the day was banked. A row is written only when a balance day is USED (an
+// approved balance_day request: `applied`). Payslips no longer redeem credits on
+// their own for those months: compensation and balance days are already in the
+// walk's counts. Rows for earlier days keep the old behaviour.
 
 export const COMPENSATION_CREDIT_WINDOW_DAYS = 60;
+
+/** Is this day under the make-up rule (no automatic credit rows / redemption)? */
+export function underExtraDayRule(date: Date): boolean {
+  return date.toISOString().slice(0, 10) >= EXTRA_DAY_RULE_FROM;
+}
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 /** The one rule: may a credit earned at `credit` cover a day that was owed at
@@ -161,6 +183,16 @@ export async function syncCompensationCreditsForWeek(employeeId: string, date: D
       where: { sourceRecordId: record.id },
       select: { id: true, consumedAt: true, workLocation: true },
     });
+
+    // Under the make-up rule a balance day is derived from attendance, not stored:
+    // only a USED one has a row. A leftover unused row (minted before the rule
+    // shipped) is dropped so nothing counts it twice.
+    if (underExtraDayRule(record.date)) {
+      if (existingCredit && !existingCredit.consumedAt) {
+        await prisma.compensationCredit.delete({ where: { id: existingCredit.id } });
+      }
+      continue;
+    }
 
     if (qualifies) {
       const workLocation = creditLocationOf(record);
@@ -371,6 +403,9 @@ export async function computeCompensationRedemption(
   year: number,
 ): Promise<CompensationRedemption[]> {
   const { start: periodStart, lastDay: periodLastDay } = periodBounds(month, year);
+  // Under the make-up rule the walk already pays every make-up and every used
+  // balance day; redeeming on top would pay the same extra day twice.
+  if (underExtraDayRule(new Date(Date.UTC(year, month, 0)))) return [];
   const [breakdown, credits, wfhDates] = await Promise.all([
     getMonthlyAttendanceBreakdown(employeeId, month, year),
     prisma.compensationCredit.findMany({
@@ -407,25 +442,19 @@ export async function commitCompensationRedemptions(
   );
 }
 
-/** Un-commits every credit this employee's payslip for the given period
- *  consumed — called when a draft payslip is deleted, so the credits go back
- *  into the pool instead of being silently burned with no way to redeem them
- *  again on a subsequent regenerate. Identifies them by consumedForDate
- *  falling inside the period, since redemption only ever allocates dates
- *  strictly within the month being processed. */
 export type CompensationCreditSummary = { activeCount: number; nearestExpiry: Date | null };
 
-/** Active (unconsumed, unexpired) compensation-credit count + nearest expiry
- *  for one employee — surfaced in the leave balance panel (GET
- *  /leave-config/balance) so an employee can see they've earned a credit
- *  and by when they need to use it. */
+/** Usable balance-day count + nearest expiry for one employee — surfaced in the
+ *  leave balance panel (GET /leave-config/balance) so an employee can see they've
+ *  earned one and by when to use it. From the walk's ledger (derived, see above). */
 export async function getCompensationCreditSummary(employeeId: string): Promise<CompensationCreditSummary> {
-  const credits = await prisma.compensationCredit.findMany({
-    where: { employeeId, consumedAt: null, expiresAt: { gte: new Date() } },
-    select: { expiresAt: true },
-    orderBy: { expiresAt: "asc" },
-  });
-  return { activeCount: credits.length, nearestExpiry: credits[0]?.expiresAt ?? null };
+  const now = new Date();
+  const { ledger } = await getMonthlyAttendanceWithLedger(employeeId, now.getMonth() + 1, now.getFullYear(), now);
+  const open = ledger.bank.filter((b) => b.status === "available").sort((a, b) => (a.expires < b.expires ? -1 : 1));
+  return {
+    activeCount: open.length,
+    nearestExpiry: open[0] ? new Date(`${open[0].expires}T00:00:00.000Z`) : null,
+  };
 }
 
 export type BalanceCredit = {
@@ -433,18 +462,16 @@ export type BalanceCredit = {
   earnedDate: string;
   expiresAt: string;
   workLocation: WorkLocation;
-  /** available: unspent and usable; covering: it would cover `coversDate` in the
-   *  month asked about when a payslip is generated; used: spent (by a payslip, or
-   *  on purpose — see `applied`); expired: lapsed unspent (it tops up the leave
-   *  balance instead). */
-  status: "available" | "covering" | "used" | "expired";
+  /** available: unspent and usable; used: spent on `coversDate` through an approved
+   *  balance-day request; expired: lapsed unused (it tops up the leave balance). */
+  status: "available" | "used" | "expired";
   coversDate?: string;
-  coversKind?: CompensationRedemption["kind"];
-  /** Used on purpose for `coversDate` (can be undone while the month has no payslip). */
+  /** Spent through an approved request (always true for `used`). */
   applied?: boolean;
 };
 
-/** A day a balance day could be used on: whole, over, and nothing worked or paid. */
+/** A day a balance day could be used on: over, nothing worked or paid on it, not
+ *  already made up by a later extra day. */
 export type BalanceEligibleDay = {
   date: string;
   kind: "absence" | "unpaid_leave";
@@ -453,28 +480,110 @@ export type BalanceEligibleDay = {
   pending: boolean;
 };
 
+/** A make-up that touches the month asked about: an extra day this month that made
+ *  up a missed day (maybe last month's), or a missed day this month made up later. */
+export type MadeUpEntry = {
+  /** The extra day that did the making up. */
+  on: string;
+  /** The missed day (for a part-timer's quota shortfall, the end of its week). */
+  missedDate: string;
+  missedKind: MissedUnit["kind"];
+  /** Set for a part-timer's quota shortfall: the week it was in. */
+  weekStart?: string;
+};
+
 const dayKey = (d: Date) => d.toISOString().slice(0, 10);
 
-/** The employee's balance days (compensation credits) for display: the open ones
- *  — with the absent/unpaid day each WOULD cover in `month`, by the same
- *  allocator a payslip uses — plus recent spent/expired ones for context, and the
- *  days one could be used on right now (`eligibleDays`). */
+/**
+ * Which days of this month a balance day could be used on, by the walk. A fixed
+ * schedule: whole absent / unpaid-leave days. A part-timer's absence is a weekly
+ * quota shortfall with no date, so a day of theirs that was not worked, in a week
+ * left short (and owned by this month), stands in for one shortfall day each.
+ * Days a later extra day already made up are left out — they are paid there.
+ */
+export function eligibleBalanceDays(
+  breakdown: Pick<MonthlyBreakdown, "days" | "missedUnits" | "madeUp">,
+  fixedSchedule: boolean,
+  todayKey: string,
+): { date: string; kind: "absence" | "unpaid_leave" }[] {
+  const madeUp = new Set(breakdown.madeUp.map((m) => m.missed.id));
+  const out: { date: string; kind: "absence" | "unpaid_leave" }[] = [];
+  const isOpenMissed = (d: ClassifiedDay) => d.date < todayKey && !d.madeUpOn;
+  if (fixedSchedule) {
+    for (const d of breakdown.days) {
+      if (!isOpenMissed(d) || (d.absentPart ?? 0) > 0) continue;
+      if (d.status === "absent") out.push({ date: d.date, kind: "absence" });
+      else if (d.status === "unpaid_leave" && d.leaveUnpaid === 1) out.push({ date: d.date, kind: "unpaid_leave" });
+    }
+    return out;
+  }
+  // Part-timer: one not-worked day per open shortfall day, in that week and month.
+  const openByWeek = new Map<string, number>();
+  for (const u of breakdown.missedUnits) {
+    if (u.kind !== "shortfall" || !u.weekStart || madeUp.has(u.id)) continue;
+    openByWeek.set(u.weekStart, (openByWeek.get(u.weekStart) ?? 0) + 1);
+  }
+  const month = breakdown.days[0]?.date.slice(0, 7);
+  for (const d of breakdown.days) {
+    if (d.status !== "no_record" || d.date >= todayKey || d.date.slice(0, 7) !== month) continue;
+    const wk = dayKey(weekStartOf(new Date(`${d.date}T00:00:00.000Z`)));
+    const left = openByWeek.get(wk) ?? 0;
+    if (left <= 0) continue;
+    openByWeek.set(wk, left - 1);
+    out.push({ date: d.date, kind: "absence" });
+  }
+  for (const d of breakdown.days) {
+    if (isOpenMissed(d) && d.status === "unpaid_leave" && d.leaveUnpaid === 1) {
+      out.push({ date: d.date, kind: "unpaid_leave" });
+    }
+  }
+  return out.sort((a, b) => (a.date < b.date ? -1 : 1));
+}
+
+/** The make-ups that touch this month, for the attendance panel and the PDF. */
+export function madeUpEntries(breakdown: Pick<MonthlyBreakdown, "days" | "madeUp">): MadeUpEntry[] {
+  const out: MadeUpEntry[] = [];
+  const seen = new Set<string>();
+  for (const d of breakdown.days) {
+    if (d.status !== "compensation" || !d.madeUpFor) continue;
+    seen.add(`${d.date}|${d.madeUpFor.date}`);
+    out.push({
+      on: d.date,
+      missedDate: d.madeUpFor.date,
+      missedKind: d.madeUpFor.kind,
+      ...(d.madeUpFor.weekStart ? { weekStart: d.madeUpFor.weekStart } : {}),
+    });
+  }
+  for (const m of breakdown.madeUp) {
+    if (seen.has(`${m.on}|${m.missed.date}`)) continue;
+    out.push({
+      on: m.on,
+      missedDate: m.missed.date,
+      missedKind: m.missed.kind,
+      ...(m.missed.weekStart ? { weekStart: m.missed.weekStart } : {}),
+    });
+  }
+  return out.sort((a, b) => (a.on < b.on ? -1 : a.on > b.on ? 1 : 0));
+}
+
+/** The employee's balance days for display (newest first, recent ones), the days of
+ *  `month` one could be used on right now (`eligibleDays`) and the make-ups that
+ *  touch the month. All from the walk's ledger, so the card can't disagree with the
+ *  calendar. */
 export async function getCompensationBalance(
   employeeId: string,
   month: number,
   year: number,
   now: Date = new Date(),
-): Promise<{ availableCount: number; credits: BalanceCredit[]; eligibleDays: BalanceEligibleDay[] }> {
-  const since = new Date(now.getTime() - 120 * MS_PER_DAY);
+): Promise<{
+  availableCount: number;
+  credits: BalanceCredit[];
+  eligibleDays: BalanceEligibleDay[];
+  madeUp: MadeUpEntry[];
+}> {
   const { start: periodStart, lastDay: periodLastDay } = periodBounds(month, year);
-  const [rows, redemptions, breakdown, employee, wfhDates, payslip, pendingRequests] = await Promise.all([
-    prisma.compensationCredit.findMany({
-      where: { employeeId, OR: [{ consumedAt: null, expiresAt: { gte: since } }, { consumedAt: { gte: since } }] },
-      orderBy: { earnedDate: "desc" },
-      take: 30,
-    }),
-    computeCompensationRedemption(employeeId, month, year),
-    getMonthlyAttendanceBreakdown(employeeId, month, year),
+  const [{ breakdown, ledger }, employee, wfhDates, payslip, pendingRequests] = await Promise.all([
+    getMonthlyAttendanceWithLedger(employeeId, month, year, now),
     prisma.employee.findUnique({
       where: { id: employeeId },
       select: { employmentType: true, requiredDaysPerWeek: true },
@@ -495,86 +604,76 @@ export async function getCompensationBalance(
     }),
   ]);
   const pendingDates = new Set(pendingRequests.flatMap((r) => (r.dateFrom ? [dayKey(r.dateFrom)] : [])));
-  const covering = new Map(redemptions.map((r) => [r.creditId, r]));
+  const todayKey = dayKey(todayDateOnly());
+  // Recent history only: anything still usable, plus what lapsed or was used lately.
+  const since = dayKey(new Date(now.getTime() - 120 * MS_PER_DAY));
 
-  const credits: BalanceCredit[] = rows.map((c) => {
-    const base = {
-      id: c.id,
-      earnedDate: dayKey(c.earnedDate),
-      expiresAt: dayKey(c.expiresAt),
-      workLocation: c.workLocation,
-    };
-    if (c.consumedAt) {
-      return {
-        ...base,
-        status: "used" as const,
-        applied: c.applied,
-        ...(c.consumedForDate ? { coversDate: dayKey(c.consumedForDate) } : {}),
-      };
-    }
-    if (c.expiresAt.getTime() < now.getTime()) return { ...base, status: "expired" as const };
-    const r = covering.get(c.id);
-    return r
-      ? { ...base, status: "covering" as const, coversDate: dayKey(r.date), coversKind: r.kind }
-      : { ...base, status: "available" as const };
-  });
+  const credits: BalanceCredit[] = [...ledger.bank]
+    .filter((b) => b.status === "available" || b.date >= since)
+    .reverse()
+    .map((b) => ({
+      id: `bank-${b.date}`,
+      earnedDate: b.date,
+      expiresAt: b.expires,
+      workLocation: b.location as WorkLocation,
+      status: b.status,
+      ...(b.usedFor ? { coversDate: b.usedFor, applied: true } : {}),
+    }));
 
-  // Days a balance day can be used on: whole absent / unpaid-leave days that are
-  // over, for a fixed-schedule employee, in a month with no payslip — and only those
-  // some open credit can actually cover (window + office/WFH rule).
-  const open = rows.filter((c) => !c.consumedAt && c.expiresAt.getTime() >= now.getTime());
   const eligibleDays: BalanceEligibleDay[] = [];
-  if (employee && isFixedSchedule(employee) && !payslip) {
-    for (const d of breakdown.days) {
-      if (d.absentPart != null && d.absentPart > 0) continue;
-      const wholeUnpaid = d.status === "unpaid_leave" && d.leaveUnpaid === 1;
-      if (d.status !== "absent" && !wholeUnpaid) continue;
-      const location = wfhDates.has(d.date) ? WorkLocation.wfh : WorkLocation.office;
-      const date = new Date(`${d.date}T00:00:00.000Z`);
-      const usable = open.some(
-        (c) =>
-          c.earnedDate.getTime() <= date.getTime() &&
-          date.getTime() <= c.expiresAt.getTime() &&
-          canCreditCover(c.workLocation, location),
-      );
-      if (usable) {
-        eligibleDays.push({
-          date: d.date,
-          kind: d.status === "absent" ? "absence" : "unpaid_leave",
-          location,
-          pending: pendingDates.has(d.date),
-        });
-      }
+  if (employee && !payslip) {
+    for (const d of eligibleBalanceDays(breakdown, isFixedSchedule(employee), todayKey)) {
+      const place: Place = wfhDates.has(d.date) ? "wfh" : "office";
+      if (!pickBankedDay(ledger.bank, d.date, place)) continue;
+      eligibleDays.push({ ...d, location: place as WorkLocation, pending: pendingDates.has(d.date) });
     }
   }
 
   return {
-    availableCount: credits.filter((c) => c.status === "available" || c.status === "covering").length,
+    availableCount: ledger.bank.filter((b) => b.status === "available").length,
     credits,
     eligibleDays,
+    madeUp: madeUpEntries(breakdown),
   };
 }
 
-/** Credits that expired having covered nothing at all in their 60-day
- *  window (consumedAt still null, expiresAt in the past), scoped to expiries
- *  falling within [start, end]. These are the only credits that top up
- *  lib/leave/balance.ts's leave balance — see point 6 above: a credit that
- *  redeemed an absence or unpaid-leave day already did its job and never
- *  also adds to the balance. */
+/** Balance days that expired having covered nothing in their 60 days, with the
+ *  expiry inside [start, end]. These are the only ones that top up
+ *  lib/leave/balance.ts's leave balance — see point 6 above: a credit that redeemed
+ *  an absence or unpaid-leave day already did its job and never also adds to the
+ *  balance. Rows from before the make-up rule are counted as before; from the rule
+ *  on they come from the walk's ledger (an extra day that made up a missed day was
+ *  never banked, so it never lapses into leave). */
 export async function getExpiredUnusedCreditCount(
   employeeId: string,
   start: Date,
   end: Date,
 ): Promise<number> {
-  return prisma.compensationCredit.count({
-    where: {
-      employeeId,
-      consumedAt: null,
-      expiresAt: { gte: start, lte: end, lt: new Date() },
-    },
-  });
+  const now = new Date();
+  const ruleDate = new Date(`${EXTRA_DAY_RULE_FROM}T00:00:00.000Z`);
+  const [legacy, { ledger }] = await Promise.all([
+    prisma.compensationCredit.count({
+      where: {
+        employeeId,
+        consumedAt: null,
+        earnedDate: { lt: ruleDate },
+        expiresAt: { gte: start, lte: end, lt: now },
+      },
+    }),
+    getMonthlyAttendanceWithLedger(employeeId, now.getMonth() + 1, now.getFullYear(), now),
+  ]);
+  const from = dayKey(start);
+  const to = dayKey(end);
+  const derived = ledger.bank.filter((b) => b.status === "expired" && b.expires >= from && b.expires <= to).length;
+  return legacy + derived;
 }
 
+/** Un-commits every credit this employee's payslip for the given period
+ *  consumed — called when a draft payslip is deleted, so the credits go back
+ *  into the pool instead of being silently burned with no way to redeem them
+ *  again on a subsequent regenerate. Identifies them by consumedForDate
+ *  falling inside the period, since redemption only ever allocates dates
+ *  strictly within the month being processed. */
 export async function rollbackCompensationRedemptionsForPeriod(
   employeeId: string,
   month: number,

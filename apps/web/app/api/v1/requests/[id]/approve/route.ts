@@ -16,7 +16,7 @@ import {
 } from "@/lib/requests/leave-math";
 import { getApprovedPaidLeaveDaysByMonthsInRange, getApprovedPaidLeaveDaysForYear } from "@/lib/requests/leave";
 import { getEffectivePaidLeaveCaps } from "@/lib/leave/balance";
-import { checkBalanceDay } from "@/lib/attendance/balance-day";
+import { checkBalanceDay, spendBalanceDay } from "@/lib/attendance/balance-day";
 
 // Track B. PATCH /api/v1/requests/:id/approve — Milestone 1.3.
 // Golden rule: Admin/HR only, always — Team Leads get 403 even for their own team.
@@ -128,20 +128,13 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     const verdict = await checkBalanceDay(request.employeeId, request.dateFrom, request.id);
     if (!verdict.ok) return failFor(verdict.status === 409 ? ErrorCode.CONFLICT : ErrorCode.VALIDATION, verdict.message);
     const approvedAt = new Date();
-    const spent = await prisma.compensationCredit.updateMany({
-      where: { id: verdict.creditId, consumedAt: null, applied: false },
-      data: {
-        consumedAt: approvedAt,
-        consumedForDate: request.dateFrom,
-        consumedForRequestId: request.id,
-        applied: true,
-        appliedByUserId: session!.userId,
-        appliedAt: approvedAt,
-      },
-    });
-    if (spent.count !== 1) {
-      return failFor(ErrorCode.CONFLICT, "That balance day was just used for something else — try again.");
-    }
+    const spent = await spendBalanceDay(
+      verdict,
+      { id: request.id, employeeId: request.employeeId, dateFrom: request.dateFrom },
+      session!.userId,
+      approvedAt,
+    );
+    if (!spent.ok) return failFor(ErrorCode.CONFLICT, spent.message);
     const approvedRow = await prisma.request.update({
       where: { id: request.id },
       data: { status: RequestStatus.approved, approverId: session!.userId, approvedAt },
@@ -163,8 +156,10 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
         type: request.type,
         employee_id: request.employeeId,
         date: request.dateFrom.toISOString().slice(0, 10),
-        credit_id: verdict.creditId,
-        credit_location: verdict.location,
+        credit_id: spent.creditId,
+        earned_date: verdict.sourceDate,
+        credit_location: verdict.sourceLocation,
+        day_location: verdict.location,
         day_was: verdict.kind,
       },
       ip: clientIp(req),

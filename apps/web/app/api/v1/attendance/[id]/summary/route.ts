@@ -11,6 +11,7 @@ import { getLedEmployeeIds } from "@/lib/employees/managed-scope";
 import { getEmployeeAttendanceCalendar } from "@/lib/attendance/calendar";
 import { getExpectedHoursForMonth } from "@/lib/attendance/expected-hours";
 import { ATTENDANCE_EXEMPT_MESSAGE, isAttendanceExemptRole } from "@/lib/attendance/tracking";
+import { isFixedSchedule } from "@/lib/attendance/weekly-off";
 
 // Track A. GET /api/v1/attendance/:employee_id/summary?month=&year=
 // (folder is named [id], not [employee_id], only because Next.js requires
@@ -59,7 +60,7 @@ export async function GET(
 
   const employee = await prisma.employee.findUnique({
     where: { id: employeeId },
-    select: { id: true, role: true },
+    select: { id: true, role: true, employmentType: true, requiredDaysPerWeek: true },
   });
   if (!employee) {
     return failFor(ErrorCode.NOT_FOUND, "Employee not found.");
@@ -95,16 +96,27 @@ export async function GET(
     half_days: breakdown.halfDays,
     paid_leave_days: breakdown.paidLeaveDays,
     unpaid_leave_days: breakdown.unpaidLeaveDays,
-    // A part-timer's over-quota days. Days worked in advance (a worked weekly off /
-    // flagged day) are in `present_days` (2026-10-24) and counted here separately.
+    // Extra days that made up an earlier missed day (paid, 2026-11-01 rule —
+    // lib/attendance/extra-days.ts). Days worked in advance are in `present_days`
+    // and counted separately; `banked_days` of them were banked and are NOT paid.
     compensation_days: breakdown.compensationDays,
     advance_days: breakdown.advanceDays,
+    banked_days: breakdown.bankedDays,
     // Of paid_leave_days: absent / unpaid days covered by an approved balance day.
     balance_days: breakdown.balanceDays,
+    // Of absent_days / unpaid_leave_days: days a later extra day made up (paid on
+    // that day, maybe next month) — so the tile doesn't read as an underpayment.
+    made_up: {
+      absent: breakdown.madeUp.filter((m) => m.missed.kind !== "unpaid_leave").length,
+      unpaid: breakdown.madeUp.filter((m) => m.missed.kind === "unpaid_leave").length,
+    },
+    // A part-timer's days owed this month (weekly quotas; a holiday week owes less) —
+    // what payable days are measured against. null for a fixed schedule.
+    days_owed: isFixedSchedule(employee) ? null : breakdown.workingDaysElapsed,
     holiday_days: breakdown.holidayDays,
     working_days_elapsed: breakdown.workingDaysElapsed,
-    // 2026-10-01 — the days that count toward pay (present + half×0.5 + paid leave +
-    // holiday + compensation): the exact sum of the per-day `credit` in `days`, so
+    // 2026-10-01 — the days that count toward pay ((present − banked) + half×0.5 +
+    // paid leave + holiday + compensation): the exact sum of the per-day `credit` in `days`, so
     // it can be checked against the calendar. Leave days can be fractional now
     // (half-day leave), as can absent for a part-timer's quota shortfall.
     payable_days: breakdown.payableDays,
@@ -123,9 +135,10 @@ export async function GET(
     // One entry per calendar day of the month — the same classification that
     // produced the counts above, plus the day's hours/times/location.
     days: calendar.days,
-    // Balance days (compensation credits): each day worked in advance banks one,
-    // usable against any absent / unpaid-leave day for 60 days — see
-    // lib/attendance/compensation-credits.ts for the office/WFH rule.
+    // Balance days (derived from the walk's ledger): each day worked in advance with
+    // nothing earlier to make up banks one, usable on an absent / unpaid day for 60
+    // days through an approved request; `madeUp` lists the automatic make-ups that
+    // touch this month — see lib/attendance/extra-days.ts.
     compensation_balance: compensationBalance,
     notes: {
       late_tracking_unavailable: summary.lateTrackingUnavailable
