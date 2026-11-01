@@ -12,6 +12,7 @@ import { getEmployeeAttendanceCalendar } from "@/lib/attendance/calendar";
 import { getExpectedHoursForMonth } from "@/lib/attendance/expected-hours";
 import { ATTENDANCE_EXEMPT_MESSAGE, isAttendanceExemptRole } from "@/lib/attendance/tracking";
 import { isFixedSchedule } from "@/lib/attendance/weekly-off";
+import { daysOwedOf } from "@/lib/attendance/report";
 
 // Track A. GET /api/v1/attendance/:employee_id/summary?month=&year=
 // (folder is named [id], not [employee_id], only because Next.js requires
@@ -102,6 +103,11 @@ export async function GET(
     compensation_days: breakdown.compensationDays,
     advance_days: breakdown.advanceDays,
     banked_days: breakdown.bankedDays,
+    // A part-timer's days worked only from home (they go to the WFH hours, not the
+    // in-office day quota) and half days over the quota — worked, not paid.
+    wfh_only_days: breakdown.wfhOnlyDays,
+    over_quota_half_days: breakdown.overQuotaHalfDays,
+    unpaid_work_days: breakdown.unpaidWorkDays,
     // Of paid_leave_days: absent / unpaid days covered by an approved balance day.
     balance_days: breakdown.balanceDays,
     // Of absent_days / unpaid_leave_days: days a later extra day made up (paid on
@@ -112,7 +118,7 @@ export async function GET(
     },
     // A part-timer's days owed this month (weekly quotas; a holiday week owes less) —
     // what payable days are measured against. null for a fixed schedule.
-    days_owed: isFixedSchedule(employee) ? null : breakdown.workingDaysElapsed,
+    days_owed: isFixedSchedule(employee) ? null : daysOwedOf(breakdown),
     holiday_days: breakdown.holidayDays,
     working_days_elapsed: breakdown.workingDaysElapsed,
     // 2026-10-01 — the days that count toward pay ((present − banked) + half×0.5 +

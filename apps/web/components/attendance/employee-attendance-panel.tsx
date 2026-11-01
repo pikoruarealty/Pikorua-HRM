@@ -62,6 +62,12 @@ type Summary = {
   advance_days: number;
   /** Of advance_days, the ones banked as balance days and not paid. */
   banked_days: number;
+  /** A part-timer's days worked only from home — not quota days, not paid as days. */
+  wfh_only_days: number;
+  /** A part-timer's half days beyond the week's quota — not paid. */
+  over_quota_half_days: number;
+  /** Worked time shown above but not paid, in days. */
+  unpaid_work_days: number;
   /** Absent / unpaid days covered by an approved balance day — counted in paid_leave_days. */
   balance_days: number;
   /** Of absent / unpaid: days a later extra day made up (paid on that day). */
@@ -314,14 +320,24 @@ export function EmployeeAttendancePanel({
                 value={summary.present_days}
                 split={summary.by_status.present}
                 hint={
-                  summary.banked_days > 0
-                    ? `incl. ${summary.banked_days} in advance (banked, not paid)`
-                    : summary.advance_days > 0
-                      ? `incl. ${summary.advance_days} worked in advance`
-                      : undefined
+                  [
+                    summary.banked_days > 0
+                      ? `incl. ${summary.banked_days} in advance (banked, not paid)`
+                      : summary.advance_days > 0
+                        ? `incl. ${summary.advance_days} worked in advance`
+                        : null,
+                    summary.wfh_only_days > 0 ? `${summary.wfh_only_days} WFH-only (count as WFH hours)` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ") || undefined
                 }
               />
-              <Stat label="Half-day" value={summary.half_days} split={summary.by_status.half_day} />
+              <Stat
+                label="Half-day"
+                value={summary.half_days}
+                split={summary.by_status.half_day}
+                hint={summary.over_quota_half_days > 0 ? `${summary.over_quota_half_days} over the weekly quota (not paid)` : undefined}
+              />
               <Stat
                 label="Absent"
                 value={summary.absent_days}
@@ -381,7 +397,9 @@ export function EmployeeAttendancePanel({
                   )}
                 </div>
                 <div className="mt-0.5 text-[11px] text-muted-foreground">
-                  present{summary.banked_days > 0 ? " (not banked)" : ""} + ½ half-days + leave + holidays + comp
+                  {summary.unpaid_work_days > 0
+                    ? `days worked that count (${summary.unpaid_work_days} not paid) + leave + holidays + comp`
+                    : "present + ½ half-days + leave + holidays + comp"}
                 </div>
               </div>
             </div>
@@ -789,6 +807,9 @@ function BalanceDays({
               </span>
               <span>Worked {shortDate(c.earnedDate)}</span>
               <span className="text-muted-foreground">· use by {shortDate(c.expiresAt)}</span>
+              {c.workLocation === "wfh" && (
+                <span className="text-muted-foreground">· only covers a WFH day, so not counted as available</span>
+              )}
             </li>
           ))}
         </ul>

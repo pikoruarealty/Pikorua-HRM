@@ -444,13 +444,23 @@ export async function commitCompensationRedemptions(
 
 export type CompensationCreditSummary = { activeCount: number; nearestExpiry: Date | null };
 
+/** Balance days that can actually be used: unspent, unexpired, and earned in the
+ *  office. A WFH-earned one only covers a day owed from home (an approved WFH
+ *  request), and those can't be filed in the app, so it covers nothing today — it
+ *  is listed, but not counted as available. */
+export function usableBalanceCount(bank: { status: string; location: string }[]): number {
+  return bank.filter((b) => b.status === "available" && b.location === "office").length;
+}
+
 /** Usable balance-day count + nearest expiry for one employee — surfaced in the
  *  leave balance panel (GET /leave-config/balance) so an employee can see they've
  *  earned one and by when to use it. From the walk's ledger (derived, see above). */
 export async function getCompensationCreditSummary(employeeId: string): Promise<CompensationCreditSummary> {
   const now = new Date();
   const { ledger } = await getMonthlyAttendanceWithLedger(employeeId, now.getMonth() + 1, now.getFullYear(), now);
-  const open = ledger.bank.filter((b) => b.status === "available").sort((a, b) => (a.expires < b.expires ? -1 : 1));
+  const open = ledger.bank
+    .filter((b) => b.status === "available" && b.location === "office")
+    .sort((a, b) => (a.expires < b.expires ? -1 : 1));
   return {
     activeCount: open.length,
     nearestExpiry: open[0] ? new Date(`${open[0].expires}T00:00:00.000Z`) : null,
@@ -630,7 +640,7 @@ export async function getCompensationBalance(
   }
 
   return {
-    availableCount: ledger.bank.filter((b) => b.status === "available").length,
+    availableCount: usableBalanceCount(ledger.bank),
     credits,
     eligibleDays,
     madeUp: madeUpEntries(breakdown),

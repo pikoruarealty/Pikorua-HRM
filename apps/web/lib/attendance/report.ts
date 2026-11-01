@@ -75,6 +75,12 @@ export type AttendanceReportEmployee = {
     present: number;
     /** Of `present`, days worked in advance and banked — not paid. */
     banked: number;
+    /** Worked but not paid, in days (banked + part-timer WFH-only + over-quota halves). */
+    unpaidWork: number;
+    /** A part-timer's WFH-only days (counted as WFH hours, not quota days). */
+    wfhOnly: number;
+    /** A part-timer's half days beyond the week's quota (not paid). */
+    overQuotaHalf: number;
     half: number;
     /** Extra days that made up an earlier missed day (paid). */
     compensation: number;
@@ -96,22 +102,35 @@ export type AttendanceReportEmployee = {
     hours: { office: number; wfh: number; total: number };
     expectedHours: number | null;
     workedDays: { office: number; wfh: number };
+    /** Where the present / half / compensation days were worked — the same split the
+     *  attendance page shows under its tiles. */
+    byStatus: AttendanceCalendar["byStatus"];
   };
   days: ReportDay[];
   /** Make-ups touching this month (an extra day this month making up a missed day,
    *  possibly last month's; or a missed day this month made up later). */
   madeUp: MadeUpEntry[];
   /** Balance days usable as of the report (earned, still inside their 60 days). */
-  balanceAvailable: { earned: string; expires: string; location: string }[];
+  balanceAvailable: { earned: string; expires: string; location: string; usable: boolean }[];
   /** Make-ups / balance days that cross a month — which month pays them. */
   crossMonth: string[];
   /** Things worth a second look before paying from this page. */
   flags: string[];
 };
 
-/** "18 Sep" */
+/** A part-timer's days owed this month: the days that count here (payable, less the
+ *  make-ups of earlier missed days) plus the days missed. Each owed day lands in
+ *  exactly one month — a week split across two months is not owed twice — and a
+ *  holiday week owes nothing, so a Diwali month owes three weeks' days. */
+export function daysOwedOf(b: Pick<MonthlyBreakdown, "payableDays" | "compensationDays" | "absentDays">): number {
+  return Math.round((b.payableDays - b.compensationDays + b.absentDays) * 100) / 100;
+}
+
+const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** "18 Sep" — fixed three-letter months (the locale's own gives "Sept" for one month only). */
 function shortDay(key: string): string {
-  return new Date(`${key}T00:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+  return `${Number(key.slice(8, 10))} ${MON[Number(key.slice(5, 7)) - 1]}`;
 }
 
 const frac = (n: number) => (Number.isInteger(n) ? String(n) : n === 0.5 ? "½" : String(n).replace(/\.5$/, "½"));
@@ -172,6 +191,8 @@ export function toReportDay(day: CalendarDay, joinKey: string | null): ReportDay
   const longDay = day.hours != null && day.hours > MAX_PLAUSIBLE_SHIFT_HOURS;
   const workedNotes = () => {
     if (day.sessionCount > 1) notes.push(`${day.sessionCount} sessions`);
+    if (day.note === "wfh_hours") notes.push("WFH only — counts as WFH hours, not a quota day");
+    if (day.note === "over_quota") notes.push("Over the week's quota — not paid");
     if (day.note === "advance") {
       notes.push(
         day.banked
@@ -349,9 +370,11 @@ export function assembleReportEmployee(input: {
     MonthlyBreakdown,
     | "presentDays"
     | "bankedDays"
+    | "unpaidWorkDays"
+    | "wfhOnlyDays"
+    | "overQuotaHalfDays"
     | "balanceDays"
     | "madeUp"
-    | "workingDaysElapsed"
     | "halfDays"
     | "compensationDays"
     | "absentDays"
@@ -432,15 +455,16 @@ export function assembleReportEmployee(input: {
     summary: {
       present: breakdown.presentDays,
       banked: breakdown.bankedDays,
+      unpaidWork: breakdown.unpaidWorkDays,
+      wfhOnly: breakdown.wfhOnlyDays,
+      overQuotaHalf: breakdown.overQuotaHalfDays,
       half: breakdown.halfDays,
       compensation: breakdown.compensationDays,
       balanceUsed: breakdown.balanceDays,
       madeUpAbsent: breakdown.madeUp.filter((m) => m.missed.kind !== "unpaid_leave").length,
       madeUpUnpaid: breakdown.madeUp.filter((m) => m.missed.kind === "unpaid_leave").length,
       daysOwed:
-        employee.employmentType !== "fulltime" && employee.requiredDaysPerWeek
-          ? breakdown.workingDaysElapsed
-          : null,
+        employee.employmentType !== "fulltime" && employee.requiredDaysPerWeek ? daysOwedOf(breakdown) : null,
       absent: breakdown.absentDays,
       paidLeave: breakdown.paidLeaveDays,
       unpaidLeave: breakdown.unpaidLeaveDays,
@@ -451,12 +475,13 @@ export function assembleReportEmployee(input: {
       hours: calendar.hours,
       expectedHours: input.expectedHours,
       workedDays: calendar.workedDays,
+      byStatus: calendar.byStatus,
     },
     days,
     madeUp,
     balanceAvailable: (input.bank ?? [])
       .filter((b) => b.status === "available")
-      .map((b) => ({ earned: b.date, expires: b.expires, location: b.location })),
+      .map((b) => ({ earned: b.date, expires: b.expires, location: b.location, usable: b.location === "office" })),
     crossMonth,
     flags,
   };

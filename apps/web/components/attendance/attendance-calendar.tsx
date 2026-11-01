@@ -46,7 +46,7 @@ export type CalendarDay = {
   isHalfDay: boolean;
   isCompensation: boolean;
   /** Why the day is what it is, where not obvious (automatic weekly off etc.). */
-  note?: "auto_off" | "provisional_off" | "declared_unpaid" | "advance" | "balance" | null;
+  note?: "auto_off" | "provisional_off" | "declared_unpaid" | "advance" | "balance" | "wfh_hours" | "over_quota" | null;
   /** Leave covering part or all of the day, in days (half-day leave = 0.5). */
   leavePaid?: number;
   leaveUnpaid?: number;
@@ -346,6 +346,10 @@ function DayTooltip({ day }: { day: CalendarDay }) {
             ) : (
               <span>Worked on the weekly off (paid as a day, before the 1 Oct 2026 rule).</span>
             ))}
+          {day.note === "wfh_hours" && (
+            <span>Worked from home only — counts toward the weekly WFH hours, not the office-day quota (not paid as a day).</span>
+          )}
+          {day.note === "over_quota" && <span>Beyond this week&apos;s quota — not paid.</span>}
           {status === "compensation" && day.madeUpFor && (
             <span className="font-medium text-foreground">Made up {madeUpForLabel(day.madeUpFor)} — paid here.</span>
           )}

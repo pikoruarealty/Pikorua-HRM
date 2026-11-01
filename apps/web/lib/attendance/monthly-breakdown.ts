@@ -107,6 +107,17 @@ export type MonthlyBreakdown = {
   /** Of `advanceDays`, the ones banked as a balance day and NOT paid (credit 0) —
    *  every advance day from the rule date on. Present but not payable. */
   bankedDays: number;
+  /** A part-timer's days worked only from home (under the rule): shown as worked,
+   *  but they belong to the weekly WFH-hours target, not the in-office day quota —
+   *  so they are not paid as days (credit 0). Whole and half days, counted per day. */
+  wfhOnlyDays: number;
+  /** A part-timer's half days beyond the week's quota (under the rule): worked, not
+   *  paid (credit 0) — the quota is what is paid. */
+  overQuotaHalfDays: number;
+  /** Worked time shown in present/half-days but not paid, in days: banked days (1
+   *  each) + WFH-only part-timer days (1 or ½) + over-quota half days (½). So
+   *  payableDays = present + half×0.5 + paid leave + holiday + compensation − this. */
+  unpaidWorkDays: number;
   /** Expected working days considered so far (present+half+holiday+paidLeave+unpaidLeave+absent). */
   workingDaysElapsed: number;
   /** Days that count toward pay: (present − banked) + half×0.5 + paid leave +
@@ -173,8 +184,11 @@ export type ClassifiedDay = {
    *  - declared_unpaid: the employee switched an automatic weekly off to unpaid;
    *  - advance: a day worked in advance (weekly off / flagged) — shown as present,
    *    and it earned a balance day;
-   *  - balance: an absent / unpaid-leave day covered by a balance day used on purpose. */
-  note?: "auto_off" | "provisional_off" | "declared_unpaid" | "advance" | "balance";
+   *  - balance: an absent / unpaid-leave day covered by a balance day used on purpose;
+   *  - wfh_hours: a part-timer's day worked only from home — it counts toward the
+   *    weekly WFH hours, not the in-office day quota, so it is not paid as a day;
+   *  - over_quota: a part-timer's half day beyond the week's quota — not paid. */
+  note?: "auto_off" | "provisional_off" | "declared_unpaid" | "advance" | "balance" | "wfh_hours" | "over_quota";
   /** What the day is worth toward pay, in days (0, 0.5, 1). */
   credit: number;
   /** Leave applied to this day, in days — present only when > 0. A half-day leave
@@ -324,6 +338,9 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
     compensationDays: 0,
     advanceDays: 0,
     bankedDays: 0,
+    wfhOnlyDays: 0,
+    overQuotaHalfDays: 0,
+    unpaidWorkDays: 0,
     workingDaysElapsed: 0,
     payableDays: 0,
     daysWorked: 0,
@@ -388,6 +405,7 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
     result.presentDays += 1;
     result.advanceDays += 1;
     result.bankedDays += 1;
+    result.unpaidWorkDays += 1;
     return {
       date: key,
       status: "present",
@@ -627,7 +645,14 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
    *  leave the quota as it is (they can come another day); only when the holidays
    *  leave fewer workable days than the quota (a Diwali week) does the week owe less:
    *  quota = min(quota, days that are not holidays). A week closed throughout owes
-   *  nothing, so such a month owes three weeks' days, not four. */
+   *  nothing, so such a month owes three weeks' days, not four.
+   *
+   *  The quota is IN-OFFICE days (owner, 2026-11-01; it is how the WFH-hours plan
+   *  already models a part-timer: N office days a week + a WFH-hours target). A day
+   *  worked only from home goes to the WFH hours and is not a quota day: shown as
+   *  worked, worth 0, never an extra day or a balance day. And what a week pays
+   *  stops at the quota: whole days beyond it are extra days (made up / banked),
+   *  half days beyond it are simply not paid. */
   const classifyWholeWeek = (weekStart: Date): number => {
     const wKey = dateKey(weekStart);
     const weekEndKey = dateKey(addDays(weekStart, 6));
@@ -645,7 +670,7 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
       key: string;
       here: boolean;
       attendance: DayAttendance | undefined;
-      kind: "present" | "half" | "paid" | "unpaid" | "holiday" | "flagged" | "none" | "live";
+      kind: "present" | "half" | "wfh" | "paid" | "unpaid" | "holiday" | "flagged" | "none" | "live";
       worked: number;
       paid: number;
       unpaid: number;
@@ -672,7 +697,18 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
       }
       const worked = workedCredit(attendance);
       const { paid, unpaid, balance: bal } = applyLeave(worked, leaveFor(key), balanceDates.has(key));
-      const kind = worked === 1 ? "present" : worked === 0.5 ? "half" : paid + bal > 0 ? "paid" : unpaid > 0 ? "unpaid" : "none";
+      const kind =
+        worked > 0 && attendance?.location === "wfh"
+          ? "wfh"
+          : worked === 1
+            ? "present"
+            : worked === 0.5
+              ? "half"
+              : paid + bal > 0
+                ? "paid"
+                : unpaid > 0
+                  ? "unpaid"
+                  : "none";
       entries.push({ ...base, kind, worked, paid: paid + bal, unpaid, bal });
     }
 
@@ -690,6 +726,15 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
       if (entries[i]!.kind === "present") {
         extraKeys.add(entries[i]!.key);
         toRelabel -= 1;
+      }
+    }
+    // What is still over after that is half days: the latest ones go unpaid.
+    const overQuotaKeys = new Set<string>();
+    let overflow = creditedDays - target - extraKeys.size;
+    for (let i = entries.length - 1; i >= 0 && overflow >= 0.5 - 1e-9; i--) {
+      if (entries[i]!.kind === "half") {
+        overQuotaKeys.add(entries[i]!.key);
+        overflow -= 0.5;
       }
     }
 
@@ -724,7 +769,26 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
           break;
         case "half":
           result.halfDays += 1;
-          result.days.push({ date: key, status: "half_day", credit: 0.5 + paid, ...leaveFields });
+          if (overQuotaKeys.has(key)) {
+            result.overQuotaHalfDays += 1;
+            result.unpaidWorkDays += 0.5;
+            result.days.push({ date: key, status: "half_day", note: "over_quota", credit: paid, ...leaveFields });
+          } else {
+            result.days.push({ date: key, status: "half_day", credit: 0.5 + paid, ...leaveFields });
+          }
+          break;
+        case "wfh":
+          if (e.worked === 1) result.presentDays += 1;
+          else result.halfDays += 1;
+          result.wfhOnlyDays += 1;
+          result.unpaidWorkDays += e.worked;
+          result.days.push({
+            date: key,
+            status: e.worked === 1 ? "present" : "half_day",
+            note: "wfh_hours",
+            credit: paid,
+            ...leaveFields,
+          });
           break;
         case "paid": {
           const earned = bal > 0 ? lookups.balanceEarnedFor?.get(key) : undefined;
@@ -844,7 +908,10 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
       } else if (paid > 0) {
         weekDays.push({ date: key, status: "paid_leave", credit: paid, ...leaveFields });
       } else if (unpaid > 0) {
-        weekDays.push({ date: key, status: "unpaid_leave", credit: 0, ...leaveFields });
+        // A whole unpaid day can be made up by a later extra day (under the rule).
+        const on =
+          unpaid === 1 ? addMissed({ id: key, date: key, kind: "unpaid_leave", location: placeOwed(key) }) : undefined;
+        weekDays.push({ date: key, status: "unpaid_leave", credit: 0, ...leaveFields, ...(on ? { madeUpOn: on } : {}) });
       } else {
         // Nothing worked, nothing covering it: a day that counts toward neither —
         // the week's quota shortfall picks it up below. (A zero-hour record lands
@@ -894,8 +961,22 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
 
       if (isWeekPast) {
         const missing = Math.max(0, targetForChunk - creditedDays);
-        result.absentDays += absentShortfall(missing);
+        const absent = absentShortfall(missing);
+        result.absentDays += absent;
         result.workingDaysElapsed += targetForChunk;
+        // Whole days short in a week before the rule can still be made up by an extra
+        // day after it (within 60 days) — dated the chunk's last day in this month.
+        const lastKey = dateKey(week.allDaysInMonth[week.allDaysInMonth.length - 1]!);
+        const wKey = dateKey(week.weekStart);
+        for (let i = 0; i < Math.floor(absent + 1e-9); i++) {
+          addMissed({
+            id: `${wKey}@${monthPrefix}#${i + 1}`,
+            date: lastKey,
+            kind: "shortfall",
+            location: "office",
+            weekStart: wKey,
+          });
+        }
       } else {
         // The week is still running: only count a shortfall that can no longer be
         // made up. Today still can be, if it hasn't been worked yet.

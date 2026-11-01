@@ -165,7 +165,7 @@ function expectConsistent(r: ReturnType<typeof classifyMonth>) {
   const summed = r.days.reduce((a, d) => a + d.credit, 0);
   expect(r.payableDays).toBe(summed);
   expect(r.payableDays).toBe(
-    r.presentDays - r.bankedDays + r.halfDays * 0.5 + r.paidLeaveDays + r.holidayDays + r.compensationDays,
+    r.presentDays + r.halfDays * 0.5 + r.paidLeaveDays + r.holidayDays + r.compensationDays - r.unpaidWorkDays,
   );
 }
 
@@ -235,9 +235,16 @@ describe("full-timer: a worked weekly off under the rule", () => {
 
 // A part-timer on 3 days a week. Their extra days are not paid either (owner,
 // 2026-11-01): they make up an earlier short week, or they are banked.
-function partTimer(workedDays: string[], balance: Record<string, string> = {}, holidays: string[] = []) {
+function partTimer(
+  workedDays: string[],
+  balance: Record<string, string> = {},
+  holidays: string[] = [],
+  extra: { wfh?: string[]; half?: string[] } = {},
+) {
   const att = new Map<string, Att>();
   for (const d of workedDays) att.set(d, full());
+  for (const d of extra.wfh ?? []) att.set(d, full("wfh"));
+  for (const d of extra.half ?? []) att.set(d, { ...full(), isHalfDay: true, totalHours: 4 });
   return {
     ...fullTimer({}),
     holidayDates: new Set(holidays),
@@ -247,6 +254,19 @@ function partTimer(workedDays: string[], balance: Record<string, string> = {}, h
     balanceDates: new Set(Object.keys(balance)),
     balanceEarnedFor: new Map(Object.entries(balance)),
   };
+}
+
+/** Mon-Wed from 1 Aug to 27 Sep, so the weeks before the ones a test is about meet
+ *  their quota (an empty history would be all short weeks, which October's extra
+ *  days would then make up first). Under the old counting the week of 31 Aug is
+ *  split into an August and a September chunk, so it is worked Mon-Thu there. */
+function metHistory(): string[] {
+  const days: string[] = [];
+  for (let t = Date.UTC(2026, 7, 1); t < Date.UTC(2026, 8, 28); t += 86_400_000) {
+    const d = new Date(t);
+    if ([1, 2, 3].includes(d.getUTCDay())) days.push(key(d));
+  }
+  return [...days, "2026-08-01", "2026-08-02", "2026-09-03"];
 }
 
 describe("part-timer under the rule", () => {
@@ -260,7 +280,7 @@ describe("part-timer under the rule", () => {
   ];
 
   test("a day over quota after a short week makes that week up — paid once, shown as compensation", () => {
-    const r = month(10, partTimer(worked));
+    const r = month(10, partTimer([...metHistory(), ...worked]));
     expect(at(r, "2026-10-15")).toMatchObject({
       status: "compensation",
       credit: 1,
@@ -274,7 +294,7 @@ describe("part-timer under the rule", () => {
 
   test("a day over quota with nothing to make up is banked, not paid", () => {
     // Week of 5 Oct now meets its quota (5, 7, 8 Oct); the week of 12 Oct is still one over.
-    const r = month(10, partTimer([...worked.filter((d) => d !== "2026-10-06"), "2026-10-07", "2026-10-08"]));
+    const r = month(10, partTimer([...metHistory(), ...worked.filter((d) => d !== "2026-10-06"), "2026-10-07", "2026-10-08"]));
     expect(at(r, "2026-10-15")).toMatchObject({ status: "present", banked: true, credit: 0 });
     expect(r.compensationDays).toBe(0);
     expect(r.bankedDays).toBe(1);
@@ -330,6 +350,57 @@ describe("part-timer holidays (owner, 2026-11-01): not part of the quota, not pa
     const r = month(10, partTimer([...base, "2026-10-05", "2026-10-06", "2026-10-07", "2026-10-19", "2026-10-20", "2026-10-21"], {}, ["2026-10-20"]));
     expect(at(r, "2026-10-20")).toMatchObject({ status: "present", credit: 1 });
     expect(r.absentDays).toBe(0);
+  });
+});
+
+describe("part-timer: the quota is office days, and a week pays no more than its quota", () => {
+  // Weeks of 28 Sep, 12 Oct, 19 Oct, 26 Oct: exactly 3 office days each.
+  const base = [
+    "2026-09-28", "2026-09-29", "2026-09-30",
+    "2026-10-12", "2026-10-13", "2026-10-14",
+    "2026-10-19", "2026-10-20", "2026-10-21",
+    "2026-10-26", "2026-10-27", "2026-10-28",
+  ];
+  const office = ["2026-10-05", "2026-10-06", "2026-10-07"];
+
+  test("a WFH-only day is shown as worked but is not a quota day, not paid, never banked", () => {
+    const r = month(10, partTimer([...base, ...office], {}, [], { wfh: ["2026-10-08", "2026-10-09"] }));
+    expect(at(r, "2026-10-08")).toMatchObject({ status: "present", note: "wfh_hours", credit: 0 });
+    expect(r.wfhOnlyDays).toBe(2);
+    expect(r.bankedDays + r.compensationDays).toBe(0);
+    expect(r.payableDays).toBe(month(10, partTimer([...base, ...office])).payableDays);
+    expectConsistent(r);
+  });
+
+  test("WFH days don't fill the office quota: 2 office + 2 WFH is one day short", () => {
+    const r = month(10, partTimer([...base, "2026-10-05", "2026-10-06"], {}, [], { wfh: ["2026-10-07", "2026-10-08"] }));
+    expect(r.absentDays).toBe(1);
+  });
+
+  test("half days beyond the quota are not paid; the week pays exactly its quota", () => {
+    const r = month(10, partTimer([...base, ...office], {}, [], { half: ["2026-10-08"] }));
+    expect(at(r, "2026-10-08")).toMatchObject({ status: "half_day", note: "over_quota", credit: 0 });
+    expect(r.overQuotaHalfDays).toBe(1);
+    expect(r.payableDays).toBe(month(10, partTimer([...base, ...office])).payableDays);
+    expectConsistent(r);
+  });
+
+  test("two half days over the quota make one whole extra day (banked)", () => {
+    const r = month(10, partTimer([...metHistory(), ...base, ...office], {}, [], { half: ["2026-10-08", "2026-10-09"] }));
+    expect(r.bankedDays).toBe(1);
+    expect(r.overQuotaHalfDays).toBe(0);
+    expect(r.payableDays).toBe(month(10, partTimer([...base, ...office])).payableDays);
+    expectConsistent(r);
+  });
+
+  test("a short week in September (old counting) is made up by an October extra day", () => {
+    // Week of 14 Sep: 2 of 3. Every other Aug/Sep week: 3 (Mon-Wed). October week of 5 Oct: 4.
+    const l = partTimer([...metHistory().filter((d) => d !== "2026-09-16"), ...base, ...office, "2026-10-08"]);
+    const sep = month(9, l);
+    const oct = month(10, l);
+    expect(sep.madeUp).toEqual([{ missed: expect.objectContaining({ kind: "shortfall", weekStart: "2026-09-14" }), on: "2026-10-08" }]);
+    expect(at(oct, "2026-10-08")).toMatchObject({ status: "compensation", credit: 1, madeUpFor: { weekStart: "2026-09-14" } });
+    expectConsistent(oct);
   });
 });
 
