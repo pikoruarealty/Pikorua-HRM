@@ -105,6 +105,14 @@ export type AttendanceReportEmployee = {
     /** Where the present / half / compensation days were worked — the same split the
      *  attendance page shows under its tiles. */
     byStatus: AttendanceCalendar["byStatus"];
+    /** Present and half days by place — office + WFH always equals present / half. */
+    officeFull: number;
+    officeHalf: number;
+    wfhFull: number;
+    wfhHalf: number;
+    /** A part-timer's WFH-only days (worth 0), whole and half. */
+    wfhOnlyFull: number;
+    wfhOnlyHalf: number;
   };
   days: ReportDay[];
   /** Make-ups touching this month (an extra day this month making up a missed day,
@@ -476,6 +484,12 @@ export function assembleReportEmployee(input: {
       expectedHours: input.expectedHours,
       workedDays: calendar.workedDays,
       byStatus: calendar.byStatus,
+      officeFull: calendar.byStatus.present.office,
+      wfhFull: breakdown.presentDays - calendar.byStatus.present.office,
+      officeHalf: calendar.byStatus.half_day.office,
+      wfhHalf: breakdown.halfDays - calendar.byStatus.half_day.office,
+      wfhOnlyFull: calendar.days.filter((d) => d.note === "wfh_hours" && d.status === "present").length,
+      wfhOnlyHalf: calendar.days.filter((d) => d.note === "wfh_hours" && d.status === "half_day").length,
     },
     days,
     madeUp,

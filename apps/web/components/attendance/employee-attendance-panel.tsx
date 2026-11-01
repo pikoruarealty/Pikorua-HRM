@@ -12,6 +12,7 @@ import {
   type CalendarDay,
 } from "@/components/attendance/attendance-calendar";
 import { cn } from "@/lib/utils";
+import { groupMadeUp, madeUpSentence } from "@/lib/attendance/extra-days";
 
 type Split = { office: number; wfh: number };
 
@@ -731,11 +732,6 @@ function WfhCapRow({
   );
 }
 
-function missedLabel(m: MadeUpEntry): string {
-  if (m.missedKind === "shortfall" && m.weekStart) return `a day short in the week of ${shortDate(m.weekStart)}`;
-  return `${m.missedKind === "unpaid_leave" ? "unpaid day" : "absence"} on ${shortDate(m.missedDate)}`;
-}
-
 /** Balance days and make-ups (2026-11-01 rule, lib/attendance/extra-days.ts). A day
  *  worked beyond what was owed is paid once: if there was an earlier missed day (up to
  *  60 days back) it makes that day up automatically — listed under "Made up"; if not,
@@ -855,11 +851,15 @@ function BalanceDays({
         <div className="mt-2 border-t pt-2">
           <div className="text-xs font-medium">Made up</div>
           <ul className="mt-1 flex flex-col gap-0.5 text-xs text-muted-foreground">
-            {balance.madeUp.map((m) => (
-              <li key={`${m.on}-${m.missedDate}-${m.weekStart ?? ""}`}>
-                <span className="text-foreground">{shortDate(m.on)}</span> made up the {missedLabel(m)}
-                {m.on.slice(0, 7) !== m.missedDate.slice(0, 7) && (
-                  <span> — paid in {new Date(`${m.on}T00:00:00Z`).toLocaleDateString("en-GB", { month: "long", timeZone: "UTC" })}</span>
+            {groupMadeUp(balance.madeUp).map((g) => (
+              <li key={`${g.ons.join(",")}-${g.missedDate}`}>
+                <span className="text-foreground">{madeUpSentence(g)}</span>
+                {g.ons.some((o) => o.slice(0, 7) !== g.missedDate.slice(0, 7)) && (
+                  <span>
+                    {" "}
+                    — paid in{" "}
+                    {[...new Set(g.ons.map((o) => new Date(`${o}T00:00:00Z`).toLocaleDateString("en-GB", { month: "long", timeZone: "UTC" })))].join(" and ")}
+                  </span>
                 )}
               </li>
             ))}

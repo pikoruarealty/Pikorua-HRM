@@ -90,7 +90,13 @@ export type MissedUnit = {
   weekStart?: string;
 };
 
-export type ExtraDay = { date: string; location: Place };
+export type ExtraDay = {
+  date: string;
+  location: Place;
+  /** Worked before the rule date: it was already paid as a day, so it only settles
+   *  missed days of that same (pre-rule) period — see matchExtraDays. */
+  legacy?: boolean;
+};
 
 export type BankedDay = {
   /** The day worked in advance. */
@@ -131,7 +137,10 @@ export function matchExtraDays(input: {
   extras: ExtraDay[];
   usedBalance?: Map<string, string>;
   todayKey: string;
+  /** Defaults to EXTRA_DAY_RULE_FROM. */
+  ruleFrom?: string;
 }): ExtraDayLedger {
+  const ruleFrom = input.ruleFrom ?? EXTRA_DAY_RULE_FROM;
   const used = input.usedBalance ?? new Map<string, string>();
   const order = (k: MissedUnit["kind"]) => (k === "unpaid_leave" ? 1 : 0);
   const missed = [...input.missed].sort((a, b) =>
@@ -143,8 +152,24 @@ export function matchExtraDays(input: {
   const madeUpOn = new Map<string, string>();
   const bank: BankedDay[] = [];
 
+  // Before the rule an extra day was paid as a day, and the missed days around it were
+  // deducted — so that period already balances (owner, 2026-11-01: "I didn't come
+  // for 10-12 days, then covered for it in the rest of the month — that was already
+  // compensated"). Each pre-rule extra day therefore settles one pre-rule missed day —
+  // an earlier one first, else a later one in the same period — so those missed days
+  // are not made up a second time by extra days after the rule. It changes no pay
+  // and banks nothing. It never touches a missed day on/after the rule date.
   for (const extra of extras) {
-    if (verdicts.has(extra.date)) continue;
+    if (!extra.legacy) continue;
+    const inReach = (m: MissedUnit) =>
+      !madeUpOn.has(m.id) && m.date < ruleFrom && Math.abs(daysBetween(m.date, extra.date)) <= BALANCE_WINDOW_DAYS;
+    const match =
+      missed.find((m) => inReach(m) && m.date < extra.date) ?? missed.find((m) => inReach(m) && m.date > extra.date);
+    if (match) madeUpOn.set(match.id, extra.date);
+  }
+
+  for (const extra of extras) {
+    if (extra.legacy || verdicts.has(extra.date)) continue;
     const usedFor = used.get(extra.date);
     const match = usedFor
       ? undefined
@@ -185,4 +210,53 @@ export function pickBankedDay(bank: BankedDay[], day: string, place: Place): Ban
   // A WFH day takes a WFH-earned day first, keeping the more flexible office one.
   if (place === "wfh") return eligible.find((b) => b.location === "wfh") ?? eligible[0] ?? null;
   return eligible[0] ?? null;
+}
+
+const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const short = (key: string) => `${Number(key.slice(8, 10))} ${MON[Number(key.slice(5, 7)) - 1]}`;
+
+/** One missed thing and every extra day that made it up. A part-timer's short week
+ *  can be several days short, each made up by a different extra day — listed one by
+ *  one, "a day short in the week of 7 Sep" three times read like one day paid three
+ *  times, so they are grouped into one line. */
+export type MadeUpGroup = {
+  /** The extra days that did the making up, in date order. */
+  ons: string[];
+  missedDate: string;
+  missedKind: MissedUnit["kind"];
+  weekStart?: string;
+};
+
+export function groupMadeUp(
+  entries: { on: string; missedDate: string; missedKind: MissedUnit["kind"]; weekStart?: string }[],
+): MadeUpGroup[] {
+  const groups = new Map<string, MadeUpGroup>();
+  for (const e of entries) {
+    const k = e.missedKind === "shortfall" && e.weekStart ? `w|${e.weekStart}` : `${e.missedKind}|${e.missedDate}|${e.on}`;
+    const g = groups.get(k);
+    if (g) g.ons.push(e.on);
+    else groups.set(k, { ons: [e.on], missedDate: e.missedDate, missedKind: e.missedKind, ...(e.weekStart ? { weekStart: e.weekStart } : {}) });
+  }
+  return [...groups.values()]
+    .map((g) => ({ ...g, ons: [...g.ons].sort() }))
+    .sort((a, b) => (a.ons[0]! < b.ons[0]! ? -1 : 1));
+}
+
+/** "4, 18 and 25 Oct" (the month once when they share it). */
+function dayList(keys: string[]): string {
+  const sameMonth = keys.every((k) => k.slice(0, 7) === keys[0]!.slice(0, 7));
+  const parts = keys.map((k, i) => (sameMonth && i < keys.length - 1 ? String(Number(k.slice(8, 10))) : short(k)));
+  return parts.length === 1 ? parts[0]! : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+}
+
+/** "4, 18 and 25 Oct made up 3 days short in the week of 7 Sep" / "24 Oct made up the
+ *  unpaid day of 7 Oct". */
+export function madeUpSentence(g: MadeUpGroup): string {
+  const missed =
+    g.missedKind === "shortfall" && g.weekStart
+      ? g.ons.length === 1
+        ? `a day short in the week of ${short(g.weekStart)}`
+        : `${g.ons.length} days short in the week of ${short(g.weekStart)}`
+      : `the ${g.missedKind === "unpaid_leave" ? "unpaid day" : "absence"} of ${short(g.missedDate)}`;
+  return `${dayList(g.ons)} made up ${missed}`;
 }

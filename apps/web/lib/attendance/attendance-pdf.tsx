@@ -3,6 +3,7 @@ import path from "path";
 import { Document, Page, Text, View, Image, StyleSheet } from "@react-pdf/renderer";
 import { COMPANY_INFO } from "@/lib/payroll/company-info";
 import type { AttendanceReportEmployee, ReportDay, ReportTone } from "@/lib/attendance/report";
+import { groupMadeUp, madeUpSentence, type MadeUpGroup } from "@/lib/attendance/extra-days";
 
 // Attendance report PDF (2026-10-01, owner request): one A4 page per employee —
 // their details, the month's totals and every day of the month — laid out like the
@@ -126,29 +127,33 @@ const styles = StyleSheet.create({
   ledgerText: { fontSize: 7, color: "#4c1d95", lineHeight: 1.35 },
 
   // Summary page (landscape)
-  sumKpis: { flexDirection: "row", marginTop: 10 },
-  sumSection: { fontSize: 8.5, fontWeight: 700, marginTop: 12, marginBottom: 4 },
+  sumKpis: { flexDirection: "row", marginTop: 8 },
+  sumSection: { fontSize: 8.5, fontWeight: 700, marginTop: 9, marginBottom: 3 },
   sumTable: { border: `1 solid ${RULE}`, borderRadius: 4 },
   sumHead: { flexDirection: "row", backgroundColor: "#f3f4f6", borderBottom: `1 solid ${RULE}`, paddingVertical: 4, flexShrink: 0 },
   sumTh: { fontSize: 6.8, fontWeight: 700, color: "#374151", paddingHorizontal: 4 },
-  sumTr: { flexDirection: "row", borderBottom: `0.5 solid ${RULE}`, alignItems: "center", paddingVertical: 4.5, flexShrink: 0 },
-  sumTotal: { flexDirection: "row", backgroundColor: "#f0fdfa", borderTop: `1 solid ${BRAND}`, alignItems: "center", paddingVertical: 5, flexShrink: 0 },
-  sumMain: { fontSize: 8.4 },
+  sumTr: { flexDirection: "row", borderBottom: `0.5 solid ${RULE}`, alignItems: "center", paddingVertical: 3, flexShrink: 0 },
+  sumTotal: { flexDirection: "row", backgroundColor: "#f0fdfa", borderTop: `1 solid ${BRAND}`, alignItems: "center", paddingVertical: 3.5, flexShrink: 0 },
+  sumMain: { fontSize: 8.2 },
+  formula: { fontSize: 6.8, color: MUTED, marginTop: 3 },
   sumSub: { fontSize: 6.4, color: MUTED, marginTop: 1.5 },
-  sumCards: { flexDirection: "row", marginTop: 12 },
-  sumCard: { flex: 1, borderRadius: 4, padding: 8 },
-  cardWarn: { backgroundColor: "#fffbeb", border: "1 solid #fde68a", marginRight: 8 },
+  checkStrip: { flexDirection: "row", alignItems: "center", marginTop: 8, backgroundColor: "#fffbeb", border: "1 solid #fde68a", borderRadius: 4, paddingVertical: 5, paddingHorizontal: 8 },
+  sumSectionBox: { marginTop: 8, borderRadius: 4, paddingVertical: 6, paddingHorizontal: 8 },
+  blockGrid: { flexDirection: "row", flexWrap: "wrap" },
+  block: { width: "33.33%", paddingRight: 10, marginTop: 4 },
+  cardWarn: { backgroundColor: "#fffbeb", border: "1 solid #fde68a" },
   cardLedger: { backgroundColor: "#f5f3ff", border: "1 solid #ddd6fe" },
   sumCardTitle: { fontSize: 8.4, fontWeight: 700, marginBottom: 3 },
   sumCardRow: { marginTop: 4 },
   sumCardName: { fontSize: 7.6, fontWeight: 700, color: INK },
   sumCardText: { fontSize: 7.2, color: "#374151", lineHeight: 1.4 },
-  glossary: { marginTop: 12, border: `1 solid ${RULE}`, borderRadius: 4, padding: 8 },
+  glossary: { marginTop: 8, border: `1 solid ${RULE}`, borderRadius: 4, paddingVertical: 6, paddingHorizontal: 8 },
   glossaryTitle: { fontSize: 8.4, fontWeight: 700, marginBottom: 4 },
-  glossaryGrid: { flexDirection: "row", flexWrap: "wrap" },
-  glossaryItem: { width: "33.33%", paddingRight: 10, marginBottom: 6 },
-  glossaryTerm: { fontSize: 7.4, fontWeight: 700, color: BRAND },
-  glossaryText: { fontSize: 7, color: "#374151", lineHeight: 1.35, marginTop: 1 },
+  glossaryGrid: { flexDirection: "row" },
+  glossaryHead: { width: "8%", paddingRight: 6 },
+  glossaryItem: { width: "15.33%", paddingRight: 8 },
+  glossaryTerm: { fontSize: 7, fontWeight: 700, color: BRAND },
+  glossaryText: { fontSize: 6.4, color: "#374151", lineHeight: 1.3, marginTop: 1 },
 
   flags: { marginTop: 6, backgroundColor: "#fffbeb", border: "1 solid #fde68a", borderRadius: 4, padding: 5 },
   flagText: { fontSize: 7, color: "#92400e", lineHeight: 1.35 },
@@ -221,25 +226,53 @@ function monthOf(iso: string): string {
   return MONTH_NAMES[Number(iso.slice(5, 7)) - 1]!;
 }
 
-function missedWords(m: AttendanceReportEmployee["madeUp"][number]): string {
-  if (m.missedKind === "shortfall" && m.weekStart) return `a day short in the week of ${shortDate(m.weekStart)}`;
-  return `the ${m.missedKind === "unpaid_leave" ? "unpaid day" : "absence"} of ${shortDate(m.missedDate)}`;
+/** Where a make-up is paid, when the missed day was in another month. */
+function paidWhere(g: MadeUpGroup, reportMonth: string | undefined): string {
+  const missedMonth = (g.weekStart ?? g.missedDate).slice(0, 7);
+  if (g.ons.every((o) => o.slice(0, 7) === g.missedDate.slice(0, 7))) return "";
+  if (g.ons.every((o) => o.slice(0, 7) === reportMonth)) return missedMonth !== reportMonth ? ` — paid in ${monthOf(g.ons[0]!)}` : "";
+  return ` — paid in ${[...new Set(g.ons.map(monthOf))].join(" and ")}`;
 }
 
 // Summary table columns (percent of the table width). Every cell is two lines: the
 // figure, and under it what it is made of in words — no codes to decode.
+//
+// Laid out so a row ADDS UP from left to right (owner, 2026-11-01: "the days worked
+// don't add up"): office days + WFH days (half = ½) − worked but not paid + paid leave
+// + holidays + compensation = payable days.
 const SUM = [
-  { key: "name", label: "Employee", w: "19%" },
-  { key: "present", label: "Present", w: "11%" },
-  { key: "half", label: "Half days", w: "9%" },
-  { key: "absent", label: "Absent", w: "9%" },
-  { key: "leave", label: "Leave paid / unpaid", w: "10%" },
-  { key: "comp", label: "Compensation", w: "8.5%" },
-  { key: "late", label: "Late", w: "5%" },
-  { key: "hours", label: "Hours worked", w: "12.5%" },
-  { key: "pay", label: "Payable days", w: "8%" },
-  { key: "bal", label: "Balance left", w: "8%" },
+  { key: "name", label: "Employee", w: "15%" },
+  { key: "office", label: "Office days", w: "8%" },
+  { key: "wfh", label: "WFH days", w: "8%" },
+  { key: "notPaid", label: "Worked, not paid", w: "11%" },
+  { key: "absent", label: "Absent", w: "7%" },
+  { key: "leave", label: "Leave paid/unpaid", w: "9.5%" },
+  { key: "hol", label: "Holidays", w: "5.5%" },
+  { key: "comp", label: "Comp.", w: "6.5%" },
+  { key: "late", label: "Late", w: "4%" },
+  { key: "hours", label: "Hours worked", w: "11.5%" },
+  { key: "pay", label: "Payable days", w: "7.5%" },
+  { key: "bal", label: "Balance left", w: "6.5%" },
 ] as const;
+
+/** "11", "11 + 2 half" style figure for full + half days. */
+function daysCell(full: number, half: number): { main: string; sub?: string } {
+  return { main: num(full), sub: half > 0 ? `+ ${num(half)} half day${half === 1 ? "" : "s"}` : undefined };
+}
+
+/** Why some worked days are not paid. */
+function notPaidWhy(s: AttendanceReportEmployee["summary"]): string | undefined {
+  return (
+    [
+      s.banked > 0 && `${num(s.banked)} in advance`,
+      s.wfhOnlyFull > 0 && `${num(s.wfhOnlyFull)} WFH-only`,
+      s.wfhOnlyHalf > 0 && `${num(s.wfhOnlyHalf)} WFH-only ½`,
+      s.overQuotaHalf > 0 && `${num(s.overQuotaHalf)} over-quota ½`,
+    ]
+      .filter(Boolean)
+      .join(" · ") || undefined
+  );
+}
 
 type SumKey = (typeof SUM)[number]["key"];
 type Cell = { main: string; sub?: string; tone?: "alert" | "strong" | "muted" };
@@ -256,11 +289,10 @@ function summaryCells(r: AttendanceReportEmployee): Record<SumKey, Cell> {
   const join = (...parts: (string | null | false)[]) => parts.filter(Boolean).join(" · ") || undefined;
   return {
     name: { main: e.fullName, sub: employmentLabel(e), tone: "strong" },
-    present: {
-      main: num(s.present),
-      sub: join(s.banked > 0 && `${num(s.banked)} in advance`, s.wfhOnly > 0 && `${num(s.wfhOnly)} WFH-only`),
-    },
-    half: { main: num(s.half), sub: join(s.overQuotaHalf > 0 && `${num(s.overQuotaHalf)} over quota`) },
+    office: daysCell(s.officeFull, s.officeHalf),
+    wfh: daysCell(s.wfhFull, s.wfhHalf),
+    notPaid: { main: num(s.unpaidWork), sub: notPaidWhy(s) },
+    hol: { main: num(s.holidays) },
     absent: {
       main: num(s.absent),
       sub: join(s.madeUpAbsent > 0 && `${num(s.madeUpAbsent)} made up`),
@@ -306,36 +338,13 @@ function SumCell({ cell, w }: { cell: Cell; w: string }) {
   );
 }
 
-/** "the absence of 18 Sep" / "a day short in the week of 22 Sep" */
-function missedPhrase(m: AttendanceReportEmployee["madeUp"][number]): string {
-  return missedWords(m);
-}
-
 const GLOSSARY: { term: string; text: string }[] = [
-  {
-    term: "Payable days",
-    text: "What pay is worked out from — the total of the Pay column on each employee's page. Approved days only.",
-  },
-  {
-    term: "In advance",
-    text: "A day worked beyond what was owed, with nothing earlier to make up. Shown as present, not paid now, banked as a balance day for 60 days.",
-  },
-  {
-    term: "Compensation",
-    text: "A day worked beyond what was owed that made up an earlier missed day (up to 60 days back, even last month's). Paid in the month it was worked.",
-  },
-  {
-    term: "Made up",
-    text: "A missed day that a later extra day covered. It stays unpaid in its own month; the pay is on the day that made it up.",
-  },
-  {
-    term: "Balance left",
-    text: "Banked days still usable — the employee requests one on an absent day and Admin/HR approve it. A WFH-earned day only covers a WFH day.",
-  },
-  {
-    term: "Part-timers",
-    text: "Owe office days a week. WFH-only days count as WFH hours, half days over the quota aren't paid, holidays aren't owed. “Owed” = days due this month.",
-  },
+  { term: "Payable days", text: "What pay is based on — the total of the Pay column on each employee's page." },
+  { term: "In advance", text: "Extra day with nothing to make up: not paid now, banked as a balance day for 60 days." },
+  { term: "Compensation", text: "Extra day that made up an earlier missed day (even last month's); paid when worked." },
+  { term: "Made up", text: "A missed day a later extra day covered — still unpaid in its own month." },
+  { term: "Balance left", text: "Banked office days still usable, through a request Admin/HR approve." },
+  { term: "Part-timers", text: "Owe office days a week; WFH-only days and holidays don't count; a week pays up to its quota." },
 ];
 
 function SummaryPage({
@@ -373,8 +382,10 @@ function SummaryPage({
   const ledger = employees.filter((r) => r.madeUp.length > 0 || r.balanceAvailable.length > 0 || r.summary.balanceUsed > 0);
   const totals: Record<SumKey, Cell> = {
     name: { main: "Total", sub: `${employees.length} employee${employees.length === 1 ? "" : "s"}`, tone: "strong" },
-    present: { main: num(t.present), sub: t.banked > 0 ? `${num(t.banked)} in advance` : undefined },
-    half: { main: num(sum((r) => r.summary.half)) },
+    office: daysCell(sum((r) => r.summary.officeFull), sum((r) => r.summary.officeHalf)),
+    wfh: daysCell(sum((r) => r.summary.wfhFull), sum((r) => r.summary.wfhHalf)),
+    notPaid: { main: num(sum((r) => r.summary.unpaidWork)) },
+    hol: { main: num(sum((r) => r.summary.holidays)) },
     absent: { main: num(t.absent), sub: t.madeUpAbsent > 0 ? `${num(t.madeUpAbsent)} made up` : undefined },
     leave: { main: `${num(t.paidLeave)} / ${num(t.unpaidLeave)}` },
     comp: { main: num(t.compensation) },
@@ -407,9 +418,9 @@ function SummaryPage({
       <View style={styles.sumKpis}>
         <Tile label="Payable days" value={num(t.payable)} sub="what pay is worked out from" strong />
         <Tile
-          label="Present"
-          value={num(t.present)}
-          sub={[t.banked > 0 && `${num(t.banked)} in advance (not paid)`, t.wfhOnly > 0 && `${num(t.wfhOnly)} WFH-only`].filter(Boolean).join(" · ") || "days worked"}
+          label="Days worked — office / WFH"
+          value={`${num(sum((r) => r.summary.officeFull + r.summary.officeHalf * 0.5))} / ${num(sum((r) => r.summary.wfhFull + r.summary.wfhHalf * 0.5))}`}
+          sub={`half day = ½ · ${num(sum((r) => r.summary.unpaidWork))} of them not paid`}
         />
         <Tile
           label="Absent"
@@ -426,8 +437,7 @@ function SummaryPage({
       </View>
 
       {/* 2. Everyone, one row each. */}
-      <Text style={styles.sumSection}>Employees</Text>
-      <View style={styles.sumTable}>
+      <View style={[styles.sumTable, { marginTop: 8 }]}>
         <View style={styles.sumHead} fixed>
           {SUM.map((c) => (
             <Text key={c.key} style={[styles.sumTh, { width: c.w }]}>
@@ -451,16 +461,27 @@ function SummaryPage({
           ))}
         </View>
       </View>
+      <Text style={styles.formula}>
+        Each row adds up: office days + WFH days (a half day counts ½), minus worked-not-paid, plus paid leave, holidays and
+        compensation = payable days. Absent and unpaid leave are not paid.
+      </Text>
 
-      {/* 3. What needs a look, and what moved between months. */}
-      <View style={styles.sumCards}>
-        <View style={[styles.sumCard, styles.cardWarn]} wrap={false}>
+      {/* 3. What needs a look, and what moved between months. Full-width sections whose
+          per-employee blocks sit side by side; only a single block is kept whole, so
+          anything that doesn't fit flows on to the next page instead of leaving a gap. */}
+      {toCheck.length === 0 ? (
+        <View style={styles.checkStrip} wrap={false}>
+          <Text style={[styles.sumCardTitle, { color: "#92400e", marginBottom: 0 }]}>Check before paying</Text>
+          <Text style={[styles.sumCardText, { marginLeft: 8 }]}>
+            Nothing unusual — no very long days, no days awaiting approval.
+          </Text>
+        </View>
+      ) : (
+        <View style={[styles.sumSectionBox, styles.cardWarn]}>
           <Text style={[styles.sumCardTitle, { color: "#92400e" }]}>Check before paying</Text>
-          {toCheck.length === 0 ? (
-            <Text style={styles.sumCardText}>Nothing unusual: no very long days, no days awaiting approval.</Text>
-          ) : (
-            toCheck.map((r) => (
-              <View key={r.employee.id} style={styles.sumCardRow}>
+          <View style={styles.blockGrid}>
+            {toCheck.map((r) => (
+              <View key={r.employee.id} style={[styles.block, { width: "50%" }]} wrap={false}>
                 <Text style={styles.sumCardName}>{r.employee.fullName}</Text>
                 {r.flags.map((f) => (
                   <Text key={f} style={styles.sumCardText}>
@@ -468,27 +489,27 @@ function SummaryPage({
                   </Text>
                 ))}
               </View>
-            ))
-          )}
+            ))}
+          </View>
         </View>
-        <View style={[styles.sumCard, styles.cardLedger]} wrap={false}>
-          <Text style={[styles.sumCardTitle, { color: "#5b21b6" }]}>Balance days &amp; make-ups</Text>
-          {ledger.length === 0 ? (
-            <Text style={styles.sumCardText}>No make-ups and no balance days this month.</Text>
-          ) : (
-            ledger.map((r) => {
+      )}
+
+      <View style={[styles.sumSectionBox, styles.cardLedger]}>
+        <Text style={[styles.sumCardTitle, { color: "#5b21b6" }]}>Balance days &amp; make-ups</Text>
+        {ledger.length === 0 ? (
+          <Text style={styles.sumCardText}>No make-ups and no balance days this month.</Text>
+        ) : (
+          <View style={styles.blockGrid}>
+            {ledger.map((r) => {
               const usable = r.balanceAvailable.filter((b) => b.usable);
+              const wfhOnly = r.balanceAvailable.length - usable.length;
               return (
-                <View key={r.employee.id} style={styles.sumCardRow}>
+                <View key={r.employee.id} style={styles.block} wrap={false}>
                   <Text style={styles.sumCardName}>{r.employee.fullName}</Text>
-                  {r.madeUp.map((m) => (
-                    <Text key={`${m.on}-${m.missedDate}-${m.weekStart ?? ""}`} style={styles.sumCardText}>
-                      • {shortDate(m.on)} made up {missedPhrase(m)}
-                      {m.on.slice(0, 7) !== m.missedDate.slice(0, 7)
-                        ? m.on.slice(0, 7) === r.days[0]?.date.slice(0, 7)
-                          ? " — an earlier month's, paid this month"
-                          : ` — paid in ${monthOf(m.on)}`
-                        : ""}
+                  {groupMadeUp(r.madeUp).map((g) => (
+                    <Text key={`${g.ons.join(",")}-${g.missedDate}`} style={styles.sumCardText}>
+                      • {madeUpSentence(g)}
+                      {paidWhere(g, r.days[0]?.date.slice(0, 7))}
                     </Text>
                   ))}
                   {r.crossMonth
@@ -499,22 +520,25 @@ function SummaryPage({
                       </Text>
                     ))}
                   <Text style={styles.sumCardText}>
-                    • Balance left: {usable.length === 0 ? "none" : usable.map((b) => `${shortDate(b.earned)} (use by ${shortDate(b.expires)})`).join(", ")}
-                    {r.balanceAvailable.length > usable.length
-                      ? ` · ${r.balanceAvailable.length - usable.length} WFH-earned (covers WFH days only)`
-                      : ""}
+                    • Balance left:{" "}
+                    {usable.length === 0
+                      ? "none"
+                      : usable.map((b) => `${shortDate(b.earned)} (use by ${shortDate(b.expires)})`).join(", ")}
+                    {wfhOnly > 0 ? ` · ${wfhOnly} WFH-earned (covers WFH days only)` : ""}
                   </Text>
                 </View>
               );
-            })
-          )}
-        </View>
+            })}
+          </View>
+        )}
       </View>
 
       {/* 4. The terms, once. */}
       <View style={styles.glossary} wrap={false}>
-        <Text style={styles.glossaryTitle}>How to read this</Text>
         <View style={styles.glossaryGrid}>
+          <View style={styles.glossaryHead}>
+            <Text style={styles.glossaryTitle}>How to read this</Text>
+          </View>
           {GLOSSARY.map((g) => (
             <View key={g.term} style={styles.glossaryItem}>
               <Text style={styles.glossaryTerm}>{g.term}</Text>
@@ -646,10 +670,7 @@ function EmployeePage({
   const flexible = e.employmentType !== "fulltime" && !!e.requiredDaysPerWeek;
 
   const ledgerLines = [
-    ...report.madeUp.map(
-      (m) =>
-        `${shortDate(m.on)} made up ${missedWords(m)}${m.on.slice(0, 7) !== m.missedDate.slice(0, 7) ? ` — paid in ${monthOf(m.on)}` : ""}`,
-    ),
+    ...groupMadeUp(report.madeUp).map((g) => `${madeUpSentence(g)}${paidWhere(g, report.days[0]?.date.slice(0, 7))}`),
     ...report.crossMonth.filter((c) => c.includes("balance day earned")),
     `Balance left: ${
       report.balanceAvailable.length === 0

@@ -382,6 +382,9 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
     legacy: "present" | "compensation",
   ): ClassifiedDay => {
     if (ruleFrom === null || key < ruleFrom) {
+      // Paid as a day back then; the ledger still uses it to settle that period's
+      // missed days (extra-days.ts), so it is listed — it banks nothing.
+      if (ruleFrom !== null) result.extraDays.push({ date: key, location: attendance?.location ?? "office", legacy: true });
       if (legacy === "compensation") {
         result.compensationDays += 1;
         return { date: key, status: "compensation", credit: 1 };
@@ -951,6 +954,11 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
         if (weekDays[i]!.status === "present" && weekDays[i]!.note !== "advance") {
           weekDays[i]!.status = "compensation";
           toRelabel -= 1;
+          // A pre-rule extra day: paid back then, it settles that period's missed days.
+          if (ruleFrom !== null) {
+            const d = weekDays[i]!.date;
+            result.extraDays.push({ date: d, location: lookups.attendanceByDate.get(d)?.location ?? "office", legacy: true });
+          }
         }
       }
     } else {

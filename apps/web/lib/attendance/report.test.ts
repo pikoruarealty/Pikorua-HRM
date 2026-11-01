@@ -230,3 +230,83 @@ describe("toReportDay — extra days, make-ups and balance days", () => {
     expect(toReportDay(bal, null)).toMatchObject({ statusLabel: "Balance day", note: "Balance day earned 31 May" });
   });
 });
+
+// 2026-11-01 (owner: "the days worked don't add up"). The summary row is laid out so
+// it adds up left to right; this pins that on full- and part-timer months with WFH-only
+// days, half days, banked days and make-ups, built through the real walk + ledger.
+describe("a summary row adds up to payable days", () => {
+  const NOW = new Date("2026-11-01T06:30:00.000Z");
+  const employee: ReportEmployeeSource = {
+    id: "e2",
+    fullName: "Row Check",
+    email: "r@example.com",
+    phone: null,
+    role: "tech_employee",
+    employmentType: "parttime",
+    requiredDaysPerWeek: 3,
+    dateOfJoining: new Date("2026-06-01T00:00:00.000Z"),
+    defaultWeeklyOffDay: 0,
+    wfhAllowed: true,
+    expectedWfhHoursPerWeek: 6,
+    department: null,
+    team: null,
+  };
+  type Spec = { loc: "office" | "wfh"; hours: number } | null;
+  async function row(part: boolean, spec: (k: string, dow: number) => Spec) {
+    const { buildExtraDayLedger } = await import("./monthly-breakdown");
+    const att = new Map<string, { hasClockIn: boolean; isHalfDay: boolean; isCompensation: boolean; totalHours: number; location: "office" | "wfh" }>();
+    const records: CalendarRecord[] = [];
+    for (let t = Date.UTC(2026, 7, 1); t <= Date.UTC(2026, 9, 31); t += 86_400_000) {
+      const k = new Date(t).toISOString().slice(0, 10);
+      const s = spec(k, new Date(t).getUTCDay());
+      if (!s) continue;
+      att.set(k, { hasClockIn: true, isHalfDay: s.hours < 7, isCompensation: false, totalHours: s.hours, location: s.loc });
+      if (k.startsWith("2026-10")) {
+        const inT = new Date(`${k}T04:00:00.000Z`);
+        const outT = new Date(inT.getTime() + s.hours * 3_600_000);
+        const loc = s.loc === "wfh" ? WorkLocation.wfh : WorkLocation.office;
+        records.push({
+          date: new Date(`${k}T00:00:00.000Z`), workLocation: loc, approvalStatus: AttendanceApprovalStatus.approved,
+          clockInRaw: inT, clockOutRaw: outT, clockInApproved: null, clockOutApproved: null, totalHours: s.hours,
+          isHalfDay: s.hours < 7, isCompensation: false, sessions: [{ clockIn: inT, clockOut: outT, workLocation: loc }],
+        });
+      }
+    }
+    const lookups = {
+      attendanceByDate: att, holidayDates: new Set(["2026-10-20"]), defaultOffDay: 0, movedOffDateByWeek: new Map<string, string>(),
+      employmentType: (part ? "parttime" : "fulltime") as never, requiredDaysPerWeek: part ? 3 : null,
+      dateOfJoining: new Date("2026-06-01T00:00:00.000Z"), extraRuleFrom: "2026-10-01",
+    };
+    const ledger = buildExtraDayLedger(lookups, NOW);
+    const breakdown = classifyMonth(10, 2026, { ...lookups, extraVerdicts: ledger.verdicts, madeUpOn: ledger.madeUpOn, today: NOW });
+    const calendar = buildAttendanceCalendar({ month: 10, year: 2026, classified: breakdown.days, records, now: NOW });
+    return assembleReportEmployee({
+      employee: { ...employee, employmentType: part ? "parttime" : "fulltime", requiredDaysPerWeek: part ? 3 : null },
+      lateCount: 0, breakdown, calendar, expectedHours: null, bank: ledger.bank,
+    }).summary;
+  }
+  const addsUp = (s: Awaited<ReturnType<typeof row>>) => {
+    expect(s.officeFull + s.wfhFull).toBe(s.present);
+    expect(s.officeHalf + s.wfhHalf).toBe(s.half);
+    expect(
+      s.officeFull + s.wfhFull + (s.officeHalf + s.wfhHalf) * 0.5 - s.unpaidWork + s.paidLeave + s.holidays + s.compensation,
+    ).toBe(s.payableDays);
+    expect(s.banked + s.wfhOnlyFull + s.wfhOnlyHalf * 0.5 + s.overQuotaHalf * 0.5).toBe(s.unpaidWork);
+  };
+
+  test("part-timer with office days, WFH-only days and half days", async () => {
+    const s = await row(true, (k, dow) =>
+      dow === 2 || dow === 6 ? null : dow === 1 || dow === 4 ? { loc: "wfh", hours: 4.5 } : dow === 3 ? { loc: "wfh", hours: 7.5 } : { loc: "office", hours: 8 },
+    );
+    expect(s.wfhOnlyFull + s.wfhOnlyHalf).toBeGreaterThan(0);
+    addsUp(s);
+  });
+
+  test("full-timer with worked Sundays, an absence and a half day", async () => {
+    const s = await row(false, (k, dow) =>
+      k === "2026-10-13" ? null : k === "2026-10-21" ? { loc: "office", hours: 4 } : dow === 0 ? (k >= "2026-10-01" ? { loc: "office", hours: 8 } : null) : { loc: k.endsWith("9") ? "wfh" : "office", hours: 8 },
+    );
+    expect(s.compensation + s.banked).toBeGreaterThan(0);
+    addsUp(s);
+  });
+});

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { matchExtraDays, pickBankedDay, type MissedUnit } from "./extra-days";
+import { groupMadeUp, madeUpSentence, matchExtraDays, pickBankedDay, type MissedUnit } from "./extra-days";
 import { buildExtraDayLedger, classifyMonth } from "./monthly-breakdown";
 
 // 2026-11-01 owner rule (lib/attendance/extra-days.ts): an extra day is paid once —
@@ -215,7 +215,8 @@ describe("full-timer: a worked weekly off under the rule", () => {
     const sep = month(9, fullTimer({ sundays: ["2026-09-13"] }));
     expect(at(sep, "2026-09-13")).toMatchObject({ status: "present", note: "advance", credit: 1 });
     expect(sep.bankedDays).toBe(0);
-    expect(sep.extraDays).toEqual([]);
+    // Listed for the ledger only as a pre-rule (already paid) day.
+    expect(sep.extraDays.every((x) => x.legacy)).toBe(true);
   });
 
   test("a banked day used on a later absence (approved request): that day is paid, nothing twice", () => {
@@ -266,7 +267,7 @@ function metHistory(): string[] {
     const d = new Date(t);
     if ([1, 2, 3].includes(d.getUTCDay())) days.push(key(d));
   }
-  return [...days, "2026-08-01", "2026-08-02", "2026-09-03"];
+  return [...days, "2026-08-01", "2026-09-03"];
 }
 
 describe("part-timer under the rule", () => {
@@ -437,11 +438,70 @@ describe("randomised: every extra day is paid exactly once (300 histories)", () 
       }
       // Each extra day under the rule did exactly one thing...
       expect(compensation + banked).toBe(ledger.verdicts.size);
-      // ...each make-up pairs one extra day with one missed day, never twice.
-      expect(ledger.madeUpOn.size).toBe(compensation);
-      expect(new Set(ledger.madeUpOn.values()).size).toBe(ledger.madeUpOn.size);
+      // ...each make-up pairs one extra day with one missed day, never twice. Pre-rule
+      // extra days settle pre-rule missed days only, and pay nothing.
+      const made = [...ledger.madeUpOn.entries()];
+      expect(made.filter(([, on]) => on >= "2026-10-01").length).toBe(compensation);
+      expect(new Set(made.map(([, on]) => on)).size).toBe(made.length);
+      expect(made.filter(([, on]) => on < "2026-10-01").every(([id]) => id.slice(0, 10) < "2026-10-01")).toBe(true);
       // Every made-up missed day shows its note in its own month (Aug-Oct walked).
-      expect(madeUpOnDays).toBe(compensation);
+      expect(madeUpOnDays).toBe(made.length);
     });
   }
+});
+
+describe("before the rule, a month that balanced itself stays balanced (owner, 2026-11-01)", () => {
+  // A part-timer (3 days/week) misses the whole week of 7 Sep (3 days short), then in
+  // the week of 21 Sep works 6 days — 3 extra, paid as days under the old rule. Week of
+  // 28 Sep: exactly 3. Week of 5 Oct: 4 — one extra day, 8 Oct.
+  const base = [
+    ...metHistory().filter((d) => !(d >= "2026-09-07" && d <= "2026-09-13")),
+    "2026-09-28", "2026-09-29", "2026-09-30",
+    "2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08",
+  ];
+  const coveredInSeptember = ["2026-09-24", "2026-09-25", "2026-09-26"];
+
+  test("September covered its own missed week, so October's extra day is banked, not paid again", () => {
+    const l = partTimer([...base, ...coveredInSeptember]);
+    const oct = month(10, l);
+    expect(at(oct, "2026-10-08")).toMatchObject({ status: "present", banked: true, credit: 0 });
+    expect(oct.compensationDays).toBe(0);
+    // September shows its missed week settled by its own extra days.
+    const sep = month(9, l);
+    expect(sep.madeUp.map((m) => m.on).sort()).toEqual(coveredInSeptember);
+    expectConsistent(oct);
+  });
+
+  test("without those September extra days the missed week is still owed, and 8 Oct makes one day of it up", () => {
+    const oct = month(10, partTimer(base));
+    expect(at(oct, "2026-10-08")).toMatchObject({
+      status: "compensation",
+      credit: 1,
+      madeUpFor: { kind: "shortfall", weekStart: "2026-09-07" },
+    });
+  });
+});
+
+describe("groupMadeUp / madeUpSentence — one line per missed thing", () => {
+  test("three days short in one week, made up on three days, read as one line", () => {
+    const groups = groupMadeUp([
+      { on: "2026-10-18", missedDate: "2026-09-13", missedKind: "shortfall", weekStart: "2026-09-07" },
+      { on: "2026-10-04", missedDate: "2026-09-13", missedKind: "shortfall", weekStart: "2026-09-07" },
+      { on: "2026-10-25", missedDate: "2026-09-13", missedKind: "shortfall", weekStart: "2026-09-07" },
+      { on: "2026-10-24", missedDate: "2026-10-07", missedKind: "unpaid_leave" },
+    ]);
+    expect(groups.map(madeUpSentence)).toEqual([
+      "4, 18 and 25 Oct made up 3 days short in the week of 7 Sep",
+      "24 Oct made up the unpaid day of 7 Oct",
+    ]);
+  });
+
+  test("a single make-up and days across two months", () => {
+    expect(
+      madeUpSentence({ ons: ["2026-09-30", "2026-10-04"], missedDate: "2026-09-27", missedKind: "shortfall", weekStart: "2026-09-21" }),
+    ).toBe("30 Sep and 4 Oct made up 2 days short in the week of 21 Sep");
+    expect(madeUpSentence({ ons: ["2026-10-04"], missedDate: "2026-09-15", missedKind: "absence" })).toBe(
+      "4 Oct made up the absence of 15 Sep",
+    );
+  });
 });
