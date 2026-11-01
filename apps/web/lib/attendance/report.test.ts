@@ -253,6 +253,9 @@ describe("a summary row adds up to payable days", () => {
   };
   type Spec = { loc: "office" | "wfh"; hours: number } | null;
   async function row(part: boolean, spec: (k: string, dow: number) => Spec) {
+    return (await report(part, spec)).summary;
+  }
+  async function report(part: boolean, spec: (k: string, dow: number) => Spec) {
     const { buildExtraDayLedger } = await import("./monthly-breakdown");
     const att = new Map<string, { hasClockIn: boolean; isHalfDay: boolean; isCompensation: boolean; totalHours: number; location: "office" | "wfh" }>();
     const records: CalendarRecord[] = [];
@@ -283,7 +286,7 @@ describe("a summary row adds up to payable days", () => {
     return assembleReportEmployee({
       employee: { ...employee, employmentType: part ? "parttime" : "fulltime", requiredDaysPerWeek: part ? 3 : null },
       lateCount: 0, breakdown, calendar, expectedHours: null, bank: ledger.bank,
-    }).summary;
+    });
   }
   const addsUp = (s: Awaited<ReturnType<typeof row>>) => {
     expect(s.officeFull + s.wfhFull).toBe(s.present);
@@ -302,6 +305,22 @@ describe("a summary row adds up to payable days", () => {
     );
     expect(s.wfhOnlyFull + s.wfhOnlyHalf).toBeGreaterThan(0);
     addsUp(s);
+  });
+
+  test("Days worked counts every day worked; a low week is only flagged when the month ended short", async () => {
+    // Office Mon–Fri, except the week of 5 Oct (Monday only), WFH on Saturdays: the
+    // month is well over its 13 target days, so the thin week needs no warning.
+    const met = await report(true, (k, dow) =>
+      k >= "2026-10-06" && k <= "2026-10-11" ? null : dow === 0 ? null : dow === 6 ? { loc: "wfh", hours: 8 } : { loc: "office", hours: 8 },
+    );
+    expect(met.summary.daysOwed).toBe(13); // 27 Mon–Sat days − 1 holiday = 26 -> 13
+    expect(met.summary.allWorkedOffice + met.summary.allWorkedWfh).toBeGreaterThan(met.summary.workedOffice + met.summary.workedWfh);
+    expect(met.summary.payableDays).toBe(13);
+    expect(met.flags.filter((f) => f.startsWith("Week of"))).toEqual([]);
+    // Mondays only: the month is short, so the thin weeks are listed.
+    const short = await report(true, (k, dow) => (dow === 1 ? { loc: "office", hours: 8 } : null));
+    expect(short.summary.absent).toBeGreaterThan(0);
+    expect(short.flags.some((f) => f.startsWith("Week of 5 Oct: 1 office day"))).toBe(true);
   });
 
   test("full-timer with worked Sundays, an absence and a half day", async () => {

@@ -272,11 +272,11 @@ function summaryCells(r: AttendanceReportEmployee): Record<SumKey, Cell> {
       sub: joinParts(
         s.paidLeave > 0 && `${num(s.paidLeave)} leave`,
         s.holidays > 0 && `${num(s.holidays)} holiday`,
-        s.paidLeaveUnused > 0 && `${num(s.paidLeaveUnused)} not needed`,
+        s.paidLeaveUnused > 0 && `${num(s.paidLeaveUnused)} returned to balance`,
       ),
     },
     comp: { main: num(s.compensation), sub: s.compensation > 0 ? "earlier missed days" : undefined },
-    pay: { main: num(s.payableDays), sub: s.daysOwed != null ? `owes ${num(s.daysOwed)}` : undefined, tone: "strong" },
+    pay: { main: num(s.payableDays), sub: s.daysOwed != null ? `out of ${num(s.daysOwed)}` : undefined, tone: "strong" },
     absent: {
       main: num(missed),
       sub: joinParts(
@@ -536,6 +536,7 @@ function MiniTile({
   split,
   strong,
   wide,
+  last,
 }: {
   label: string;
   value: string;
@@ -544,10 +545,11 @@ function MiniTile({
   split?: { office: number; wfh: number };
   strong?: boolean;
   wide?: boolean;
+  last?: boolean;
 }) {
   const showSplit = split && split.office + split.wfh > 0;
   return (
-    <View style={[styles.mini, wide ? { flex: 1.6 } : {}, strong ? styles.tileStrong : {}]}>
+    <View style={[styles.mini, wide ? { flex: 1.6 } : {}, strong ? styles.tileStrong : {}, last ? { marginRight: 0 } : {}]}>
       <Text style={[styles.miniLabel, strong ? { color: "#ccfbf1" } : {}]}>{label}</Text>
       <Text style={[styles.miniValue, strong ? { color: "#ffffff" } : {}]}>{value}</Text>
       {showSplit ? (
@@ -612,7 +614,9 @@ function EmployeePage({
   const ledgerLines = [
     ...groupMadeUp(report.madeUp).map((g) => `${madeUpSentence(g)}${paidWhere(g, report.days[0]?.date.slice(0, 7))}`),
     ...report.balanceCovers.map((c) => `${shortDate(c.date)} paid from the balance day of ${shortDate(c.earned)}`),
-    ...(s.paidLeaveUnused > 0 ? [`${num(s.paidLeaveUnused)} day${s.paidLeaveUnused > 1 ? "s" : ""} of paid leave not needed — back to the leave balance`] : []),
+    ...(s.paidLeaveUnused > 0
+      ? [`${num(s.paidLeaveUnused)} day${s.paidLeaveUnused > 1 ? "s" : ""} of paid leave not used (the month's days were met) — returned to the leave balance`]
+      : []),
     `Balance left: ${
       report.balanceAvailable.length === 0
         ? "none"
@@ -664,15 +668,29 @@ function EmployeePage({
         />
       </View>
 
-      {/* The month in the same few numbers as the summary: Payable = days worked +
-          leave & holidays + made up. */}
+      {/* The month in two rows (owner, 2026-11-01). Top: what pay comes from — every day
+          worked (office / WFH, and how much of it counts), the target, leave, and
+          Payable "out of" the target. Below: the rest. Payable = days counted + leave &
+          holidays + made up. */}
       <View style={styles.miniRow}>
         <MiniTile
           label="Days worked"
-          value={num(s.workedOffice + s.workedWfh)}
-          split={{ office: s.workedOffice, wfh: s.workedWfh }}
-          sub={s.banked > 0 ? `+ ${num(s.banked)} in advance (banked)` : undefined}
+          value={num(s.allWorkedOffice + s.allWorkedWfh)}
+          split={{ office: s.allWorkedOffice, wfh: s.allWorkedWfh }}
+          sub={
+            [
+              `${num(s.workedOffice + s.workedWfh)} count toward pay`,
+              s.banked > 0 && `${num(s.banked)} banked (balance)`,
+              s.allWorkedWfh - s.workedWfh > 0 && flexible && `${num(s.allWorkedWfh - s.workedWfh)} WFH-only (WFH hours)`,
+            ]
+              .filter(Boolean)
+              .join(" · ")
+          }
+          wide
         />
+        {s.daysOwed != null ? (
+          <MiniTile label="Target days" value={num(s.daysOwed)} sub={`${e.requiredDaysPerWeek} of every 6 Mon–Sat days, holidays left out`} />
+        ) : null}
         <MiniTile
           label="Leave & holidays"
           value={num(s.paidLeave + s.holidays)}
@@ -680,13 +698,23 @@ function EmployeePage({
             [
               s.paidLeave > 0 && `${num(s.paidLeave)} leave`,
               s.holidays > 0 && `${num(s.holidays)} holiday`,
-              s.paidLeaveUnused > 0 && `${num(s.paidLeaveUnused)} not needed`,
+              s.paidLeaveUnused > 0 && `${num(s.paidLeaveUnused)} leave returned to balance`,
             ]
               .filter(Boolean)
               .join(" · ") || undefined
           }
         />
         <MiniTile label="Made up" value={num(s.compensation)} sub={s.compensation > 0 ? "earlier missed days" : undefined} />
+        <MiniTile
+          label="Payable days"
+          value={num(s.payableDays)}
+          sub={s.daysOwed != null ? `out of ${num(s.daysOwed)} target days` : undefined}
+          strong
+          wide
+          last
+        />
+      </View>
+      <View style={styles.miniRow}>
         <MiniTile
           label="Absent / unpaid"
           value={num(s.absent + s.unpaidLeave)}
@@ -700,13 +728,7 @@ function EmployeePage({
           wide
         />
         <MiniTile label="Office hours" value={hrs(s.hours.office)} />
-        <MiniTile
-          label="Payable days"
-          value={num(s.payableDays)}
-          sub={s.daysOwed != null ? `owes ${num(s.daysOwed)} this month` : undefined}
-          strong
-          wide
-        />
+        <MiniTile label="Total hours" value={hrs(s.hours.office + s.hours.wfh)} last />
       </View>
 
       <View style={[styles.table, { marginTop: 8 }]}>

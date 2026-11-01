@@ -123,6 +123,10 @@ export type AttendanceReportEmployee = {
      *  compensation, exactly. */
     workedOffice: number;
     workedWfh: number;
+    /** Every day worked, whether or not it counts toward pay (WFH-only and banked days
+     *  included), by place — the "Days worked" card; a mixed day is an office day. */
+    allWorkedOffice: number;
+    allWorkedWfh: number;
   };
   days: ReportDay[];
   /** Make-ups touching this month (an extra day this month making up a missed day,
@@ -158,6 +162,21 @@ export function workedSplit(days: Pick<CalendarDay, "status" | "credit" | "leave
     else office += worked;
   }
   return { workedOffice: office, workedWfh: wfh };
+}
+
+/** Every day worked (half days 0.5), counted toward pay or not, by place. */
+export function allWorkedSplit(days: Pick<CalendarDay, "status" | "credit" | "location">[]): {
+  allWorkedOffice: number;
+  allWorkedWfh: number;
+} {
+  let office = 0;
+  let wfh = 0;
+  for (const d of days) {
+    const w = d.status === "present" ? 1 : d.status === "half_day" ? 0.5 : d.status === "compensation" ? d.credit : 0;
+    if (d.location === "wfh") wfh += w;
+    else office += w;
+  }
+  return { allWorkedOffice: office, allWorkedWfh: wfh };
 }
 
 /** Days of missed time made up, by kind of missed day (halves count 0.5). */
@@ -283,7 +302,7 @@ export function toReportDay(day: CalendarDay, joinKey: string | null): ReportDay
       if (day.note === "balance") {
         notes.push(day.balanceEarned ? `Balance day earned ${shortDay(day.balanceEarned)}` : "Covered by a balance day");
       }
-      if (day.note === "not_needed") notes.push("Not needed — the month's days were met; back to the leave balance");
+      if (day.note === "not_needed") notes.push("Not used — the month's days were already met; returned to the leave balance");
       return {
         ...base,
         statusLabel:
@@ -292,7 +311,7 @@ export function toReportDay(day: CalendarDay, joinKey: string | null): ReportDay
               ? "Balance day 0.5"
               : "Balance day"
             : day.note === "not_needed"
-              ? "Leave (not used)"
+              ? "Leave (returned)"
               : partialLeave
                 ? "Paid leave 0.5"
                 : "Paid leave",
@@ -434,6 +453,7 @@ export function assembleReportEmployee(input: {
     | "weeks"
     | "owedDays"
     | "paidLeaveUnused"
+    | "absentDays"
     | "halfDays"
     | "compensationDays"
     | "absentDays"
@@ -486,15 +506,16 @@ export function assembleReportEmployee(input: {
     ),
     madeUp: breakdown.madeUp,
   });
-  // The weekly check (pay is monthly): weeks worth a look before paying.
+  // The weekly check (pay is monthly). A low week only matters when the month ended
+  // short — if the rest of the month (or a balance day) made the days up, there is
+  // nothing to act on (owner, 2026-11-01). The weeks stay on the employee's page.
   const days3 = employee.requiredDaysPerWeek ?? 0;
-  for (const w of breakdown.weeks) {
-    if (w.flag === "low") {
+  if (breakdown.absentDays + breakdown.unpaidLeaveDays > 0) {
+    for (const w of breakdown.weeks) {
+      if (w.flag !== "low") continue;
       flags.push(
         `Week of ${shortDay(w.weekStart)}: ${num(w.office)} office day${w.office === 1 ? "" : "s"} — fewer than ${w.expected < days3 ? `the ${w.expected} that week allowed` : `${days3} a week`}.`,
       );
-    } else if (w.flag === "high") {
-      flags.push(`Week of ${shortDay(w.weekStart)}: came in on ${w.officeFull + w.officeHalf} days that week.`);
     }
   }
   // A make-up or balance day across months is easy to miss when paying by hand: say
@@ -566,6 +587,7 @@ export function assembleReportEmployee(input: {
       wfhOnlyFull: calendar.days.filter((d) => d.note === "wfh_hours" && d.status === "present").length,
       wfhOnlyHalf: calendar.days.filter((d) => d.note === "wfh_hours" && d.status === "half_day").length,
       ...workedSplit(calendar.days),
+      ...allWorkedSplit(calendar.days),
     },
     days,
     madeUp,

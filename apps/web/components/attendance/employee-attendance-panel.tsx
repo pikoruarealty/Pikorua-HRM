@@ -362,7 +362,7 @@ export function EmployeeAttendancePanel({
                 hint={
                   [
                     summary.balance_days > 0 ? `incl. ${summary.balance_days} balance day${summary.balance_days === 1 ? "" : "s"}` : null,
-                    summary.paid_leave_unused > 0 ? `${summary.paid_leave_unused} not needed (back to balance)` : null,
+                    summary.paid_leave_unused > 0 ? `${summary.paid_leave_unused} not used — returned to leave balance` : null,
                   ]
                     .filter(Boolean)
                     .join(" · ") || undefined
@@ -417,7 +417,7 @@ export function EmployeeAttendancePanel({
                 </div>
                 <div className="mt-0.5 text-[11px] text-muted-foreground">
                   {summary.days_owed != null
-                    ? `owes ${summary.days_owed} this month${summary.unpaid_work_days > 0 ? ` · ${summary.unpaid_work_days} worked beyond it` : ""}`
+                    ? `out of ${summary.days_owed} target days${summary.unpaid_work_days > 0 ? ` · ${summary.unpaid_work_days} more worked (banked / WFH-only)` : ""}`
                     : summary.unpaid_work_days > 0
                       ? `days in the quota (${summary.unpaid_work_days} outside it) + leave + holidays + comp`
                       : "present + 0.5 × half-days + leave + holidays + comp"}

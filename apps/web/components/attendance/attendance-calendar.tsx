@@ -293,7 +293,7 @@ function cellLabel(day: CalendarDay): { full: string; tiny: string } {
     return c > 0 && c < 1 ? { full: "Balance .5", tiny: "Bal.5" } : { full: "Balance", tiny: "Bal" };
   }
   // A part-timer's leave the month didn't need (paid leave goes back to the balance).
-  if (day.note === "not_needed" && day.status === "paid_leave") return { full: "Leave (unused)", tiny: "Lv–" };
+  if (day.note === "not_needed" && day.status === "paid_leave") return { full: "Leave (returned)", tiny: "Lv↩" };
   // A missed day a later extra day made up: still unpaid here (paid on that day).
   if ((day.status === "absent" || day.status === "unpaid_leave") && day.madeUpOn) {
     // Only a tick on the cell; which day made it up is in the tooltip.
@@ -389,7 +389,7 @@ function DayTooltip({ day }: { day: CalendarDay }) {
             ? `Covered by ${(day.credit ?? 1) < 1 ? "half a" : "a"} balance day${day.balanceEarned ? ` earned on ${shortDay(day.balanceEarned)}` : ""}.`
             : day.note === "not_needed"
             ? status === "paid_leave"
-              ? "Paid leave not needed — the month's office days were enough, so it goes back to the leave balance."
+              ? "Paid leave not used — the month's office days were already enough, so it is returned to the leave balance."
               : "Unpaid leave — costs nothing, the month's office days were enough."
             : day.madeUpOn
             ? `${status === "absent" ? "Absent" : "Unpaid"} — made up by the extra day worked on ${shortDay(day.madeUpOn)} (paid on that day).`
