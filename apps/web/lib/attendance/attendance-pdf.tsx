@@ -231,45 +231,22 @@ function paidWhere(g: MadeUpGroup, reportMonth: string | undefined): string {
   return ` — paid in ${[...new Set(g.ons.map(monthOf))].join(" and ")}`;
 }
 
-// Summary table columns (percent of the table width). Every cell is two lines: the
-// figure, and under it what it is made of in words — no codes to decode.
-//
-// Laid out so a row ADDS UP from left to right (owner, 2026-11-01: "the days worked
-// don't add up"): office days + WFH days (half = ½) − worked but not paid + paid leave
-// + holidays + compensation = payable days.
+// Summary table (2026-11-01, owner: "too complicated for someone just trying to get
+// attendance"). Eight columns and one rule that adds up across a row:
+//   Payable = Days worked + Leave & holidays + Made up.
+// "Days worked" are only the days that count toward pay (office / WFH underneath);
+// what a part-timer did from home beyond that shows as WFH hours. Everything finer —
+// halves, banked days, week-by-week — is on the employee's own page.
 const SUM = [
-  { key: "name", label: "Employee", w: "15%" },
-  { key: "office", label: "Office days", w: "8%" },
-  { key: "wfh", label: "WFH days", w: "8%" },
-  { key: "notPaid", label: "Worked, not paid", w: "11%" },
-  { key: "absent", label: "Absent", w: "7%" },
-  { key: "leave", label: "Leave paid/unpaid", w: "9.5%" },
-  { key: "hol", label: "Holidays", w: "5.5%" },
-  { key: "comp", label: "Comp.", w: "6.5%" },
-  { key: "late", label: "Late", w: "4%" },
-  { key: "hours", label: "Hours worked", w: "11.5%" },
-  { key: "pay", label: "Payable days", w: "7.5%" },
-  { key: "bal", label: "Balance left", w: "6.5%" },
+  { key: "name", label: "Employee", w: "19%" },
+  { key: "worked", label: "Days worked", w: "12%" },
+  { key: "leave", label: "Leave & holidays", w: "11%" },
+  { key: "comp", label: "Made up", w: "9%" },
+  { key: "pay", label: "Payable days", w: "11%" },
+  { key: "absent", label: "Absent / unpaid", w: "11%" },
+  { key: "wfh", label: "WFH hours", w: "16%" },
+  { key: "bal", label: "Balance days", w: "11%" },
 ] as const;
-
-/** "11", "11 + 2 half" style figure for full + half days. */
-function daysCell(full: number, half: number): { main: string; sub?: string } {
-  return { main: num(full), sub: half > 0 ? `+ ${num(half)} half day${half === 1 ? "" : "s"}` : undefined };
-}
-
-/** Why some worked days are not paid. */
-function notPaidWhy(s: AttendanceReportEmployee["summary"]): string | undefined {
-  return (
-    [
-      s.banked > 0 && `${num(s.banked)} in advance`,
-      s.wfhOnlyFull > 0 && `${num(s.wfhOnlyFull)} WFH-only`,
-      s.wfhOnlyHalf > 0 && `${num(s.wfhOnlyHalf)} WFH-only ½`,
-      s.overQuotaHalf > 0 && `${num(s.overQuotaHalf)} over-quota ½`,
-    ]
-      .filter(Boolean)
-      .join(" · ") || undefined
-  );
-}
 
 type SumKey = (typeof SUM)[number]["key"];
 type Cell = { main: string; sub?: string; tone?: "alert" | "strong" | "muted" };
@@ -278,38 +255,37 @@ function plural(n: number, word: string): string {
   return `${num(n)} ${word}${n === 1 ? "" : "s"}`;
 }
 
+const joinParts = (...parts: (string | null | false | undefined)[]) => parts.filter(Boolean).join(" · ") || undefined;
+
 function summaryCells(r: AttendanceReportEmployee): Record<SumKey, Cell> {
   const s = r.summary;
   const e = r.employee;
-  const usable = r.balanceAvailable.filter((b) => b.usable);
-  const wfhOnlyBal = r.balanceAvailable.length - usable.length;
-  const join = (...parts: (string | null | false)[]) => parts.filter(Boolean).join(" · ") || undefined;
+  const usable = r.balanceAvailable.filter((b) => b.usable).length;
+  const missed = s.absent + s.unpaidLeave;
   return {
     name: { main: e.fullName, sub: employmentLabel(e), tone: "strong" },
-    office: daysCell(s.officeFull, s.officeHalf),
-    wfh: daysCell(s.wfhFull, s.wfhHalf),
-    notPaid: { main: num(s.unpaidWork), sub: notPaidWhy(s) },
-    hol: { main: num(s.holidays) },
-    absent: {
-      main: num(s.absent),
-      sub: join(s.madeUpAbsent > 0 && `${num(s.madeUpAbsent)} made up`),
-      tone: s.absent > s.madeUpAbsent ? "alert" : undefined,
+    worked: {
+      main: num(s.workedOffice + s.workedWfh),
+      sub: s.workedWfh > 0 ? `${num(s.workedOffice)} office · ${num(s.workedWfh)} WFH` : "office",
     },
     leave: {
-      main: `${num(s.paidLeave)} / ${num(s.unpaidLeave)}`,
-      sub: join(s.balanceUsed > 0 && `${plural(s.balanceUsed, "balance day")} used`),
+      main: num(s.paidLeave + s.holidays),
+      sub: joinParts(s.paidLeave > 0 && `${num(s.paidLeave)} leave`, s.holidays > 0 && `${num(s.holidays)} holiday`),
     },
-    comp: { main: num(s.compensation), sub: join(s.compensation > 0 && "made up") },
-    late: { main: num(s.late) },
-    hours: { main: hrs(s.hours.total), sub: `${hrs(s.hours.office)} office · ${hrs(s.hours.wfh)} WFH` },
-    pay: { main: num(s.payableDays), sub: s.daysOwed != null ? `of ${num(s.daysOwed)} owed` : undefined, tone: "strong" },
-    bal: {
-      main: String(usable.length),
-      sub: join(
-        usable.length > 0 && `next by ${shortDate(usable.map((b) => b.expires).sort()[0]!)}`,
-        wfhOnlyBal > 0 && `+${wfhOnlyBal} WFH-only`,
+    comp: { main: num(s.compensation), sub: s.compensation > 0 ? "earlier missed days" : undefined },
+    pay: { main: num(s.payableDays), tone: "strong" },
+    absent: {
+      main: num(missed),
+      sub: joinParts(
+        s.unpaidLeave > 0 && `${num(s.unpaidLeave)} unpaid leave`,
+        s.madeUpAbsent + s.madeUpUnpaid > 0 && `${num(s.madeUpAbsent + s.madeUpUnpaid)} made up later`,
       ),
+      tone: missed > s.madeUpAbsent + s.madeUpUnpaid ? "alert" : undefined,
     },
+    wfh: r.wfh.enabled
+      ? { main: `${hrs(r.wfh.counted)} of ${hrs(r.wfh.target)}`, sub: `${hrs(r.wfh.worked)} worked · counted of target` }
+      : { main: hrs(s.hours.wfh), sub: s.hours.wfh > 0 ? "worked from home" : undefined },
+    bal: { main: String(usable), sub: usable > 0 ? "use within 60 days" : undefined },
   };
 }
 
@@ -371,18 +347,20 @@ function SummaryPage({
   const ledger = employees.filter(
     (r) => r.madeUp.length > 0 || r.balanceAvailable.length > 0 || r.balanceCovers.length > 0,
   );
+  const worked = { office: sum((r) => r.summary.workedOffice), wfh: sum((r) => r.summary.workedWfh) };
+  const leaveHol = sum((r) => r.summary.paidLeave + r.summary.holidays);
+  const missed = t.absent + t.unpaidLeave;
+  const wfhTracked = employees.filter((r) => r.wfh.enabled);
+  const wfhCounted = wfhTracked.reduce((a, r) => a + (r.wfh.enabled ? r.wfh.counted : 0), 0);
+  const wfhTarget = wfhTracked.reduce((a, r) => a + (r.wfh.enabled ? r.wfh.target : 0), 0);
   const totals: Record<SumKey, Cell> = {
-    name: { main: "Total", sub: `${employees.length} employee${employees.length === 1 ? "" : "s"}`, tone: "strong" },
-    office: daysCell(sum((r) => r.summary.officeFull), sum((r) => r.summary.officeHalf)),
-    wfh: daysCell(sum((r) => r.summary.wfhFull), sum((r) => r.summary.wfhHalf)),
-    notPaid: { main: num(sum((r) => r.summary.unpaidWork)) },
-    hol: { main: num(sum((r) => r.summary.holidays)) },
-    absent: { main: num(t.absent), sub: t.madeUpAbsent > 0 ? `${num(t.madeUpAbsent)} made up` : undefined },
-    leave: { main: `${num(t.paidLeave)} / ${num(t.unpaidLeave)}` },
+    name: { main: "Total", sub: plural(employees.length, "employee"), tone: "strong" },
+    worked: { main: num(worked.office + worked.wfh), sub: `${num(worked.office)} office · ${num(worked.wfh)} WFH` },
+    leave: { main: num(leaveHol) },
     comp: { main: num(t.compensation) },
-    late: { main: num(t.late) },
-    hours: { main: hrs(t.office + t.wfh), sub: `${hrs(t.office)} office · ${hrs(t.wfh)} WFH` },
     pay: { main: num(t.payable), tone: "strong" },
+    absent: { main: num(missed) },
+    wfh: { main: hrs(t.wfh), sub: "worked from home" },
     bal: { main: String(t.balanceLeft) },
   };
 
@@ -405,26 +383,23 @@ function SummaryPage({
         </View>
       </View>
 
-      {/* 1. The month in six numbers. */}
+      {/* 1. The month in a few numbers. */}
       <View style={styles.sumKpis}>
         <Tile label="Payable days" value={num(t.payable)} sub="what pay is worked out from" strong />
+        <Tile label="Days worked" value={num(worked.office + worked.wfh)} sub={`${num(worked.office)} office · ${num(worked.wfh)} WFH`} />
+        <Tile label="Leave & holidays" value={num(leaveHol)} sub="paid" />
+        <Tile label="Made up" value={num(t.compensation)} sub="earlier missed days, paid now" />
         <Tile
-          label="Days worked — office / WFH"
-          value={`${num(sum((r) => r.summary.officeFull + r.summary.officeHalf * 0.5))} / ${num(sum((r) => r.summary.wfhFull + r.summary.wfhHalf * 0.5))}`}
-          sub={`half day = ½ · ${num(sum((r) => r.summary.unpaidWork))} of them not paid`}
+          label="Absent / unpaid"
+          value={num(missed)}
+          sub={`${plural(withAbsence, "employee")}${t.madeUpAbsent > 0 ? ` · ${num(t.madeUpAbsent)} made up later` : ""}`}
         />
         <Tile
-          label="Absent"
-          value={num(t.absent)}
-          sub={`${plural(withAbsence, "employee")} not made up${t.madeUpAbsent > 0 ? ` · ${num(t.madeUpAbsent)} made up` : ""}`}
+          label="WFH hours"
+          value={wfhTracked.length > 0 ? `${hrs(wfhCounted)} of ${hrs(wfhTarget)}` : hrs(t.wfh)}
+          sub={wfhTracked.length > 0 ? `counted of target · ${hrs(t.wfh)} worked in all` : "worked from home"}
+          last
         />
-        <Tile
-          label="Leave paid / unpaid"
-          value={`${num(t.paidLeave)} / ${num(t.unpaidLeave)}`}
-          sub={t.balanceUsed > 0 ? `${plural(t.balanceUsed, "balance day")} used` : "days"}
-        />
-        <Tile label="Compensation" value={num(t.compensation)} sub="extra days that made up a missed day" />
-        <Tile label="Hours worked" value={hrs(t.office + t.wfh)} sub={`${hrs(t.office)} office · ${hrs(t.wfh)} WFH`} last />
       </View>
 
       {/* 2. Everyone, one row each. */}
@@ -453,8 +428,8 @@ function SummaryPage({
         </View>
       </View>
       <Text style={styles.formula}>
-        Each row adds up: office days + WFH days (a half day counts ½), minus worked-not-paid, plus paid leave, holidays and
-        compensation = payable days. Absent and unpaid leave are not paid.
+        Payable days = days worked + leave & holidays + made up. Half days count ½. Week-by-week detail is on each
+        employee&apos;s page.
       </Text>
 
       {/* 3. What needs a look, and what moved between months. Full-width sections whose
@@ -696,36 +671,37 @@ function EmployeePage({
         />
       </View>
 
-      {/* The month: every total in one row, pay last. */}
+      {/* The month in the same few numbers as the summary: Payable = days worked +
+          leave & holidays + made up. */}
       <View style={styles.miniRow}>
         <MiniTile
-          label="Present"
-          value={num(s.present)}
-          split={s.byStatus.present}
-          sub={s.banked > 0 ? `${num(s.banked)} in advance` : undefined}
+          label="Days worked"
+          value={num(s.workedOffice + s.workedWfh)}
+          split={{ office: s.workedOffice, wfh: s.workedWfh }}
+          sub={s.banked > 0 ? `+ ${num(s.banked)} in advance (banked)` : undefined}
         />
-        <MiniTile label="Half days" value={num(s.half)} split={s.byStatus.half_day} sub={s.overQuotaHalf > 0 ? `${num(s.overQuotaHalf)} over quota` : undefined} />
-        <MiniTile label="Absent" value={num(s.absent)} sub={s.madeUpAbsent > 0 ? `${s.madeUpAbsent} made up` : undefined} />
-        <MiniTile label="Paid leave" value={num(s.paidLeave)} sub={s.balanceUsed > 0 ? `${num(s.balanceUsed)} balance` : undefined} />
-        <MiniTile label="Unpaid" value={num(s.unpaidLeave)} sub={s.madeUpUnpaid > 0 ? `${s.madeUpUnpaid} made up` : undefined} />
-        <MiniTile label="Compensation" value={num(s.compensation)} split={s.byStatus.compensation} sub={s.compensation > 0 ? "made up" : undefined} />
-        <MiniTile label={flexible ? "Late" : "Holidays · late"} value={flexible ? num(s.late) : `${num(s.holidays)} · ${num(s.late)}`} />
         <MiniTile
-          label="Hours"
-          value={hrs(s.hours.total)}
-          sub={`${hrs(s.hours.office)} office · ${hrs(s.hours.wfh)} WFH${s.wfhOnly > 0 ? ` · ${num(s.wfhOnly)} WFH-only days` : ""}`}
+          label="Leave & holidays"
+          value={num(s.paidLeave + s.holidays)}
+          sub={[s.paidLeave > 0 && `${num(s.paidLeave)} leave`, s.holidays > 0 && `${num(s.holidays)} holiday`].filter(Boolean).join(" · ") || undefined}
+        />
+        <MiniTile label="Made up" value={num(s.compensation)} sub={s.compensation > 0 ? "earlier missed days" : undefined} />
+        <MiniTile
+          label="Absent / unpaid"
+          value={num(s.absent + s.unpaidLeave)}
+          sub={s.madeUpAbsent + s.madeUpUnpaid > 0 ? `${s.madeUpAbsent + s.madeUpUnpaid} made up later` : undefined}
+        />
+        <MiniTile label="Late" value={num(s.late)} />
+        <MiniTile
+          label="WFH hours"
+          value={report.wfh.enabled ? hrs(report.wfh.counted) : hrs(s.hours.wfh)}
+          sub={report.wfh.enabled ? `counted, of ${hrs(report.wfh.target)} target · ${hrs(report.wfh.worked)} worked` : "worked from home"}
           wide
         />
+        <MiniTile label="Office hours" value={hrs(s.hours.office)} />
         <MiniTile
           label="Payable days"
           value={num(s.payableDays)}
-          sub={
-            s.daysOwed != null
-              ? `of ${num(s.daysOwed)} owed`
-              : s.unpaidWork > 0
-                ? `${num(s.unpaidWork)} worked, not paid`
-                : undefined
-          }
           strong
           wide
         />

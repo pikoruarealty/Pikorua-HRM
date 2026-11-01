@@ -200,7 +200,7 @@ describe("toReportDay — extra days, make-ups and balance days", () => {
   test("a day in advance: present, worth 0, with its use-by date", () => {
     const r = toReportDay(day({ note: "advance", banked: true, bankExpires: "2026-08-02", credit: 0 }), null);
     expect(r).toMatchObject({ statusLabel: "Present · adv.", credit: 0 });
-    expect(r.note).toBe("In advance — banked, not paid; use by 2 Aug");
+    expect(r.note).toBe("In advance — banked; use by 2 Aug");
   });
 
   test("a compensation day names the missed day it made up", () => {
@@ -292,6 +292,8 @@ describe("a summary row adds up to payable days", () => {
       s.officeFull + s.wfhFull + (s.officeHalf + s.wfhHalf) * 0.5 - s.unpaidWork + s.paidLeave + s.holidays + s.compensation,
     ).toBe(s.payableDays);
     expect(s.banked + s.wfhOnlyFull + s.wfhOnlyHalf * 0.5 + s.overQuotaHalf * 0.5).toBe(s.unpaidWork);
+    // The simple rule the summary prints: payable = days worked + leave & holidays + made up.
+    expect(s.workedOffice + s.workedWfh + s.paidLeave + s.holidays + s.compensation).toBe(s.payableDays);
   };
 
   test("part-timer with office days, WFH-only days and half days", async () => {
@@ -325,7 +327,7 @@ describe("buildWeekLines — one line per part-timer week, as it was judged", ()
     );
     expect(line).toEqual({
       after: "2026-10-11",
-      text: "Week of 5 Oct: 2 office days of 3 (+ 3 WFH-only, not counted) · 1 short — covered by the balance day of 4 Oct",
+      text: "Week of 5 Oct: 2 office days of 3 (+ 3 WFH-only) · 1 short — covered by the balance day of 4 Oct",
     });
   });
   test("an over-quota week names its extra day; a week another month settles says so", () => {

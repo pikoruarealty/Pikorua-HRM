@@ -367,3 +367,148 @@ export async function getActualWfhHoursForWeek(employeeId: string, date: Date): 
     ),
   );
 }
+
+// --- WFH hours for one calendar month (2026-11-01, owner: "like payable days for
+// office, a WFH-hours section with its math: done / target, per week and the month").
+// Hours are tracked by Mon-Sun week (target and cap are weekly); a month shows every
+// week that touches it. Every hour stays in the month it was worked in — a month that
+// is already paid is never touched — so a week split across two months gives each its
+// share: the target by days (6h a week → 6/7 h a day) and the counted hours in the
+// same proportion as the hours actually worked.
+
+export type WfhMonthWeek = {
+  weekStart: string;
+  weekEnd: string;
+  /** Hours worked from home, the whole week / within this month. */
+  actualWeek: number;
+  actualInMonth: number;
+  /** Hours that count for the week (cap + Admin-approved extra). */
+  countedWeek: number;
+  countedInMonth: number;
+  cap: number;
+  approvedExtra: number;
+  /** Weekly target, and this month's share of it (by days). 0 before it applied. */
+  target: number;
+  targetInMonth: number;
+  /** Once the week is over: counted vs target for the whole week. */
+  status: "met" | "short" | "running" | "none";
+  short: number;
+};
+
+export type WfhMonth =
+  | { enabled: false }
+  | {
+      enabled: true;
+      targetPerWeek: number;
+      weeks: WfhMonthWeek[];
+      /** This month: hours worked from home, hours that count, and the target. */
+      worked: number;
+      counted: number;
+      target: number;
+    };
+
+const MS_DAY = 86_400_000;
+const keyAdd = (key: string, n: number) => new Date(Date.parse(`${key}T00:00:00Z`) + n * MS_DAY).toISOString().slice(0, 10);
+
+/** Pure: per-day WFH hours (approved days) -> the month's WFH section. */
+export function summariseWfhMonth(input: {
+  month: number;
+  year: number;
+  targetPerWeek: number;
+  /** First week the target applies to (joining / target set); earlier weeks owe 0. */
+  measuredFrom: string;
+  wfhByDay: Map<string, number>;
+  capFor: (weekStart: string) => number;
+  extraFor: (weekStart: string) => number;
+  todayKey: string;
+}): Extract<WfhMonth, { enabled: true }> {
+  const prefix = `${input.year}-${String(input.month).padStart(2, "0")}`;
+  const first = `${prefix}-01`;
+  const last = new Date(Date.UTC(input.year, input.month, 0)).toISOString().slice(0, 10);
+  const weeks: WfhMonthWeek[] = [];
+  for (let ws = dateKey(weekStartOf(new Date(`${first}T00:00:00Z`))); ws <= last; ws = keyAdd(ws, 7)) {
+    const keys = Array.from({ length: 7 }, (_, i) => keyAdd(ws, i));
+    const inMonth = keys.filter((k) => k.startsWith(prefix));
+    const hours = (ks: string[]) => round2(ks.reduce((a, k) => a + (input.wfhByDay.get(k) ?? 0), 0));
+    const actualWeek = hours(keys);
+    const actualInMonth = hours(inMonth);
+    const cap = input.capFor(ws);
+    const approvedExtra = input.extraFor(ws);
+    const countedWeek = countedWfhHours(actualWeek, cap, approvedExtra);
+    const target = ws >= input.measuredFrom ? input.targetPerWeek : 0;
+    const weekEnd = keys[6]!;
+    const over = weekEnd < input.todayKey;
+    weeks.push({
+      weekStart: ws,
+      weekEnd,
+      actualWeek,
+      actualInMonth,
+      countedWeek,
+      countedInMonth: actualWeek > 0 ? round2((countedWeek * actualInMonth) / actualWeek) : 0,
+      cap,
+      approvedExtra,
+      target,
+      targetInMonth: round2((target * inMonth.length) / 7),
+      status: target === 0 ? "none" : !over ? "running" : countedWeek >= target ? "met" : "short",
+      short: over && target > countedWeek ? round2(target - countedWeek) : 0,
+    });
+  }
+  return {
+    enabled: true,
+    targetPerWeek: input.targetPerWeek,
+    weeks,
+    worked: round2(weeks.reduce((a, w) => a + w.actualInMonth, 0)),
+    counted: round2(weeks.reduce((a, w) => a + w.countedInMonth, 0)),
+    target: round2(weeks.reduce((a, w) => a + w.targetInMonth, 0)),
+  };
+}
+
+/** One employee's WFH section for a month (approved days only, like every count). */
+export async function getWfhMonth(employeeId: string, month: number, year: number): Promise<WfhMonth> {
+  const employee = await prisma.employee.findUnique({
+    where: { id: employeeId },
+    select: { expectedWfhHoursPerWeek: true, expectedWfhHoursSince: true, dateOfJoining: true, employmentType: true },
+  });
+  const targetPerWeek = employee?.expectedWfhHoursPerWeek == null ? 0 : Number(employee.expectedWfhHoursPerWeek);
+  if (!employee || targetPerWeek <= 0 || employee.employmentType === "fulltime") return { enabled: false };
+
+  const spanStart = weekStartOf(new Date(Date.UTC(year, month - 1, 1)));
+  const spanEnd = addDays(weekStartOf(new Date(Date.UTC(year, month, 0))), 7);
+  const [records, capHistory, approvals] = await Promise.all([
+    prisma.attendanceRecord.findMany({
+      where: { employeeId, approvalStatus: "approved", date: { gte: spanStart, lt: spanEnd } },
+      select: {
+        date: true,
+        workLocation: true,
+        totalHours: true,
+        sessions: { select: { clockIn: true, clockOut: true, workLocation: true } },
+      },
+    }),
+    loadWfhCapHistory(),
+    prisma.wfhWeeklyApproval.findMany({
+      where: { employeeId, weekStart: { gte: spanStart, lt: spanEnd } },
+      select: { weekStart: true, extraHours: true },
+    }),
+  ]);
+  const wfhByDay = new Map<string, number>();
+  for (const r of records) {
+    const split = splitHoursByLocation(r.totalHours === null ? null : Number(r.totalHours), r.sessions, r.workLocation);
+    if (split.wfh > 0) wfhByDay.set(dateKey(r.date), split.wfh);
+  }
+  const extra = new Map(approvals.map((a) => [dateKey(a.weekStart), Number(a.extraHours)]));
+  // Same start as the weekly plan: the first full week on/after joining / the target.
+  const since = employee.expectedWfhHoursSince;
+  const floor = since && since > employee.dateOfJoining ? since : employee.dateOfJoining;
+  const w = weekStartOf(floor);
+  const measuredFrom = dateKey(w.getTime() === floor.getTime() ? w : addDays(w, 7));
+  return summariseWfhMonth({
+    month,
+    year,
+    targetPerWeek,
+    measuredFrom,
+    wfhByDay,
+    capFor: (ws) => wfhCapForWeek(capHistory, new Date(`${ws}T00:00:00Z`)),
+    extraFor: (ws) => extra.get(ws) ?? 0,
+    todayKey: dateKey(todayDateOnly()),
+  });
+}

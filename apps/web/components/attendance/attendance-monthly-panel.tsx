@@ -86,7 +86,7 @@ export function AttendanceMonthlyPanel() {
         { label: "Paid leave", value: overview.totals.paidLeaveDays },
         { label: "Unpaid leave", value: overview.totals.unpaidLeaveDays },
         { label: "Compensation", value: overview.totals.compensationDays },
-        { label: "Banked (not paid)", value: overview.totals.bankedDays },
+        { label: "Banked", value: overview.totals.bankedDays },
         { label: "Holidays", value: overview.totals.holidayDays },
         { label: "Weekly offs", value: overview.totals.weeklyOffDays },
         { label: "Days worked", value: overview.totals.daysWorked },
@@ -128,7 +128,7 @@ export function AttendanceMonthlyPanel() {
             <p className="text-xs text-muted-foreground">
               A day worked beyond what was owed (the weekly off, or a part-timer&apos;s day over quota) is paid
               once: if there is an earlier missed day in the last 60 days it is a compensation day that makes
-              that day up; otherwise it shows as present but is banked as a balance day, not paid, until it is
+              that day up; otherwise it shows as present and is banked as a balance day until it is
               used on a later absent day. Days worked = present + half-days × 0.5 + compensation. Payable days
               = present (not banked) + half-days × 0.5 + paid leave + holidays + compensation.
             </p>
@@ -178,7 +178,7 @@ export function AttendanceMonthlyPanel() {
                     <TableHead title="Paid leave">Paid lv.</TableHead>
                     <TableHead title="Unpaid leave">Unpaid</TableHead>
                     <TableHead title="Compensation: extra days that made up an earlier missed day">Comp.</TableHead>
-                    <TableHead title="Worked in advance: present, banked as a balance day, not paid yet">Banked</TableHead>
+                    <TableHead title="Worked in advance: present, banked as a balance day">Banked</TableHead>
                     <TableHead title="Holidays">Hol.</TableHead>
                     <TableHead title="Weekly offs">Offs</TableHead>
                     <TableHead title="Days worked: present + half-days × 0.5 + compensation">Worked</TableHead>

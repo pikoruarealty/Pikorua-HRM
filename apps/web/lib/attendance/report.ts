@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db/prisma";
 import { getAttendanceSummary } from "@/lib/attendance/summary";
 import { getMonthlyAttendanceWithLedger, type MonthlyBreakdown, type WeekSummary } from "@/lib/attendance/monthly-breakdown";
+import { getWfhMonth, type WfhMonth, type WfhMonthWeek } from "@/lib/attendance/wfh-hours";
 import { madeUpEntries, type MadeUpEntry } from "@/lib/attendance/compensation-credits";
 import type { BankedDay } from "@/lib/attendance/extra-days";
 import {
@@ -113,6 +114,12 @@ export type AttendanceReportEmployee = {
     /** A part-timer's WFH-only days (worth 0), whole and half. */
     wfhOnlyFull: number;
     wfhOnlyHalf: number;
+    /** The simple view (2026-11-01, owner: "too complicated"): days worked that COUNT
+     *  toward pay (worked credit of present / half days, leave and extra days left
+     *  out), by where they were worked. Payable = this + paid leave + holidays +
+     *  compensation, exactly. */
+    workedOffice: number;
+    workedWfh: number;
   };
   days: ReportDay[];
   /** Make-ups touching this month (an extra day this month making up a missed day,
@@ -127,9 +134,28 @@ export type AttendanceReportEmployee = {
   /** A part-timer's weeks, each with one line saying how it was judged — printed under
    *  the week's last day in the day table. Empty for a fixed schedule. */
   weekLines: { after: string; text: string }[];
+  /** WFH hours for the month (part-timers with a WFH target): per week and in total. */
+  wfh: WfhMonth;
   /** Things worth a second look before paying from this page. */
   flags: string[];
 };
+
+/** Days worked that count toward pay, office vs WFH: each present / half day's credit
+ *  less the leave folded into it. A mixed day counts as office. */
+export function workedSplit(days: Pick<CalendarDay, "status" | "credit" | "leavePaid" | "location">[]): {
+  workedOffice: number;
+  workedWfh: number;
+} {
+  let office = 0;
+  let wfh = 0;
+  for (const d of days) {
+    if (d.status !== "present" && d.status !== "half_day") continue;
+    const worked = Math.max(0, d.credit - (d.leavePaid ?? 0));
+    if (d.location === "wfh") wfh += worked;
+    else office += worked;
+  }
+  return { workedOffice: office, workedWfh: wfh };
+}
 
 /** A part-timer's days owed this month: the days that count here (payable, less the
  *  make-ups of earlier missed days) plus the days missed. Each owed day lands in
@@ -207,11 +233,11 @@ export function toReportDay(day: CalendarDay, joinKey: string | null): ReportDay
   const workedNotes = () => {
     if (day.sessionCount > 1) notes.push(`${day.sessionCount} sessions`);
     if (day.note === "wfh_hours") notes.push("WFH only — counts as WFH hours, not a quota day");
-    if (day.note === "over_quota") notes.push("Over the week's quota — not paid");
+    if (day.note === "over_quota") notes.push("Over the week's quota");
     if (day.note === "advance") {
       notes.push(
         day.banked
-          ? `In advance — banked, not paid${day.bankUsedFor ? `; used on ${shortDay(day.bankUsedFor)}` : day.bankExpires ? `; use by ${shortDay(day.bankExpires)}` : ""}`
+          ? `In advance — banked${day.bankUsedFor ? `; used on ${shortDay(day.bankUsedFor)}` : day.bankExpires ? `; use by ${shortDay(day.bankExpires)}` : ""}`
           : "Worked weekly off (paid)",
       );
     } else if (day.status === "compensation" && day.madeUpFor) {
@@ -339,10 +365,11 @@ export async function buildAttendanceReportEmployee(
   });
   if (!employee) return null;
 
-  const [summary, { breakdown, ledger }, expected] = await Promise.all([
+  const [summary, { breakdown, ledger }, expected, wfh] = await Promise.all([
     getAttendanceSummary(employeeId, month, year, lateGraceMinutes),
     getMonthlyAttendanceWithLedger(employeeId, month, year),
     getExpectedHoursForMonth(employeeId, month, year),
+    getWfhMonth(employeeId, month, year),
   ]);
   const { calendar } = await getEmployeeAttendanceCalendar(employeeId, month, year, breakdown);
 
@@ -353,6 +380,7 @@ export async function buildAttendanceReportEmployee(
     calendar,
     expectedHours: expected?.month ?? null,
     bank: ledger.bank,
+    wfh,
   });
 }
 
@@ -403,6 +431,8 @@ export function assembleReportEmployee(input: {
   expectedHours: number | null;
   /** The employee's balance days (the walk's ledger); omitted = none. */
   bank?: BankedDay[];
+  /** The month's WFH hours (getWfhMonth); omitted = not tracked. */
+  wfh?: WfhMonth;
 }): AttendanceReportEmployee {
   const { employee, breakdown, calendar } = input;
   const joinKey = employee.dateOfJoining ? employee.dateOfJoining.toISOString().slice(0, 10) : null;
@@ -498,6 +528,7 @@ export function assembleReportEmployee(input: {
       wfhHalf: breakdown.halfDays - calendar.byStatus.half_day.office,
       wfhOnlyFull: calendar.days.filter((d) => d.note === "wfh_hours" && d.status === "present").length,
       wfhOnlyHalf: calendar.days.filter((d) => d.note === "wfh_hours" && d.status === "half_day").length,
+      ...workedSplit(calendar.days),
     },
     days,
     madeUp,
@@ -508,7 +539,8 @@ export function assembleReportEmployee(input: {
     balanceCovers: calendar.days
       .filter((d) => d.status === "paid_leave" && d.note === "balance" && d.balanceEarned)
       .map((d) => ({ date: d.date, earned: d.balanceEarned! })),
-    weekLines: buildWeekLines(breakdown.weeks, calendar.days, madeUp, monthKey),
+    weekLines: buildWeekLines(breakdown.weeks, calendar.days, madeUp, monthKey, input.wfh?.enabled ? input.wfh.weeks : []),
+    wfh: input.wfh ?? { enabled: false },
     flags,
   };
 }
@@ -519,13 +551,20 @@ export function buildWeekLines(
   days: Pick<CalendarDay, "date" | "status" | "note" | "balanceEarned">[],
   madeUp: MadeUpEntry[],
   monthKey: string,
+  wfhWeeks: WfhMonthWeek[] = [],
 ): { after: string; text: string }[] {
   const lastDay = days[days.length - 1]?.date ?? "";
   return weeks.map((w) => {
     const after = w.weekEnd <= lastDay ? w.weekEnd : lastDay;
     const worked = `${num(w.officeFull)}${w.officeHalf > 0 ? ` + ${num(w.officeHalf)} half` : ""} office day${w.officeFull === 1 && w.officeHalf === 0 ? "" : "s"} of ${num(w.target)}`;
-    const wfh = w.wfhOnly > 0 ? ` (+ ${w.wfhOnly} WFH-only, not counted)` : "";
+    const wfh = w.wfhOnly > 0 ? ` (+ ${w.wfhOnly} WFH-only)` : "";
     const parts: string[] = [];
+    // A week split across two months: what of it counts here (each day pays in its own month).
+    const split = w.weekStart.slice(0, 7) !== w.weekEnd.slice(0, 7);
+    if (split && w.countedElsewhere > 0) {
+      const other = w.weekStart.startsWith(monthKey) ? monthName(w.weekEnd) : monthName(w.weekStart);
+      parts.push(`counts in ${monthName(`${monthKey}-01`)}: ${num(w.countedHere)} (${num(w.countedElsewhere)} in ${other})`);
+    }
     if (w.extraDays.length > 0) parts.push(`extra: ${w.extraDays.map(shortDay).join(", ")}`);
     if (!w.owned) {
       parts.push(`settled in ${monthName(w.weekEnd)}`);
@@ -543,8 +582,20 @@ export function buildWeekLines(
       if (shortTotal === 0) parts.push("quota met");
       else parts.push(`${num(shortTotal)} short${fixes.length > 0 ? ` — ${fixes.join(", ")}` : ""}`);
     }
+    const h = wfhWeeks.find((x) => x.weekStart === w.weekStart);
+    if (h && h.actualWeek > 0) {
+      parts.push(
+        `WFH ${hoursText(h.actualWeek)}${h.countedWeek < h.actualWeek ? ` (${hoursText(h.countedWeek)} counts)` : ""}${h.target > 0 ? ` of ${hoursText(h.target)}` : ""}`,
+      );
+    }
     return { after, text: `Week of ${shortDay(w.weekStart)}: ${worked}${wfh} · ${parts.join(" · ")}` };
   });
+}
+
+/** "15h 37m" */
+export function hoursText(h: number): string {
+  const m = Math.round(h * 60);
+  return m % 60 === 0 ? `${Math.floor(m / 60)}h` : `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
 function monthName(key: string): string {

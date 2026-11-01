@@ -76,6 +76,9 @@ type Summary = {
   made_up: { absent: number; unpaid: number };
   /** A part-timer's days owed this month; null for a fixed schedule. */
   days_owed: number | null;
+  wfh_month:
+    | { enabled: false }
+    | { enabled: true; worked: number; counted: number; target: number; targetPerWeek: number };
   compensation_balance: BalanceInfo;
   holiday_days: number;
   working_days_elapsed: number;
@@ -324,7 +327,7 @@ export function EmployeeAttendancePanel({
                 hint={
                   [
                     summary.banked_days > 0
-                      ? `incl. ${summary.banked_days} in advance (banked, not paid)`
+                      ? `incl. ${summary.banked_days} in advance (banked)`
                       : summary.advance_days > 0
                         ? `incl. ${summary.advance_days} worked in advance`
                         : null,
@@ -338,7 +341,7 @@ export function EmployeeAttendancePanel({
                 label="Half-day"
                 value={summary.half_days}
                 split={summary.by_status.half_day}
-                hint={summary.over_quota_half_days > 0 ? `${summary.over_quota_half_days} over the weekly quota (not paid)` : undefined}
+                hint={summary.over_quota_half_days > 0 ? `${summary.over_quota_half_days} over the weekly quota` : undefined}
               />
               <Stat
                 label="Absent"
@@ -381,7 +384,11 @@ export function EmployeeAttendancePanel({
                 textClass={LOCATION_STYLE.wfh.text}
                 days={summary.worked_days.wfh}
                 hint={
-                  summary.expected_hours?.wfhWeekly ? `target ${summary.expected_hours.wfhWeekly}h / week` : undefined
+                  summary.wfh_month?.enabled
+                    ? `${formatHours(summary.wfh_month.counted)} counted of ${formatHours(summary.wfh_month.target)} target`
+                    : summary.expected_hours?.wfhWeekly
+                      ? `target ${summary.expected_hours.wfhWeekly}h / week`
+                      : undefined
                 }
               />
               <HoursTile
@@ -394,13 +401,10 @@ export function EmployeeAttendancePanel({
                 <div className="text-xs text-muted-foreground">Payable days</div>
                 <div className="mt-1 flex flex-wrap items-baseline gap-x-2">
                   <span className="text-xl font-semibold tabular-nums sm:text-2xl">{summary.payable_days}</span>
-                  {summary.days_owed != null && (
-                    <span className="text-[11px] text-muted-foreground">of {summary.days_owed} owed</span>
-                  )}
                 </div>
                 <div className="mt-0.5 text-[11px] text-muted-foreground">
                   {summary.unpaid_work_days > 0
-                    ? `days worked that count (${summary.unpaid_work_days} not paid) + leave + holidays + comp`
+                    ? `days in the quota (${summary.unpaid_work_days} outside it) + leave + holidays + comp`
                     : "present + ½ half-days + leave + holidays + comp"}
                 </div>
               </div>
@@ -787,7 +791,7 @@ function BalanceDays({
           Balance days <span className="tabular-nums text-muted-foreground">· {balance.availableCount} available</span>
         </div>
         <div className="text-[11px] text-muted-foreground">
-          Days worked in advance · not paid until used · cover your next absence within 60 days
+          Days worked in advance · cover your next absence within 60 days
         </div>
       </div>
       {open.length > 0 ? (

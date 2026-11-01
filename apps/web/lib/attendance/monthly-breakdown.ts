@@ -96,6 +96,10 @@ export type WeekSummary = {
   wfhOnly: number;
   /** Worked days beyond the quota (they make up / bank). */
   extraDays: string[];
+  /** Quota days of this week that count in THIS month (paid here), and in the other
+   *  month a split week touches (paid there). Each day pays in its own month. */
+  countedHere: number;
+  countedElsewhere: number;
   /** Days short, once the week is over; null while it runs or when another month owns it. */
   short: number | null;
   /** This month settles the week (it ends in this month). */
@@ -766,6 +770,7 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
       }
     }
 
+    const pushedFrom = result.days.length;
     for (const e of entries) {
       if (!e.here) continue;
       const { key, attendance, paid, unpaid, bal } = e;
@@ -844,7 +849,14 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
       }
     }
 
+    // Quota days landing in this month: the credit of this week's days just listed,
+    // less any extra day's (compensation is not a quota day).
+    const countedHere = result.days
+      .slice(pushedFrom)
+      .reduce((a, d) => a + (d.status === "compensation" ? 0 : d.credit), 0);
     const summary: WeekSummary = {
+      countedHere,
+      countedElsewhere: Math.max(0, Math.min(creditedDays, target) - countedHere),
       weekStart: wKey,
       weekEnd: weekEndKey,
       target,

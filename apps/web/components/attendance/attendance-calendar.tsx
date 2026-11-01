@@ -338,7 +338,7 @@ function DayTooltip({ day }: { day: CalendarDay }) {
           {day.note === "advance" &&
             (day.banked ? (
               <span>
-                Worked in advance — not paid now, banked as a balance day
+                Worked in advance — banked as a balance day
                 {day.bankUsedFor
                   ? `, used on ${shortDay(day.bankUsedFor)}.`
                   : day.bankExpires
@@ -349,9 +349,9 @@ function DayTooltip({ day }: { day: CalendarDay }) {
               <span>Worked on the weekly off (paid as a day, before the 1 Oct 2026 rule).</span>
             ))}
           {day.note === "wfh_hours" && (
-            <span>Worked from home only — counts toward the weekly WFH hours, not the office-day quota (not paid as a day).</span>
+            <span>Worked from home only — counts toward the weekly WFH hours, not the office-day quota.</span>
           )}
-          {day.note === "over_quota" && <span>Beyond this week&apos;s quota — not paid.</span>}
+          {day.note === "over_quota" && <span>Beyond this week&apos;s quota.</span>}
           {status === "compensation" && day.madeUpFor && (
             <span className="font-medium text-foreground">Made up {madeUpForLabel(day.madeUpFor)} — paid here.</span>
           )}
@@ -593,7 +593,7 @@ export function AttendanceLegend() {
         <span className="hidden rounded border border-violet-500/40 px-0.5 text-[10px] font-semibold leading-tight text-violet-700 dark:text-violet-300 sm:inline">
           Adv
         </span>
-        Worked in advance (banked, not paid yet)
+        Worked in advance (banked)
       </li>
     </ul>
   );

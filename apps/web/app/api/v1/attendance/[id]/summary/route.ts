@@ -13,6 +13,7 @@ import { getExpectedHoursForMonth } from "@/lib/attendance/expected-hours";
 import { ATTENDANCE_EXEMPT_MESSAGE, isAttendanceExemptRole } from "@/lib/attendance/tracking";
 import { isFixedSchedule } from "@/lib/attendance/weekly-off";
 import { daysOwedOf } from "@/lib/attendance/report";
+import { getWfhMonth } from "@/lib/attendance/wfh-hours";
 
 // Track A. GET /api/v1/attendance/:employee_id/summary?month=&year=
 // (folder is named [id], not [employee_id], only because Next.js requires
@@ -75,10 +76,11 @@ export async function GET(
     getAttendanceSummary(employeeId, month, year, effectiveConfig?.lateGraceMinutes ?? 0),
     getMonthlyAttendanceBreakdown(employeeId, month, year),
   ]);
-  const [{ calendar }, expectedHours, compensationBalance] = await Promise.all([
+  const [{ calendar }, expectedHours, compensationBalance, wfhMonth] = await Promise.all([
     getEmployeeAttendanceCalendar(employeeId, month, year, breakdown),
     getExpectedHoursForMonth(employeeId, month, year),
     getCompensationBalance(employeeId, month, year),
+    getWfhMonth(employeeId, month, year),
   ]);
 
   return ok({
@@ -119,6 +121,9 @@ export async function GET(
     // A part-timer's days owed this month (weekly quotas; a holiday week owes less) —
     // what payable days are measured against. null for a fixed schedule.
     days_owed: isFixedSchedule(employee) ? null : daysOwedOf(breakdown),
+    // WFH hours for the month (part-timers with a target): worked, counted after the
+    // weekly cap, and the month's share of the weekly target — per week too.
+    wfh_month: wfhMonth,
     holiday_days: breakdown.holidayDays,
     working_days_elapsed: breakdown.workingDaysElapsed,
     // 2026-10-01 — the days that count toward pay ((present − banked) + half×0.5 +
