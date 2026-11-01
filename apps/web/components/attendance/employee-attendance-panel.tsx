@@ -28,6 +28,8 @@ type BalanceCredit = {
   earnedDate: string;
   expiresAt: string;
   workLocation: "office" | "wfh";
+  /** 1 or 0.5 of a day. */
+  amount: number;
   status: "available" | "used" | "expired";
   coversDate?: string;
   applied?: boolean;
@@ -39,6 +41,8 @@ type MadeUpEntry = {
   missedDate: string;
   missedKind: "absence" | "unpaid_leave" | "shortfall";
   weekStart?: string;
+  month?: string;
+  amount?: number;
 };
 
 type BalanceInfo = {
@@ -74,15 +78,17 @@ type Summary = {
   balance_days: number;
   /** Of absent / unpaid: days a later extra day made up (paid on that day). */
   made_up: { absent: number; unpaid: number };
-  /** A part-timer's days owed this month; null for a fixed schedule. */
+  /** A part-timer's days owed this month (monthly quota); null otherwise. */
   days_owed: number | null;
+  /** A part-timer's paid leave the month didn't need (back to the leave balance). */
+  paid_leave_unused: number;
   wfh_month:
     | { enabled: false }
     | { enabled: true; worked: number; counted: number; target: number; targetPerWeek: number };
   compensation_balance: BalanceInfo;
   holiday_days: number;
   working_days_elapsed: number;
-  /** Days that count toward pay: present (not banked) + ½ × half-days + paid leave + holidays + compensation. */
+  /** Days that count toward pay: present (not banked) + 0.5 × half-days + paid leave + holidays + compensation. */
   payable_days: number;
   hours: { office: number; wfh: number; total: number };
   expected_hours: { month: number; weekly: number | null; wfhWeekly: number | null } | null;
@@ -341,7 +347,7 @@ export function EmployeeAttendancePanel({
                 label="Half-day"
                 value={summary.half_days}
                 split={summary.by_status.half_day}
-                hint={summary.over_quota_half_days > 0 ? `${summary.over_quota_half_days} over the weekly quota` : undefined}
+                hint={summary.over_quota_half_days > 0 ? `${summary.over_quota_half_days} over the quota` : undefined}
               />
               <Stat
                 label="Absent"
@@ -353,7 +359,14 @@ export function EmployeeAttendancePanel({
               <Stat
                 label="Paid leave"
                 value={summary.paid_leave_days}
-                hint={summary.balance_days > 0 ? `incl. ${summary.balance_days} balance day${summary.balance_days === 1 ? "" : "s"}` : undefined}
+                hint={
+                  [
+                    summary.balance_days > 0 ? `incl. ${summary.balance_days} balance day${summary.balance_days === 1 ? "" : "s"}` : null,
+                    summary.paid_leave_unused > 0 ? `${summary.paid_leave_unused} not needed (back to balance)` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ") || undefined
+                }
               />
               <Stat
                 label="Unpaid leave"
@@ -403,9 +416,11 @@ export function EmployeeAttendancePanel({
                   <span className="text-xl font-semibold tabular-nums sm:text-2xl">{summary.payable_days}</span>
                 </div>
                 <div className="mt-0.5 text-[11px] text-muted-foreground">
-                  {summary.unpaid_work_days > 0
-                    ? `days in the quota (${summary.unpaid_work_days} outside it) + leave + holidays + comp`
-                    : "present + ½ half-days + leave + holidays + comp"}
+                  {summary.days_owed != null
+                    ? `owes ${summary.days_owed} this month${summary.unpaid_work_days > 0 ? ` · ${summary.unpaid_work_days} worked beyond it` : ""}`
+                    : summary.unpaid_work_days > 0
+                      ? `days in the quota (${summary.unpaid_work_days} outside it) + leave + holidays + comp`
+                      : "present + 0.5 × half-days + leave + holidays + comp"}
                 </div>
               </div>
             </div>
@@ -806,7 +821,10 @@ function BalanceDays({
               >
                 {c.workLocation === "wfh" ? "WFH" : "Office"}
               </span>
-              <span>Worked {shortDate(c.earnedDate)}</span>
+              <span>
+                Worked {shortDate(c.earnedDate)}
+                {c.amount < 1 ? <span className="text-muted-foreground"> · {c.amount} day</span> : null}
+              </span>
               <span className="text-muted-foreground">· use by {shortDate(c.expiresAt)}</span>
               {c.workLocation === "wfh" && (
                 <span className="text-muted-foreground">· only covers a WFH day, so not counted as available</span>
@@ -859,7 +877,7 @@ function BalanceDays({
             {groupMadeUp(balance.madeUp).map((g) => (
               <li key={`${g.ons.join(",")}-${g.missedDate}`}>
                 <span className="text-foreground">{madeUpSentence(g)}</span>
-                {g.ons.some((o) => o.slice(0, 7) !== g.missedDate.slice(0, 7)) && (
+                {g.ons.some((o) => o.slice(0, 7) !== (g.month ?? g.missedDate.slice(0, 7))) && (
                   <span>
                     {" "}
                     — paid in{" "}
@@ -876,7 +894,8 @@ function BalanceDays({
         <ul className="mt-2 flex flex-col gap-0.5 border-t pt-2 text-[11px] text-muted-foreground">
           {past.map((c) => (
             <li key={c.id}>
-              {shortDate(c.earnedDate)} ({c.workLocation === "wfh" ? "WFH" : "office"}) —{" "}
+              {shortDate(c.earnedDate)} ({c.workLocation === "wfh" ? "WFH" : "office"}
+              {c.amount < 1 ? `, ${c.amount} day` : ""}) —{" "}
               {c.status === "used"
                 ? `used for ${c.coversDate ? shortDate(c.coversDate) : "a missed day"}${c.auto ? " (automatically)" : ""}`
                 : "expired unused (added to leave balance)"}

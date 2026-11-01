@@ -50,10 +50,10 @@ describe("matchExtraDays", () => {
       ],
       todayKey: "2026-11-01",
     });
-    expect([...r.madeUpOn.entries()]).toEqual([
+    expect([...r.madeUpOn.entries()].sort()).toEqual([
+      ["2026-09-10", "2026-10-18"],
       ["2026-09-15", "2026-10-04"],
       ["2026-09-20", "2026-10-11"],
-      ["2026-09-10", "2026-10-18"],
     ]);
   });
 
@@ -203,7 +203,7 @@ describe("full-timer: a worked weekly off under the rule", () => {
     const sep = month(9, l);
     expect(at(oct, "2026-10-04")).toMatchObject({ status: "compensation", credit: 1, madeUpFor: { date: "2026-09-15" } });
     expect(at(sep, "2026-09-15")).toMatchObject({ status: "absent", credit: 0, madeUpOn: "2026-10-04" });
-    expect(sep.madeUp).toEqual([{ missed: expect.objectContaining({ date: "2026-09-15" }), on: "2026-10-04" }]);
+    expect(sep.madeUp).toEqual([{ missed: expect.objectContaining({ date: "2026-09-15" }), on: "2026-10-04", amount: 1 }]);
     // September's pay is what it was (the absence stays unpaid there).
     expect(sep.payableDays).toBe(month(9, fullTimer({ skip: ["2026-09-15"] })).payableDays);
     expectConsistent(oct);
@@ -233,13 +233,14 @@ describe("full-timer: a worked weekly off under the rule", () => {
   });
 });
 
-// A part-timer on 3 days a week. Their extra days are not paid either (owner,
-// 2026-11-01): they make up an earlier short week, or they are banked.
+// A part-timer on 3 days a week. From October 2026 their quota is MONTHLY (owner,
+// 2026-11-01): half the month's Mon–Sat days that aren't holidays. October 2026 has 27
+// Mon–Sat days, so it owes 13.5.
 function partTimer(
   workedDays: string[],
   balance: Record<string, string> = {},
   holidays: string[] = [],
-  extra: { wfh?: string[]; half?: string[] } = {},
+  extra: { wfh?: string[]; half?: string[]; leave?: Record<string, string>; joined?: string } = {},
 ) {
   const att = new Map<string, Att>();
   for (const d of workedDays) att.set(d, full());
@@ -253,154 +254,284 @@ function partTimer(
     requiredDaysPerWeek: 3,
     balanceDates: new Set(Object.keys(balance)),
     balanceEarnedFor: new Map(Object.entries(balance)),
+    ...(extra.leave ? { leaveTypeByDate: new Map(Object.entries(extra.leave)) as never } : {}),
+    ...(extra.joined ? { dateOfJoining: new Date(`${extra.joined}T00:00:00.000Z`) } : {}),
   };
 }
 
-/** Mon-Wed from 1 Aug to 27 Sep, so the weeks before the ones a test is about meet
- *  their quota (an empty history would be all short weeks, which October's extra
- *  days would then make up first). Under the old counting the week of 31 Aug is
- *  split into an August and a September chunk, so it is worked Mon-Thu there. */
+/** Every pre-October week met exactly, so nothing before October is short or extra
+ *  (an empty history would be all short weeks, which October's extra days would then
+ *  make up first). Under the old counting each month's share of a week is judged on
+ *  its own: Mon-Wed to 27 Sep, the week of 31 Aug worked Mon-Thu, and 28-30 Sep (a
+ *  3-day share, owing 1) worked once. */
 function metHistory(): string[] {
   const days: string[] = [];
   for (let t = Date.UTC(2026, 7, 1); t < Date.UTC(2026, 8, 28); t += 86_400_000) {
     const d = new Date(t);
     if ([1, 2, 3].includes(d.getUTCDay())) days.push(key(d));
   }
-  return [...days, "2026-08-01", "2026-09-03"];
+  return [...days, "2026-08-01", "2026-09-03", "2026-09-28"];
 }
 
-describe("part-timer under the rule", () => {
-  // Week of 5 Oct: 2 days (one short). Week of 12 Oct: 4 days (one over).
-  const worked = [
-    "2026-10-05", "2026-10-06",
-    "2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15",
-    "2026-10-19", "2026-10-20", "2026-10-21",
-    "2026-10-26", "2026-10-27", "2026-10-28",
-    "2026-09-28", "2026-09-29", "2026-09-30",
-  ];
+/** The Mon–Sat days of a month, in order. */
+function monSat(m: number): string[] {
+  const out: string[] = [];
+  for (let t = Date.UTC(2026, m - 1, 1); new Date(t).getUTCMonth() === m - 1; t += 86_400_000) {
+    if (new Date(t).getUTCDay() !== 0) out.push(key(new Date(t)));
+  }
+  return out;
+}
+const OCT = monSat(10); // 27 days
+const NOV = monSat(11); // 25 days -> owes 12.5
 
-  test("a day over quota after a short week makes that week up — paid once, shown as compensation", () => {
-    const r = month(10, partTimer([...metHistory(), ...worked]));
-    expect(at(r, "2026-10-15")).toMatchObject({
-      status: "compensation",
-      credit: 1,
-      madeUpFor: { kind: "shortfall", weekStart: "2026-10-05" },
+/** A month walked as if today were `now` (default: 1 Nov 2026). */
+function monthAt(m: number, lookups: Record<string, unknown>, now: Date) {
+  const l = lookups as Parameters<typeof classifyMonth>[2];
+  return classifyMonth(m, 2026, withLedger(l, buildExtraDayLedger(l, now), now));
+}
+const DEC1 = new Date("2026-12-01T06:30:00.000Z");
+
+describe("part-timer: the monthly quota (owner, 2026-11-01)", () => {
+  test("October owes 13.5 (27 Mon–Sat days / 2); 13 full days + a half day pays exactly that", () => {
+    const r = month(10, partTimer([...metHistory(), ...OCT.slice(0, 13)], {}, [], { half: [OCT[13]!] }));
+    expect(r.owedDays).toBe(13.5);
+    expect(r.payableDays).toBe(13.5);
+    expect(r.absentDays).toBe(0);
+    expect(r.bankedDays).toBe(0);
+    expectConsistent(r);
+  });
+
+  test("days of the week don't matter, only the month: 1 day one week and 5 the next is fine", () => {
+    // 14 office days bunched into the second half of the month.
+    const r = month(10, partTimer([...metHistory(), ...OCT.slice(13)]));
+    expect(r.payableDays).toBe(13.5);
+    expect(r.bankedDays).toBe(0.5);
+    expect(r.absentDays).toBe(0);
+  });
+
+  test("over the quota: the latest whole days bank, the last .5 takes a half day", () => {
+    // 14 full days + one half day = 14.5: 1 day over -> the latest full day banks.
+    const r = month(10, partTimer([...metHistory(), ...OCT.slice(0, 14)], {}, [], { half: [OCT[20]!] }));
+    expect(r.payableDays).toBe(13.5);
+    expect(r.bankedDays).toBe(1);
+    expect(at(r, OCT[13]!)).toMatchObject({ status: "present", banked: true, credit: 0 });
+    expect(at(r, OCT[20]!)).toMatchObject({ status: "half_day", credit: 0.5 });
+    // 15 full days = 1.5 over: two whole days? no — one whole day + half of the next.
+    const r2 = month(10, partTimer([...metHistory(), ...OCT.slice(0, 15)]));
+    expect(r2.bankedDays).toBe(1.5);
+    expect(at(r2, OCT[14]!)).toMatchObject({ banked: true, credit: 0 });
+    expect(at(r2, OCT[13]!)).toMatchObject({ banked: true, bankedAmount: 0.5, credit: 0.5 });
+    expect(r2.payableDays).toBe(13.5);
+    expectConsistent(r2);
+  });
+
+  test("Sunday work counts as an office day", () => {
+    const r = month(10, partTimer([...metHistory(), ...OCT.slice(0, 13), "2026-10-04"], {}, [], { half: [OCT[13]!] }));
+    expect(r.payableDays).toBe(13.5);
+    expect(r.bankedDays).toBe(1);
+  });
+
+  test("WFH-only days don't count toward the office days; the month is short", () => {
+    const r = month(10, partTimer([...metHistory(), ...OCT.slice(0, 12)], {}, [], { wfh: OCT.slice(12, 15) }));
+    expect(r.wfhOnlyDays).toBe(3);
+    expect(r.payableDays).toBe(12);
+    expect(r.absentDays).toBe(1.5);
+    expectConsistent(r);
+  });
+
+  test("each holiday on a Mon–Sat lowers what is owed by .5; a day worked on a holiday counts", () => {
+    const r = month(10, partTimer([...metHistory(), ...OCT.slice(0, 12), OCT[12]!], {}, [OCT[12]!, OCT[20]!]));
+    expect(r.owedDays).toBe(12.5);
+    expect(at(r, OCT[20]!)).toMatchObject({ status: "holiday", credit: 0 });
+    // 13 office days (one on the holiday) of 12.5: the holiday is a worked day, and the
+    // latest day banks the 0.5 over.
+    expect(at(r, OCT[12]!)).toMatchObject({ status: "present", bankedAmount: 0.5, credit: 0.5 });
+    expect(r.payableDays).toBe(12.5);
+    expect(r.bankedDays).toBe(0.5);
+  });
+
+  test("joining mid-month owes half the Mon–Sat days from the joining date", () => {
+    // 15–31 Oct: 15 Mon–Sat days -> 7.5.
+    const r = month(10, partTimer(OCT.filter((d) => d >= "2026-10-15").slice(0, 8), {}, [], { joined: "2026-10-15" }));
+    expect(r.owedDays).toBe(7.5);
+    expect(r.payableDays).toBe(7.5);
+    expect(r.bankedDays).toBe(0.5);
+  });
+
+  test("a week split across September and October: each day counts in its own month only", () => {
+    // 28-30 Sep worked (September); October has exactly 13.5.
+    const r = month(10, partTimer([...metHistory(), ...OCT.slice(0, 13)], {}, [], { half: [OCT[13]!] }));
+    expect(r.days.some((d) => d.date < "2026-10-01")).toBe(false);
+    expect(r.payableDays).toBe(13.5);
+  });
+});
+
+describe("part-timer: leave under the monthly quota", () => {
+  test("paid leave fills only what is short; the rest goes back to the leave balance", () => {
+    // Deep's October: 13 office days + 2 days casual leave. Owes 13.5 -> 0.5 of leave used.
+    const r = month(
+      10,
+      partTimer([...metHistory(), ...OCT.filter((d) => d > "2026-10-06").slice(0, 13)], {}, [], {
+        leave: { "2026-10-05": "leave_casual", "2026-10-06": "leave_casual" },
+      }),
+    );
+    expect(r.payableDays).toBe(13.5);
+    expect(r.paidLeaveDays).toBe(0.5);
+    expect(r.paidLeaveUnused).toBe(1.5);
+    expect(at(r, "2026-10-05")).toMatchObject({ status: "paid_leave", credit: 0.5, leavePaid: 0.5 });
+    expect(at(r, "2026-10-06")).toMatchObject({ status: "paid_leave", credit: 0, note: "not_needed" });
+    expectConsistent(r);
+  });
+
+  test("unpaid leave costs nothing when the month's days were met", () => {
+    const r = month(
+      10,
+      partTimer([...metHistory(), ...OCT.filter((d) => d > "2026-10-08").slice(0, 14)], {}, [], {
+        leave: { "2026-10-07": "leave_unpaid", "2026-10-08": "leave_unpaid" },
+      }),
+    );
+    expect(r.unpaidLeaveDays).toBe(0);
+    expect(r.missedUnits).toEqual([]);
+    expect(at(r, "2026-10-07")).toMatchObject({ status: "unpaid_leave", note: "not_needed" });
+    expect(r.bankedDays).toBe(0.5);
+  });
+
+  test("a short month with unpaid leave: that much of it is a missed day, made up by next month's extra", () => {
+    // October: 12 office days + 2 unpaid days -> 1.5 short, all explained by unpaid leave.
+    // November (owes 12.5): 14 office days -> 1.5 over, which makes October's up.
+    const l = partTimer([...metHistory(), ...OCT.filter((d) => d > "2026-10-08").slice(0, 12), ...NOV.slice(0, 14)], {}, [], {
+      leave: { "2026-10-07": "leave_unpaid", "2026-10-08": "leave_unpaid" },
     });
-    expect(r.absentDays).toBe(1);
-    expect(r.compensationDays).toBe(1);
-    expect(r.madeUp).toEqual([{ missed: expect.objectContaining({ weekStart: "2026-10-05" }), on: "2026-10-15" }]);
-    expectConsistent(r);
-  });
-
-  test("a day over quota with nothing to make up is banked, not paid", () => {
-    // Week of 5 Oct now meets its quota (5, 7, 8 Oct); the week of 12 Oct is still one over.
-    const r = month(10, partTimer([...metHistory(), ...worked.filter((d) => d !== "2026-10-06"), "2026-10-07", "2026-10-08"]));
-    expect(at(r, "2026-10-15")).toMatchObject({ status: "present", banked: true, credit: 0 });
-    expect(r.compensationDays).toBe(0);
-    expect(r.bankedDays).toBe(1);
-    expectConsistent(r);
-  });
-
-  test("a week split across two months is judged whole: Mon-Wed met in full is neither extra nor short", () => {
-    // Week of 28 Sep: worked 28, 29, 30 Sep (3 of 3), nothing 1-4 Oct.
-    const l = partTimer(worked);
-    const sep = month(9, l);
-    const oct = month(10, l);
-    expect(sep.days.filter((d) => d.date >= "2026-09-28").map((d) => d.status)).toEqual(["present", "present", "present"]);
-    expect(sep.compensationDays).toBe(0);
-    expect(oct.days.filter((d) => d.date <= "2026-10-04").every((d) => d.status === "no_record")).toBe(true);
-    // The only October shortfall is the week of 5 Oct (made up on the 15th).
-    expect(oct.absentDays).toBe(1);
-  });
-});
-
-describe("part-timer holidays (owner, 2026-11-01): not part of the quota, not paid", () => {
-  // Every week from 28 Sep is worked Mon-Wed except as listed, so it meets its quota.
-  const base = [
-    "2026-09-28", "2026-09-29", "2026-09-30",
-    "2026-10-12", "2026-10-13", "2026-10-14",
-    "2026-10-26", "2026-10-27", "2026-10-28",
-  ];
-  const week = (start: number) => Array.from({ length: 7 }, (_, i) => `2026-10-${String(start + i).padStart(2, "0")}`);
-
-  test("one holiday in a week: still 3 days owed, the holiday is shown but worth nothing", () => {
-    const r = month(10, partTimer([...base, "2026-10-05", "2026-10-07", "2026-10-08", ...week(19).slice(0, 3)], {}, ["2026-10-06"]));
-    expect(at(r, "2026-10-06")).toMatchObject({ status: "holiday", credit: 0 });
-    expect(r.holidayDays).toBe(0);
-    // 3 worked around the holiday: quota met exactly — no extra day, nothing short.
-    expect(r.compensationDays + r.bankedDays).toBe(0);
-    expect(r.absentDays).toBe(0);
-    expectConsistent(r);
-  });
-
-  test("a whole holiday week owes nothing: the month owes three weeks' days, not four", () => {
-    const withWeekOff = month(10, partTimer([...base, "2026-10-05", "2026-10-06", "2026-10-07"], {}, week(19)));
-    expect(withWeekOff.absentDays).toBe(0);
-    const without = month(10, partTimer([...base, "2026-10-05", "2026-10-06", "2026-10-07", ...week(19).slice(0, 3)]));
-    expect(withWeekOff.workingDaysElapsed).toBe(without.workingDaysElapsed - 3);
-    expectConsistent(withWeekOff);
-  });
-
-  test("five holidays leave two workable days: the week owes two", () => {
-    const r = month(10, partTimer([...base, "2026-10-05", "2026-10-06", "2026-10-07"], {}, week(19).slice(0, 5)));
-    expect(r.absentDays).toBe(2);
-  });
-
-  test("a day worked on a holiday is an ordinary worked day", () => {
-    const r = month(10, partTimer([...base, "2026-10-05", "2026-10-06", "2026-10-07", "2026-10-19", "2026-10-20", "2026-10-21"], {}, ["2026-10-20"]));
-    expect(at(r, "2026-10-20")).toMatchObject({ status: "present", credit: 1 });
-    expect(r.absentDays).toBe(0);
-  });
-});
-
-describe("part-timer: the quota is office days, and a week pays no more than its quota", () => {
-  // Weeks of 28 Sep, 12 Oct, 19 Oct, 26 Oct: exactly 3 office days each.
-  const base = [
-    "2026-09-28", "2026-09-29", "2026-09-30",
-    "2026-10-12", "2026-10-13", "2026-10-14",
-    "2026-10-19", "2026-10-20", "2026-10-21",
-    "2026-10-26", "2026-10-27", "2026-10-28",
-  ];
-  const office = ["2026-10-05", "2026-10-06", "2026-10-07"];
-
-  test("a WFH-only day is shown as worked but is not a quota day, not paid, never banked", () => {
-    const r = month(10, partTimer([...base, ...office], {}, [], { wfh: ["2026-10-08", "2026-10-09"] }));
-    expect(at(r, "2026-10-08")).toMatchObject({ status: "present", note: "wfh_hours", credit: 0 });
-    expect(r.wfhOnlyDays).toBe(2);
-    expect(r.bankedDays + r.compensationDays).toBe(0);
-    expect(r.payableDays).toBe(month(10, partTimer([...base, ...office])).payableDays);
-    expectConsistent(r);
-  });
-
-  test("WFH days don't fill the office quota: 2 office + 2 WFH is one day short", () => {
-    const r = month(10, partTimer([...base, "2026-10-05", "2026-10-06"], {}, [], { wfh: ["2026-10-07", "2026-10-08"] }));
-    expect(r.absentDays).toBe(1);
-  });
-
-  test("half days beyond the quota are not paid; the week pays exactly its quota", () => {
-    const r = month(10, partTimer([...base, ...office], {}, [], { half: ["2026-10-08"] }));
-    expect(at(r, "2026-10-08")).toMatchObject({ status: "half_day", note: "over_quota", credit: 0 });
-    expect(r.overQuotaHalfDays).toBe(1);
-    expect(r.payableDays).toBe(month(10, partTimer([...base, ...office])).payableDays);
-    expectConsistent(r);
-  });
-
-  test("two half days over the quota make one whole extra day (banked)", () => {
-    const r = month(10, partTimer([...metHistory(), ...base, ...office], {}, [], { half: ["2026-10-08", "2026-10-09"] }));
-    expect(r.bankedDays).toBe(1);
-    expect(r.overQuotaHalfDays).toBe(0);
-    expect(r.payableDays).toBe(month(10, partTimer([...base, ...office])).payableDays);
-    expectConsistent(r);
-  });
-
-  test("a short week in September (old counting) is made up by an October extra day", () => {
-    // Week of 14 Sep: 2 of 3. Every other Aug/Sep week: 3 (Mon-Wed). October week of 5 Oct: 4.
-    const l = partTimer([...metHistory().filter((d) => d !== "2026-09-16"), ...base, ...office, "2026-10-08"]);
-    const sep = month(9, l);
-    const oct = month(10, l);
-    expect(sep.madeUp).toEqual([{ missed: expect.objectContaining({ kind: "shortfall", weekStart: "2026-09-14" }), on: "2026-10-08" }]);
-    expect(at(oct, "2026-10-08")).toMatchObject({ status: "compensation", credit: 1, madeUpFor: { weekStart: "2026-09-14" } });
+    const oct = monthAt(10, l, DEC1);
+    expect(oct.unpaidLeaveDays).toBe(1.5);
+    expect(oct.absentDays).toBe(0);
+    expect(oct.missedUnits.map((m) => [m.id, m.size])).toEqual([
+      ["2026-10-07", 1],
+      ["2026-10-08", 0.5],
+    ]);
+    const nov = monthAt(11, l, DEC1);
+    expect(nov.owedDays).toBe(12.5);
+    expect(nov.payableDays).toBe(14); // 12.5 owed + 1.5 made up
+    expect(nov.bankedDays).toBe(0);
     expectConsistent(oct);
+    expectConsistent(nov);
+  });
+});
+
+describe("part-timer: balance in .5 steps across months", () => {
+  test("October's extra 1.5 covers November's short day automatically; 0.5 is left", () => {
+    const l = partTimer([...metHistory(), ...OCT.slice(0, 15), ...NOV.slice(0, 11)], {}, [], { half: [NOV[11]!] });
+    const nov = monthAt(11, l, DEC1);
+    // November: 11.5 office days of 12.5 -> 1 short, covered from October's balance.
+    expect(nov.absentDays).toBe(0);
+    expect(nov.balanceDays).toBe(1);
+    expect(nov.payableDays).toBe(12.5);
+    const ledger = buildExtraDayLedger(l as Parameters<typeof classifyMonth>[2], DEC1);
+    const left = ledger.bank.filter((b) => b.status === "available").reduce((a, b) => a + b.amount, 0);
+    expect(left).toBe(0.5);
+    expectConsistent(nov);
+  });
+
+  test("two half extras make up a whole missed day", () => {
+    const r = matchExtraDays({
+      missed: [absent("2026-10-06")],
+      extras: [
+        { date: "2026-10-18", location: "office", size: 0.5 },
+        { date: "2026-10-25", location: "office", size: 0.5 },
+      ],
+      todayKey: "2026-11-01",
+    });
+    expect(r.verdicts.get("2026-10-18")).toMatchObject({ kind: "compensation", amount: 0.5 });
+    expect(r.verdicts.get("2026-10-25")).toMatchObject({ kind: "compensation", amount: 0.5 });
+    expect(r.madeUpAmount.get("2026-10-06")).toBe(1);
+    expect(r.bank).toEqual([]);
+  });
+
+  test("a whole extra day making up half a missed day banks the other half", () => {
+    const r = matchExtraDays({
+      missed: [{ ...absent("2026-10-06"), size: 0.5 }],
+      extras: [{ date: "2026-10-18", location: "office" }],
+      todayKey: "2026-11-01",
+    });
+    expect(r.verdicts.get("2026-10-18")).toMatchObject({ kind: "banked", amount: 0.5, compensated: 0.5 });
+    expect(r.bank).toEqual([expect.objectContaining({ date: "2026-10-18", amount: 0.5, status: "available" })]);
+  });
+
+  test("a request only spends a whole balance day", () => {
+    const bank = matchExtraDays({
+      missed: [],
+      extras: [{ date: "2026-10-04", location: "office", size: 0.5 }],
+      todayKey: "2026-11-01",
+    }).bank;
+    expect(pickBankedDay(bank, "2026-10-20", "office")).toBeNull();
+  });
+});
+
+describe("part-timer: the weekly check flags, never pays", () => {
+  test("a finished week with fewer than 3 office days, or every day, is flagged in the month it ends in", () => {
+    const worked = [
+      ...metHistory(),
+      "2026-10-05", "2026-10-06", // week of 5 Oct: 2 -> low
+      ...["12", "13", "14", "15", "16", "17"].map((d) => `2026-10-${d}`), // week of 12 Oct: 6 -> high
+      "2026-10-19", "2026-10-20", "2026-10-21",
+      "2026-10-26", "2026-10-27", "2026-10-28",
+    ];
+    const r = month(10, partTimer(worked));
+    const flag = (ws: string) => r.weeks.find((w) => w.weekStart === ws)?.flag;
+    expect(flag("2026-10-05")).toBe("low");
+    expect(flag("2026-10-12")).toBe("high");
+    expect(flag("2026-10-19")).toBeNull();
+    // The week of 26 Oct ends on 1 Nov: still running on 1 Nov, and November's to judge.
+    expect(flag("2026-10-26")).toBeNull();
+    // Pay is the month's: 14 office days of 13.5 -> 13.5 paid, 0.5 banked.
+    expect(r.payableDays).toBe(13.5);
+    expect(r.bankedDays).toBe(0.5);
+  });
+});
+
+describe("part-timer: September keeps the weekly counting it was paid under", () => {
+  test("a short week in September is made up by October's extra day", () => {
+    // Week of 14 Sep: 2 of 3. October: 14.5 office days -> 1 over, which makes it up.
+    const l = partTimer([...metHistory().filter((d) => d !== "2026-09-16"), ...OCT.slice(0, 14)], {}, [], { half: [OCT[20]!] });
+    const sep = month(9, l);
+    const oct = month(10, l);
+    expect(sep.madeUp).toEqual([
+      { missed: expect.objectContaining({ kind: "shortfall", weekStart: "2026-09-14" }), on: OCT[13], amount: 1 },
+    ]);
+    expect(at(oct, OCT[13]!)).toMatchObject({ status: "compensation", credit: 1, madeUpFor: { weekStart: "2026-09-14" } });
+    expect(oct.payableDays).toBe(14.5);
+    expectConsistent(oct);
+  });
+
+  test("September that covered its own missed week: October's extra day is banked, not paid again", () => {
+    const base = [
+      ...metHistory().filter((d) => !(d >= "2026-09-07" && d <= "2026-09-13")),
+      "2026-09-24", "2026-09-25", "2026-09-26",
+      ...OCT.slice(0, 14),
+    ];
+    const oct = month(10, partTimer(base, {}, [], { half: [OCT[20]!] }));
+    expect(at(oct, OCT[13]!)).toMatchObject({ status: "present", banked: true, credit: 0 });
+    expect(oct.compensationDays).toBe(0);
+  });
+});
+
+describe("part-timer: the real October shape (Bhavarth, production)", () => {
+  test("14 office days, WFH-only days not counted: 13.5 paid, 0.5 banked on the last office day", () => {
+    const office = [
+      ...metHistory(),
+      "2026-10-02", "2026-10-04",
+      "2026-10-09", "2026-10-11",
+      "2026-10-13", "2026-10-14", "2026-10-15", "2026-10-18",
+      "2026-10-19", "2026-10-20", "2026-10-21", "2026-10-25",
+      "2026-10-26", "2026-10-28",
+    ];
+    const r = month(10, partTimer(office, {}, [], { wfh: ["2026-10-07", "2026-10-08", "2026-10-29", "2026-10-30"], half: [] }));
+    expect(r.owedDays).toBe(13.5);
+    expect(r.payableDays).toBe(13.5);
+    expect(r.bankedDays).toBe(0.5);
+    expect(at(r, "2026-10-28")).toMatchObject({ banked: true, bankedAmount: 0.5, credit: 0.5 });
+    expect(r.compensationDays).toBe(0);
+    expectConsistent(r);
   });
 });
 
@@ -408,85 +539,87 @@ describe("randomised: every extra day is paid exactly once (300 histories)", () 
   // A seeded PRNG so a failure is reproducible.
   let seed = 20261101;
   const rand = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+  const halfOf = (n: number) => Math.round(n * 2) / 2;
 
   for (let run = 0; run < 300; run++) {
     const flexible = run % 2 === 1;
     const days: string[] = [];
-    for (let t = Date.UTC(2026, 7, 1); t <= Date.UTC(2026, 9, 31); t += 86_400_000) {
+    const halves: string[] = [];
+    const wfh: string[] = [];
+    const leave: Record<string, string> = {};
+    // August to November, walked as of 1 December: October and November are under
+    // the rule (monthly quota for a part-timer), so balance crosses a month.
+    for (let t = Date.UTC(2026, 7, 1); t <= Date.UTC(2026, 10, 30); t += 86_400_000) {
       const d = new Date(t);
-      const p = flexible ? 0.45 : d.getUTCDay() === 0 ? 0.25 : 0.88;
-      if (rand() < p) days.push(key(d));
+      const p = flexible ? 0.5 : d.getUTCDay() === 0 ? 0.25 : 0.88;
+      const x = rand();
+      if (x < p) {
+        const kind = flexible ? rand() : 1;
+        if (kind < 0.15) halves.push(key(d));
+        else if (kind < 0.25) wfh.push(key(d));
+        else days.push(key(d));
+      } else if (flexible && x > 0.95) {
+        leave[key(d)] = rand() < 0.5 ? "leave_casual" : "leave_unpaid";
+      }
     }
     // Some histories get holidays, including a whole holiday week.
     const holidays = run % 3 === 0 ? ["2026-10-02", "2026-10-19", "2026-10-20", "2026-10-21", "2026-10-22", "2026-10-23", "2026-10-24", "2026-10-25"] : [];
     const lookups = flexible
-      ? partTimer(days, {}, holidays)
+      ? partTimer(days, {}, holidays, { half: halves, wfh, leave })
       : { ...fullTimer({}), attendanceByDate: new Map(days.map((d) => [d, full()] as const)) };
 
     test(`${flexible ? "part-time" : "full-time"} #${run}`, () => {
-      const ledger = buildExtraDayLedger(lookups as Parameters<typeof classifyMonth>[2], NOW);
-      let compensation = 0;
+      const l = lookups as Parameters<typeof classifyMonth>[2];
+      const ledger = buildExtraDayLedger(l, DEC1);
+      let compensated = 0;
       let banked = 0;
-      let madeUpOnDays = 0;
-      for (const m of [8, 9, 10]) {
-        const r = month(m, lookups);
+      const missed = new Map<string, number>();
+      const months = [8, 9, 10, 11].map((m) => monthAt(m, lookups, DEC1));
+      months.forEach((r, i) => {
         expectConsistent(r);
-        compensation += r.days.filter((d) => d.date >= "2026-10-01" && d.status === "compensation").length;
+        for (const u of r.missedUnits) missed.set(u.id, u.size ?? 1);
+        if (i < 2) return; // October on: under the rule
+        const prefix = `2026-${String(i + 8).padStart(2, "0")}`;
+        const compHere = [...ledger.verdicts]
+          .filter(([date]) => date.startsWith(prefix))
+          .reduce((a, [, v]) => a + (v.kind === "compensation" ? v.amount : v.compensated), 0);
+        compensated += compHere;
         banked += r.bankedDays;
-        madeUpOnDays += r.madeUp.length;
+        if (flexible) {
+          // The monthly quota: what the month itself pays never exceeds what it owes,
+          // and a month is never both short and over.
+          const ownPay = halfOf(r.payableDays - compHere);
+          expect(ownPay).toBeLessThanOrEqual(r.owedDays! + 1e-9);
+          if (r.absentDays + r.unpaidLeaveDays > 0) expect(r.bankedDays).toBe(0);
+          if (r.absentDays + r.unpaidLeaveDays === 0 && r.missedUnits.length === 0) {
+            // Nothing short: the month pays exactly what it owes (plus earlier make-ups).
+            expect(ownPay).toBe(r.owedDays!);
+          }
+        }
+      });
+      // Each extra day under the rule did exactly what it was worth, once: made up a
+      // missed day or banked — in halves, so the amounts must match. The days the walk
+      // shows banked are exactly the ledger's banked amounts.
+      const extraTotal = halfOf(months.flatMap((r) => r.extraDays.filter((x) => !x.legacy)).reduce((a, x) => a + (x.size ?? 1), 0));
+      expect(halfOf(compensated + banked)).toBe(extraTotal);
+      const bankedInLedger = [...ledger.verdicts.values()].reduce((a, v) => a + (v.kind === "banked" ? v.amount : 0), 0);
+      expect(halfOf(banked)).toBe(halfOf(bankedInLedger));
+      // A missed day is never fixed more than once: made up + covered <= its size.
+      for (const [id, size] of missed) {
+        const fixedAmount = (ledger.madeUpAmount.get(id) ?? 0) + (ledger.coveredBy.get(id)?.amount ?? 0);
+        expect(fixedAmount).toBeLessThanOrEqual(size);
       }
-      // Each extra day under the rule did exactly one thing...
-      expect(compensation + banked).toBe(ledger.verdicts.size);
-      // ...each make-up pairs one extra day with one missed day, never twice. Pre-rule
-      // extra days settle pre-rule missed days only, and pay nothing.
-      const made = [...ledger.madeUpOn.entries()];
-      expect(made.filter(([, on]) => on >= "2026-10-01").length).toBe(compensation);
-      expect(new Set(made.map(([, on]) => on)).size).toBe(made.length);
-      expect(made.filter(([, on]) => on < "2026-10-01").every(([id]) => id.slice(0, 10) < "2026-10-01")).toBe(true);
-      // Every made-up missed day shows its note in its own month (Aug-Oct walked).
-      expect(madeUpOnDays).toBe(made.length);
-      // A banked day covers at most one missed day, and each one it covers is a paid
-      // balance day; a missed day is never both made up and covered.
-      const auto = ledger.bank.filter((b) => b.auto);
-      expect(auto.length).toBe(ledger.coveredBy.size);
-      for (const id of ledger.coveredBy.keys()) expect(ledger.madeUpOn.has(id)).toBe(false);
+      // Pre-rule extra days settle pre-rule missed days only.
+      for (const [id, on] of ledger.madeUpOn) if (on < "2026-10-01") expect(id.slice(0, 10) < "2026-10-01").toBe(true);
+      // What banked days covered automatically is exactly what the covers add up to.
+      const auto = ledger.bank.filter((b) => b.auto).reduce((a, b) => a + b.amount, 0);
+      const covers = [...ledger.coveredBy.values()].reduce((a, c) => a + c.amount, 0);
+      expect(halfOf(auto)).toBe(halfOf(covers));
       // Applying the covers never changes what a day IS: the same extra days come out.
-      const final = [8, 9, 10].flatMap((m) => month(m, lookups).extraDays.filter((x) => !x.legacy).map((x) => x.date));
+      const final = months.flatMap((r) => r.extraDays.filter((x) => !x.legacy).map((x) => x.date));
       expect(final.sort()).toEqual([...ledger.verdicts.keys()].sort());
     });
   }
-});
-
-describe("before the rule, a month that balanced itself stays balanced (owner, 2026-11-01)", () => {
-  // A part-timer (3 days/week) misses the whole week of 7 Sep (3 days short), then in
-  // the week of 21 Sep works 6 days — 3 extra, paid as days under the old rule. Week of
-  // 28 Sep: exactly 3. Week of 5 Oct: 4 — one extra day, 8 Oct.
-  const base = [
-    ...metHistory().filter((d) => !(d >= "2026-09-07" && d <= "2026-09-13")),
-    "2026-09-28", "2026-09-29", "2026-09-30",
-    "2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08",
-  ];
-  const coveredInSeptember = ["2026-09-24", "2026-09-25", "2026-09-26"];
-
-  test("September covered its own missed week, so October's extra day is banked, not paid again", () => {
-    const l = partTimer([...base, ...coveredInSeptember]);
-    const oct = month(10, l);
-    expect(at(oct, "2026-10-08")).toMatchObject({ status: "present", banked: true, credit: 0 });
-    expect(oct.compensationDays).toBe(0);
-    // September shows its missed week settled by its own extra days.
-    const sep = month(9, l);
-    expect(sep.madeUp.map((m) => m.on).sort()).toEqual(coveredInSeptember);
-    expectConsistent(oct);
-  });
-
-  test("without those September extra days the missed week is still owed, and 8 Oct makes one day of it up", () => {
-    const oct = month(10, partTimer(base));
-    expect(at(oct, "2026-10-08")).toMatchObject({
-      status: "compensation",
-      credit: 1,
-      madeUpFor: { kind: "shortfall", weekStart: "2026-09-07" },
-    });
-  });
 });
 
 describe("a banked day covers a later missed day automatically (owner, 2026-11-01)", () => {
@@ -505,30 +638,6 @@ describe("a banked day covers a later missed day automatically (owner, 2026-11-0
     expect(at(r, "2026-10-14")).toMatchObject({ status: "unpaid_leave", credit: 0 });
     expect(at(r, "2026-10-04")).toMatchObject({ banked: true, credit: 0 });
     expect(at(r, "2026-10-04").bankUsedFor).toBeUndefined();
-  });
-
-  test("part-timer, the shape of the real October: extra day 4 Oct covers the short week of 5 Oct; later extras bank", () => {
-    const office = [
-      ...metHistory(),
-      "2026-09-28", "2026-09-29", "2026-10-02", "2026-10-04", // week of 28 Sep: 4 office days -> 4 Oct extra
-      "2026-10-09", "2026-10-11", // week of 5 Oct: 2 of 3
-      "2026-10-13", "2026-10-14", "2026-10-15", "2026-10-18", // week of 12 Oct: 18 Oct extra
-      "2026-10-19", "2026-10-20", "2026-10-21", "2026-10-25", // week of 19 Oct: 25 Oct extra
-      "2026-10-26", "2026-10-28",
-    ];
-    const r = month(10, partTimer(office, {}, [], { wfh: ["2026-10-07", "2026-10-08"], half: [] }));
-    expect(at(r, "2026-10-04")).toMatchObject({ banked: true, credit: 0 });
-    expect(at(r, "2026-10-04").bankUsedFor).toBeDefined();
-    // The week of 5 Oct is no longer short: one of its not-worked days is paid from 4 Oct.
-    const covered = r.days.find((d) => d.note === "balance")!;
-    expect(covered.date >= "2026-10-05" && covered.date <= "2026-10-11").toBe(true);
-    expect(covered.balanceEarned).toBe("2026-10-04");
-    expect(r.weeks.find((w) => w.weekStart === "2026-10-05")?.short).toBe(0);
-    // 18 and 25 Oct have nothing left to make up: banked.
-    expect(at(r, "2026-10-18")).toMatchObject({ banked: true, credit: 0 });
-    expect(at(r, "2026-10-25")).toMatchObject({ banked: true, credit: 0 });
-    expect(r.compensationDays).toBe(0);
-    expectConsistent(r);
   });
 });
 

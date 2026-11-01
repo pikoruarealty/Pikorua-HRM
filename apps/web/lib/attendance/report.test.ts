@@ -51,7 +51,7 @@ describe("toReportDay", () => {
     const r = toReportDay(day({ status: "half_day", hours: 4, credit: 1, leavePaid: 0.5 }), null);
     expect(r.statusLabel).toBe("Half day");
     expect(r.credit).toBe(1);
-    expect(r.note).toBe("½ day paid leave");
+    expect(r.note).toBe("0.5 day paid leave");
   });
 
   test("a half-day leave on its own says how much of the day is leave and how much is absent", () => {
@@ -59,8 +59,8 @@ describe("toReportDay", () => {
       day({ status: "paid_leave", hours: null, clockIn: null, clockOut: null, location: null, credit: 0.5, leavePaid: 0.5, absentPart: 0.5 }),
       null,
     );
-    expect(r.statusLabel).toBe("Paid leave ½");
-    expect(r.note).toBe("½ day paid leave · ½ day absent");
+    expect(r.statusLabel).toBe("Paid leave 0.5");
+    expect(r.note).toBe("0.5 day paid leave · 0.5 day absent");
     expect(r.credit).toBe(0.5);
   });
 
@@ -313,34 +313,37 @@ describe("a summary row adds up to payable days", () => {
   });
 });
 
-describe("buildWeekLines — one line per part-timer week, as it was judged", () => {
-  const week = (over: Partial<import("./monthly-breakdown").WeekSummary>) => ({
-    weekStart: "2026-10-05", weekEnd: "2026-10-11", target: 3, officeFull: 2, officeHalf: 0, wfhOnly: 3,
-    extraDays: [], short: 1, owned: true, ...over,
+describe("buildWeekLines — the weekly check under each part-timer week (pay is monthly)", () => {
+  const week = (over: Partial<import("./monthly-breakdown").WeekSummary>): import("./monthly-breakdown").WeekSummary => ({
+    weekStart: "2026-10-05",
+    weekEnd: "2026-10-11",
+    officeFull: 2,
+    officeHalf: 0,
+    office: 2,
+    wfhOnly: 3,
+    expected: 3,
+    done: true,
+    flag: "low",
+    ...over,
   });
-  test("a short week covered automatically by an earlier banked day", () => {
-    const [line] = buildWeekLines(
-      [week({ short: 0 })],
-      [{ date: "2026-10-10", status: "paid_leave", note: "balance", balanceEarned: "2026-10-04" }, { date: "2026-10-31", status: "no_record", note: null, balanceEarned: null }],
-      [],
-      "2026-10",
-    );
-    expect(line).toEqual({
-      after: "2026-10-11",
-      text: "Week of 5 Oct: 2 office days of 3 (+ 3 WFH-only) · 1 short — covered by the balance day of 4 Oct",
-    });
+  test("a week below the weekly days says so, with its WFH-only days", () => {
+    const [line] = buildWeekLines([week({})], [{ date: "2026-10-31" }]);
+    expect(line).toEqual({ after: "2026-10-11", text: "Week of 5 Oct: 2 office days (+ 3 WFH-only) · below 3 a week" });
   });
-  test("an over-quota week names its extra day; a week another month settles says so", () => {
+  test("a fine week, an every-day week, a split week still running", () => {
     const lines = buildWeekLines(
-      [week({ weekStart: "2026-10-12", weekEnd: "2026-10-18", officeFull: 4, wfhOnly: 0, extraDays: ["2026-10-18"], short: 0 }), week({ weekStart: "2026-10-26", weekEnd: "2026-11-01", short: null, owned: false, wfhOnly: 0 })],
-      [{ date: "2026-10-31", status: "no_record", note: null, balanceEarned: null }],
-      [],
-      "2026-10",
+      [
+        week({ weekStart: "2026-10-19", weekEnd: "2026-10-25", officeFull: 3, office: 3, wfhOnly: 0, flag: null }),
+        week({ weekStart: "2026-10-12", weekEnd: "2026-10-18", officeFull: 5, officeHalf: 1, office: 5.5, wfhOnly: 0, flag: "high" }),
+        week({ weekStart: "2026-10-26", weekEnd: "2026-11-01", office: 2, wfhOnly: 0, done: false, flag: null }),
+      ],
+      [{ date: "2026-10-31" }],
     );
     expect(lines.map((l) => l.text)).toEqual([
-      "Week of 12 Oct: 4 office days of 3 · extra: 18 Oct · quota met",
-      "Week of 26 Oct: 2 office days of 3 · settled in November",
+      "Week of 19 Oct: 3 office days",
+      "Week of 12 Oct: 5.5 office days · came in on 6 days",
+      "Week of 26 Oct: 2 office days · whole week, 26 Oct–1 Nov · week still running",
     ]);
-    expect(lines[1]!.after).toBe("2026-10-31");
+    expect(lines[2]!.after).toBe("2026-10-31");
   });
 });

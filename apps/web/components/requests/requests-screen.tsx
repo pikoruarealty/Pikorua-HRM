@@ -659,7 +659,7 @@ export function RequestsScreen() {
                     <p className="text-xs text-muted-foreground">
                       Click a day to toggle it between {dayTypeLabel(r.type).toLowerCase()} and unpaid before
                       approving. Unpaid days are deducted from pay; {dayTypeLabel(r.type).toLowerCase()} days
-                      are not. Use ½ to approve a day as a half day only — the employee works the other half.
+                      are not. Use .5 to approve a day as a half day only — the employee works the other half.
                     </p>
                     <div className="flex flex-wrap gap-1.5">
                       {datesInRange(r.dateFrom, r.dateTo).map((date) => {
@@ -680,7 +680,7 @@ export function RequestsScreen() {
                               className="px-2 py-1"
                             >
                               {fmtDate(date)} · {dayTypeLabel(dType)}
-                              {isHalf ? " · ½ day" : ""}
+                              {isHalf ? " · 0.5 day" : ""}
                             </button>
                             <button
                               type="button"
@@ -691,7 +691,7 @@ export function RequestsScreen() {
                                 isHalf ? "bg-black/15 dark:bg-white/20" : ""
                               }`}
                             >
-                              ½
+                              .5
                             </button>
                           </span>
                         );
@@ -746,7 +746,7 @@ export function RequestsScreen() {
                         />
                         {/* Approve a single full day as a half day. A request that is
                             already half a day, or spans several days, has nothing to
-                            halve here (multi-day requests use the ½ per day instead). */}
+                            halve here (multi-day requests use the .5 per day instead). */}
                         {(isPaidLeaveType(r.type) || r.type === "leave_unpaid") &&
                           !r.halfDay &&
                           r.dateFrom &&

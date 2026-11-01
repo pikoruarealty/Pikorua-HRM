@@ -11,8 +11,7 @@ import { getLedEmployeeIds } from "@/lib/employees/managed-scope";
 import { getEmployeeAttendanceCalendar } from "@/lib/attendance/calendar";
 import { getExpectedHoursForMonth } from "@/lib/attendance/expected-hours";
 import { ATTENDANCE_EXEMPT_MESSAGE, isAttendanceExemptRole } from "@/lib/attendance/tracking";
-import { isFixedSchedule } from "@/lib/attendance/weekly-off";
-import { daysOwedOf } from "@/lib/attendance/report";
+import { madeUpTotal } from "@/lib/attendance/report";
 import { getWfhMonth } from "@/lib/attendance/wfh-hours";
 
 // Track A. GET /api/v1/attendance/:employee_id/summary?month=&year=
@@ -115,12 +114,18 @@ export async function GET(
     // Of absent_days / unpaid_leave_days: days a later extra day made up (paid on
     // that day, maybe next month) — so the tile doesn't read as an underpayment.
     made_up: {
-      absent: breakdown.madeUp.filter((m) => m.missed.kind !== "unpaid_leave").length,
-      unpaid: breakdown.madeUp.filter((m) => m.missed.kind === "unpaid_leave").length,
+      absent: madeUpTotal(breakdown.madeUp, (k) => k !== "unpaid_leave"),
+      unpaid: madeUpTotal(breakdown.madeUp, (k) => k === "unpaid_leave"),
     },
-    // A part-timer's days owed this month (weekly quotas; a holiday week owes less) —
-    // what payable days are measured against. null for a fixed schedule.
-    days_owed: isFixedSchedule(employee) ? null : daysOwedOf(breakdown),
+    // A part-timer's days owed this month under the monthly quota (2026-11-01: their
+    // days a week / 6 of the month's Mon–Sat days that aren't holidays) — what payable
+    // days are measured against. null for a fixed schedule and before the rule month.
+    days_owed: breakdown.owedDays,
+    // A part-timer's approved paid leave the month didn't need: not paid, given back
+    // to the leave balance.
+    paid_leave_unused: breakdown.paidLeaveUnused,
+    // The weekly check (Mon–Sun weeks, flagged "low" / "high"; never moves pay).
+    weeks: breakdown.weeks,
     // WFH hours for the month (part-timers with a target): worked, counted after the
     // weekly cap, and the month's share of the weekly target — per week too.
     wfh_month: wfhMonth,

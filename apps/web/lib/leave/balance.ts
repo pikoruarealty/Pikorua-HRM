@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db/prisma";
 import { getEffectiveLeaveConfig } from "@/lib/leave/config";
 import { getApprovedPaidLeaveDays, getApprovedPaidLeaveDaysForYear } from "@/lib/requests/leave";
 import { getExpiredUnusedCreditCount } from "@/lib/attendance/compensation-credits";
+import { getUnusedPaidLeaveDays } from "@/lib/attendance/monthly-breakdown";
 import { periodBounds, yearBounds } from "@/lib/requests/leave-math";
 
 // Leave balance (2026-08-07, owner request). Combines the admin-configured
@@ -107,12 +108,20 @@ export async function getLeaveBalance(
   const { start: monthStart, lastDay: monthEnd } = periodBounds(month, year);
   const { start: yearStart, lastDay: yearEnd } = yearBounds(year);
 
-  const [usedMonth, usedYear, compensatedMonth, compensatedYear] = await Promise.all([
+  // A part-timer's paid leave the month's quota didn't need is given back (owner,
+  // 2026-11-01): approved, but never paid, so it doesn't count as used.
+  const yearMonths = Array.from({ length: 12 }, (_, i) => ({ month: i + 1, year }));
+  const [approvedMonth, approvedYear, compensatedMonth, compensatedYear, unused] = await Promise.all([
     getApprovedPaidLeaveDays(employeeId, month, year),
     getApprovedPaidLeaveDaysForYear(employeeId, year),
     getExpiredUnusedCreditCount(employeeId, monthStart, monthEnd),
     getExpiredUnusedCreditCount(employeeId, yearStart, yearEnd),
+    employmentType === EmploymentType.fulltime
+      ? Promise.resolve(yearMonths.map(() => 0))
+      : getUnusedPaidLeaveDays(employeeId, yearMonths),
   ]);
+  const usedMonth = Math.max(0, approvedMonth - (unused[month - 1] ?? 0));
+  const usedYear = Math.max(0, approvedYear - unused.reduce((a, b) => a + b, 0));
 
   return {
     month: {

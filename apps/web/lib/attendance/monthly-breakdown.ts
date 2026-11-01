@@ -78,32 +78,38 @@ const ALL_LEAVE_TYPES: RequestType[] = [RequestType.leave_casual, RequestType.le
 // computed by the loaders below from every month back to 60 days before the rule
 // date, so a missed day last month can be made up this month. Without
 // `extraRuleFrom` (unit tests that predate the rule) the old treatment applies.
-// A part-timer's quota is judged on the WHOLE week from the rule's week on: a week
-// split across two months used to be two pro-rated chunks, which turned a week met
-// exactly into one extra day in one month and one missed day in the other. The week's
-// shortfall belongs to the month the week ends in.
+// (A part-timer's quota was briefly judged on whole Mon–Sun weeks; from the rule month
+// on it is monthly — see below.)
 
-/** How one part-timer week was judged. */
+// 2026-11-01 (owner, after checking October by hand): a part-timer's quota is MONTHLY
+// from the rule month on. A month owes required/6 of its Mon–Sat days that aren't
+// holidays (3 days a week: half — October 27 / 2 = 13.5), counted from the joining
+// date. Office days worked in the month (Sundays too) count toward it; WFH-only days
+// don't (WFH hours). Paid leave fills only what the office days leave short — the
+// rest goes back to the leave balance (`paidLeaveUnused`); unpaid leave costs only
+// what the month is short. Beyond the quota, extra time banks as balance days in
+// steps of 0.5; a short month is covered automatically by earlier balance, else it
+// waits to be made up. Weeks are only CHECKED (Mon–Sun, flagged when below the weekly
+// days or every day), never paid. The weekly walk below the rule month is unchanged.
+
+/** One Monday–Sunday week of a part-timer, for the weekly check (pay is monthly). */
 export type WeekSummary = {
   weekStart: string;
   weekEnd: string;
-  /** Office days owed that week (quota; less for a long holiday / the joining week). */
-  target: number;
-  /** Office days worked in full / half, the whole week (both months). */
+  /** Office days worked in the whole week (both months), full / half, and their sum. */
   officeFull: number;
   officeHalf: number;
+  office: number;
   /** Days worked only from home — not quota days. */
   wfhOnly: number;
-  /** Worked days beyond the quota (they make up / bank). */
-  extraDays: string[];
-  /** Quota days of this week that count in THIS month (paid here), and in the other
-   *  month a split week touches (paid there). Each day pays in its own month. */
-  countedHere: number;
-  countedElsewhere: number;
-  /** Days short, once the week is over; null while it runs or when another month owns it. */
-  short: number | null;
-  /** This month settles the week (it ends in this month). */
-  owned: boolean;
+  /** The weekly days the employee is meant to come (their days a week). */
+  expected: number;
+  /** The week is over. */
+  done: boolean;
+  /** Worth a look before paying: fewer office days than the weekly days ("low"), or an
+   *  office day on every Mon–Sat ("high"). Only judged when the week is over, and only
+   *  in the month the week ends in. */
+  flag: "low" | "high" | null;
 };
 
 export type MonthlyBreakdown = {
@@ -172,10 +178,15 @@ export type MonthlyBreakdown = {
   missedUnits: MissedUnit[];
   /** This month's missed days that a later extra day made up, and on which day —
    *  possibly in a later month. */
-  madeUp: { missed: MissedUnit; on: string }[];
-  /** A part-timer's weeks touching this month (Monday to Sunday), as the quota was
-   *  judged — for the per-week line in the PDF. Empty for a fixed schedule. */
+  madeUp: { missed: MissedUnit; on: string; amount?: number }[];
+  /** A part-timer's weeks touching this month (Monday to Sunday), for the weekly
+   *  check (monthly quota months only). Empty otherwise. */
   weeks: WeekSummary[];
+  /** A part-timer's days owed this month under the monthly quota (null otherwise). */
+  owedDays: number | null;
+  /** Approved paid leave this month that the quota didn't need (monthly quota): not
+   *  paid, and given back to the leave balance. */
+  paidLeaveUnused: number;
   /** One entry per day that was actually evaluated (joining date..today), in date
    *  order — the same walk that produced the counts above, so a calendar built
    *  from it can never disagree with the tiles. Days not listed (before the
@@ -213,8 +224,18 @@ export type ClassifiedDay = {
    *  - balance: an absent / unpaid-leave day covered by a balance day used on purpose;
    *  - wfh_hours: a part-timer's day worked only from home — it counts toward the
    *    weekly WFH hours, not the in-office day quota, so it is not paid as a day;
-   *  - over_quota: a part-timer's half day beyond the week's quota — not paid. */
-  note?: "auto_off" | "provisional_off" | "declared_unpaid" | "advance" | "balance" | "wfh_hours" | "over_quota";
+   *  - over_quota: a part-timer's half day beyond the week's quota — not paid;
+   *  - not_needed: a part-timer's leave the month's quota didn't need (monthly quota):
+   *    paid leave goes back to the balance, unpaid leave costs nothing. */
+  note?:
+    | "auto_off"
+    | "provisional_off"
+    | "declared_unpaid"
+    | "advance"
+    | "balance"
+    | "wfh_hours"
+    | "over_quota"
+    | "not_needed";
   /** What the day is worth toward pay, in days (0, 0.5, 1). */
   credit: number;
   /** Leave applied to this day, in days — present only when > 0. A half-day leave
@@ -226,12 +247,14 @@ export type ClassifiedDay = {
   absentPart?: number;
   /** An advance day banked as a balance day (not paid; see extra-days.ts). */
   banked?: true;
+  /** How much of the day was banked when it is not the whole day worked (0.5). */
+  bankedAmount?: number;
   /** A banked day's last day of use, and the day it was spent on, if it was. */
   bankExpires?: string;
   bankUsedFor?: string;
   /** A compensation day: the missed day it made up (`weekStart` for a part-timer's
    *  quota shortfall, which has no single date). */
-  madeUpFor?: { date: string; kind: MissedUnit["kind"]; weekStart?: string };
+  madeUpFor?: { date: string; kind: MissedUnit["kind"]; weekStart?: string; month?: string };
   /** An absent / unpaid day that a later extra day made up (still unpaid here — the
    *  pay is on the day that made it up). */
   madeUpOn?: string;
@@ -285,8 +308,14 @@ type MonthLookups = {
   extraVerdicts?: Map<string, ExtraVerdict>;
   /** Missed unit id -> the extra day that made it up. */
   madeUpOn?: Map<string, string>;
+  /** Missed unit id -> how much of it was made up (when not the whole unit). */
+  madeUpAmount?: Map<string, number>;
   /** Missed unit ids a banked day covered automatically (their day is in balanceDates). */
   coveredUnits?: Set<string>;
+  /** Day -> how much the ledger's automatic covers put on it, and the day that earned
+   *  it (0.5 or 1) — the monthly part-timer walk tells these from balance days used
+   *  through a request (also in balanceDates). */
+  coverAmountByDate?: Map<string, { amount: number; by: string }>;
   /** Overrides "today" — for tests; defaults to the real date. */
   today?: Date;
 };
@@ -296,6 +325,19 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 function dateKey(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
+
+/** The `madeUpFor` a day carries for the missed unit it made up. */
+function madeUpForOf(m: MissedUnit): NonNullable<ClassifiedDay["madeUpFor"]> {
+  return {
+    date: m.date,
+    kind: m.kind,
+    ...(m.weekStart ? { weekStart: m.weekStart } : {}),
+    ...(m.month ? { month: m.month } : {}),
+  };
+}
+
+/** Rounds to the nearest half day (sums of halves drift in floating point). */
+const half = (n: number) => Math.round(n * 2) / 2;
 
 /** First day of the month the employee is *expected* at work: day 1, or the
  *  joining day for someone who joined mid-month. Days before an employee existed
@@ -379,6 +421,8 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
     missedUnits: [],
     madeUp: [],
     weeks: [],
+    owedDays: null,
+    paidLeaveUnused: 0,
     days: [],
   };
 
@@ -398,7 +442,7 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
   const addMissed = (unit: MissedUnit): string | undefined => {
     result.missedUnits.push(unit);
     const on = madeUpOn.get(unit.id);
-    if (on) result.madeUp.push({ missed: unit, on });
+    if (on) result.madeUp.push({ missed: unit, on, amount: lookups.madeUpAmount?.get(unit.id) ?? unit.size ?? 1 });
     return on;
   };
 
@@ -426,26 +470,28 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
     const verdict = lookups.extraVerdicts?.get(key);
     if (verdict?.kind === "compensation") {
       result.compensationDays += 1;
-      const m = verdict.missed;
-      return {
-        date: key,
-        status: "compensation",
-        credit: 1,
-        madeUpFor: { date: m.date, kind: m.kind, ...(m.weekStart ? { weekStart: m.weekStart } : {}) },
-      };
+      return { date: key, status: "compensation", credit: 1, madeUpFor: madeUpForOf(verdict.missed) };
     }
+    // Banked — or, rarely, half made up and half banked (the matcher works in halves).
+    const comp = verdict?.kind === "banked" ? verdict.compensated : 0;
+    const banked = 1 - comp;
     result.presentDays += 1;
     result.advanceDays += 1;
-    result.bankedDays += 1;
-    result.unpaidWorkDays += 1;
+    result.bankedDays += banked;
+    result.unpaidWorkDays += banked;
     return {
       date: key,
       status: "present",
       note: "advance",
-      credit: 0,
+      credit: comp,
       banked: true,
+      ...(banked < 1 ? { bankedAmount: banked } : {}),
       ...(verdict?.kind === "banked"
-        ? { bankExpires: verdict.expires, ...(verdict.usedFor ? { bankUsedFor: verdict.usedFor } : {}) }
+        ? {
+            bankExpires: verdict.expires,
+            ...(verdict.usedFor ? { bankUsedFor: verdict.usedFor } : {}),
+            ...(verdict.missed ? { madeUpFor: madeUpForOf(verdict.missed) } : {}),
+          }
         : {}),
     };
   };
@@ -633,12 +679,327 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
     return finish(result, isFlexible, 0);
   }
 
-  // Flexible schedule (part-time / flexible intern):
-  // Group days in the month by ISO week. Quota is evaluated per week.
+  // Flexible schedule (part-time / flexible intern). From the rule month on the quota
+  // is MONTHLY (see the header); before it, days are grouped by week as they were paid.
   const required = lookups.requiredDaysPerWeek!;
   const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
   const todayUTC = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+  const monthPrefix = `${year}-${String(month).padStart(2, "0")}`;
+  const joinKey = lookups.dateOfJoining ? dateKey(lookups.dateOfJoining) : null;
+  const isMonSat = (key: string) => new Date(`${key}T00:00:00.000Z`).getUTCDay() !== 0;
 
+  /** A part-timer's month under the monthly quota (owner, 2026-11-01). */
+  const classifyQuotaMonth = (): MonthlyBreakdown => {
+    const monthEndKey = `${monthPrefix}-${String(daysInMonth).padStart(2, "0")}`;
+    const keys = Array.from({ length: daysInMonth }, (_, i) => `${monthPrefix}-${String(i + 1).padStart(2, "0")}`);
+    // Owed: their share (days a week / 6) of the month's Mon–Sat days that aren't
+    // holidays, from the joining date. 3 days a week owes half: October 27 -> 13.5.
+    const owedKeys = keys.filter((k) => (!joinKey || k >= joinKey) && isMonSat(k) && !lookups.holidayDates.has(k));
+    const owed = half((owedKeys.length * required) / 6);
+    result.owedDays = owed;
+    const monthDone = monthEndKey < todayKey;
+    const covers = lookups.coverAmountByDate ?? new Map<string, { amount: number; by: string }>();
+
+    type Entry = {
+      key: string;
+      attendance: DayAttendance | undefined;
+      kind: "present" | "half" | "wfh" | "paid" | "unpaid" | "holiday" | "none" | "live";
+      worked: number;
+      paid: number;
+      unpaid: number;
+      bal: number;
+    };
+    const entries: Entry[] = [];
+    for (const key of keys) {
+      if (key > todayKey) break; // still to come
+      const attendance = lookups.attendanceByDate.get(key);
+      if (joinKey && key < joinKey && !attendance?.hasClockIn) continue; // not owed yet
+      const base = { key, attendance, worked: 0, paid: 0, unpaid: 0, bal: 0 };
+      if (isLiveDay(key, attendance)) {
+        entries.push({ ...base, kind: "live" });
+        continue;
+      }
+      const worked = workedCredit(attendance);
+      // A holiday nobody worked is just a closed day; one worked is a worked day.
+      if (lookups.holidayDates.has(key) && worked === 0) {
+        entries.push({ ...base, kind: "holiday" });
+        continue;
+      }
+      // A balance day used through a request counts like any paid day; the ledger's
+      // automatic covers are put on below (they depend on the shortfall worked out here).
+      const { paid, unpaid, balance: bal } = applyLeave(worked, leaveFor(key), balanceDates.has(key) && !covers.has(key));
+      const kind: Entry["kind"] =
+        worked > 0 && attendance?.location === "wfh"
+          ? "wfh"
+          : worked === 1
+            ? "present"
+            : worked === 0.5
+              ? "half"
+              : paid + bal > 0
+                ? "paid"
+                : unpaid > 0
+                  ? "unpaid"
+                  : "none";
+      entries.push({ ...base, kind, worked, paid, unpaid, bal });
+    }
+
+    const sum = (f: (e: Entry) => number) => half(entries.reduce((a, e) => a + f(e), 0));
+    const isOffice = (e: Entry) => e.kind === "present" || e.kind === "half";
+    const office = sum((e) => (isOffice(e) ? e.worked : 0));
+    const requested = sum((e) => e.bal);
+
+    // Paid leave fills only what the office days leave short, earliest leave first;
+    // the rest is not paid and goes back to the leave balance.
+    const leaveUse = Math.min(sum((e) => e.paid), Math.max(0, half(owed - office - requested)));
+    const leaveUsed = new Map<string, number>();
+    let leaveLeft = leaveUse;
+    for (const e of entries) {
+      if (e.paid <= 0 || leaveLeft <= 0) continue;
+      const u = Math.min(e.paid, leaveLeft);
+      leaveUsed.set(e.key, u);
+      leaveLeft = half(leaveLeft - u);
+    }
+
+    // Short, once the month is over. Unpaid leave explains that much of it (earliest
+    // first) and is a missed day a later extra day can make up; the rest is absence —
+    // covered by earlier balance automatically, else made up later.
+    const shortfall = monthDone ? Math.max(0, half(owed - office - requested - leaveUse)) : 0;
+    const unpaidCost = Math.min(shortfall, sum((e) => e.unpaid));
+    const absence = half(shortfall - unpaidCost);
+
+    // Over the quota: the latest whole office days are the extra ones; a .5 left over
+    // takes the latest half day (else half of the latest whole day left). Known as soon
+    // as the month's quota is passed.
+    const extraSize = new Map<string, number>();
+    let over = Math.max(0, half(office + requested - owed));
+    for (let i = entries.length - 1; i >= 0 && over >= 1; i--) {
+      if (entries[i]!.kind !== "present") continue;
+      extraSize.set(entries[i]!.key, 1);
+      over = half(over - 1);
+    }
+    for (const kind of ["half", "present"] as const) {
+      for (let i = entries.length - 1; i >= 0 && over > 0; i--) {
+        const e = entries[i]!;
+        if (e.kind !== kind || extraSize.has(e.key)) continue;
+        extraSize.set(e.key, 0.5);
+        over = half(over - 0.5);
+      }
+    }
+
+    // Missed units — the same ids and dates in the ledger's pass and the final one (the
+    // automatic covers don't change them; they are only put on afterwards).
+    const unpaidMadeUpOn = new Map<string, string>();
+    let unpaidLeft = unpaidCost;
+    for (const e of entries) {
+      if (e.unpaid <= 0 || unpaidLeft <= 0) continue;
+      const size = Math.min(e.unpaid, unpaidLeft);
+      unpaidLeft = half(unpaidLeft - size);
+      const on = addMissed({ id: e.key, date: e.key, kind: "unpaid_leave", location: placeOwed(e.key), size });
+      if (on) unpaidMadeUpOn.set(e.key, on);
+    }
+    const costs = new Set<string>();
+    {
+      let left = unpaidCost;
+      for (const e of entries) {
+        if (e.unpaid <= 0 || left <= 0) continue;
+        costs.add(e.key);
+        left = half(left - Math.min(e.unpaid, left));
+      }
+    }
+    // A cover goes on one of the month's not-worked Mon–Sat days (latest first), so the
+    // pay lands on a real calendar day.
+    const coverDays = entries
+      .filter((e) => e.kind === "none" && isMonSat(e.key) && e.key < todayKey)
+      .map((e) => e.key)
+      .reverse();
+    for (let i = 0, left = absence; left > 0; i++) {
+      const size = Math.min(1, left);
+      left = half(left - size);
+      const coverDate = coverDays[i];
+      addMissed({
+        id: `${monthPrefix}#${i + 1}`,
+        date: monthEndKey,
+        kind: "shortfall",
+        location: "office",
+        size,
+        month: monthPrefix,
+        ...(coverDate ? { coverDate } : {}),
+      });
+    }
+
+    let covered = 0;
+    for (const e of entries) {
+      const { key, attendance } = e;
+      const used = leaveUsed.get(key) ?? 0;
+      result.paidLeaveUnused += half(e.paid - used);
+      result.paidLeaveDays += used + e.bal;
+      result.balanceDays += e.bal;
+      const leaveFields = {
+        ...(used > 0 ? { leavePaid: used } : {}),
+        ...(e.unpaid > 0 ? { leaveUnpaid: e.unpaid } : {}),
+      };
+      switch (e.kind) {
+        case "live":
+          result.days.push({ date: key, status: "live", credit: 0 });
+          break;
+        case "holiday":
+          // Shown, but neither owed nor paid for a part-timer — not in holidayDays.
+          result.days.push({ date: key, status: "holiday", credit: 0 });
+          break;
+        case "present":
+        case "half": {
+          const status = e.kind === "present" ? "present" : "half_day";
+          const s = extraSize.get(key) ?? 0;
+          if (s === 0) {
+            if (e.kind === "present") result.presentDays += 1;
+            else result.halfDays += 1;
+            result.days.push({ date: key, status, credit: e.worked + used, ...leaveFields });
+            break;
+          }
+          result.extraDays.push({ date: key, location: attendance?.location ?? "office", size: s });
+          const v = lookups.extraVerdicts?.get(key);
+          const comp = Math.min(s, v?.kind === "compensation" ? v.amount : v?.kind === "banked" ? v.compensated : 0);
+          const banked = half(s - comp);
+          const missed = v?.kind === "compensation" ? v.missed : v?.kind === "banked" ? v.missed : undefined;
+          if (banked === 0 && comp === e.worked) {
+            // The whole day made up an earlier missed day: paid here.
+            result.compensationDays += e.worked;
+            result.days.push({
+              date: key,
+              status: "compensation",
+              credit: e.worked,
+              ...(missed ? { madeUpFor: madeUpForOf(missed) } : {}),
+            });
+            break;
+          }
+          if (e.kind === "present") result.presentDays += 1;
+          else result.halfDays += 1;
+          if (banked > 0) {
+            result.advanceDays += 1;
+            result.bankedDays += banked;
+            result.unpaidWorkDays += banked;
+          }
+          result.days.push({
+            date: key,
+            status,
+            credit: half(e.worked - banked + used),
+            ...leaveFields,
+            ...(banked > 0 ? { note: "advance" as const, banked: true as const } : {}),
+            ...(banked > 0 && banked < e.worked ? { bankedAmount: banked } : {}),
+            ...(v?.kind === "banked" ? { bankExpires: v.expires, ...(v.usedFor ? { bankUsedFor: v.usedFor } : {}) } : {}),
+            ...(missed && comp > 0 ? { madeUpFor: madeUpForOf(missed) } : {}),
+          });
+          break;
+        }
+        case "wfh":
+          // Worked only from home: WFH hours, not a quota day.
+          if (e.worked === 1) result.presentDays += 1;
+          else result.halfDays += 1;
+          result.wfhOnlyDays += 1;
+          result.unpaidWorkDays += e.worked;
+          result.days.push({
+            date: key,
+            status: e.worked === 1 ? "present" : "half_day",
+            note: "wfh_hours",
+            credit: used,
+            ...leaveFields,
+          });
+          break;
+        case "paid": {
+          const earned = e.bal > 0 ? lookups.balanceEarnedFor?.get(key) : undefined;
+          const credit = used + e.bal;
+          result.days.push({
+            date: key,
+            status: credit > 0 || e.unpaid === 0 ? "paid_leave" : "unpaid_leave",
+            credit,
+            ...leaveFields,
+            ...(e.bal > 0 ? { note: "balance" as const } : credit === 0 ? { note: "not_needed" as const } : {}),
+            ...(earned ? { balanceEarned: earned } : {}),
+          });
+          break;
+        }
+        case "unpaid": {
+          const on = unpaidMadeUpOn.get(key);
+          result.days.push({
+            date: key,
+            status: "unpaid_leave",
+            credit: 0,
+            ...leaveFields,
+            ...(costs.has(key) || !monthDone ? {} : { note: "not_needed" as const }),
+            ...(on ? { madeUpOn: on } : {}),
+          });
+          break;
+        }
+        case "none": {
+          const cover = covers.get(key);
+          if (cover) {
+            covered += cover.amount;
+            result.paidLeaveDays += cover.amount;
+            result.balanceDays += cover.amount;
+            result.days.push({
+              date: key,
+              status: "paid_leave",
+              credit: cover.amount,
+              note: "balance",
+              balanceEarned: cover.by,
+            });
+          } else {
+            result.days.push({ date: key, status: key === todayKey ? "today" : "no_record", credit: 0 });
+          }
+          break;
+        }
+      }
+    }
+
+    result.paidLeaveUnused = half(result.paidLeaveUnused);
+    result.unpaidLeaveDays = unpaidCost;
+    result.absentDays = Math.max(0, half(absence - covered));
+    const elapsedOwed = owedKeys.filter((k) => k <= todayKey).length;
+    result.workingDaysElapsed = monthDone || owedKeys.length === 0 ? owed : half((owed * elapsedOwed) / owedKeys.length);
+    const credited = Math.min(owed, half(office + leaveUse + requested + covered));
+
+    // The weekly check (never pay): every Mon–Sun week touching the month, counted
+    // whole; flagged in the month it ends in, once it is over.
+    for (let ws = weekStartOf(new Date(`${monthPrefix}-01T00:00:00.000Z`)); dateKey(ws) <= monthEndKey; ws = addDays(ws, 7)) {
+      const wKeys = Array.from({ length: 7 }, (_, n) => dateKey(addDays(ws, n)));
+      const weekEnd = wKeys[6]!;
+      let officeFull = 0;
+      let officeHalf = 0;
+      let wfhOnly = 0;
+      for (const k of wKeys) {
+        const a = lookups.attendanceByDate.get(k);
+        if (k > todayKey || isLiveDay(k, a)) continue;
+        const w = workedCredit(a);
+        if (w === 0) continue;
+        if (a?.location === "wfh") wfhOnly += 1;
+        else if (w === 1) officeFull += 1;
+        else officeHalf += 1;
+      }
+      const workable = wKeys.filter((k) => (!joinKey || k >= joinKey) && isMonSat(k) && !lookups.holidayDates.has(k)).length;
+      const expected = Math.min(required, workable);
+      const officeDays = officeFull + officeHalf * 0.5;
+      const done = weekEnd < todayKey;
+      const judged = done && weekEnd.startsWith(monthPrefix);
+      result.weeks.push({
+        weekStart: wKeys[0]!,
+        weekEnd,
+        officeFull,
+        officeHalf,
+        office: officeDays,
+        wfhOnly,
+        expected,
+        done,
+        flag: !judged ? null : officeDays < expected ? "low" : officeFull + officeHalf >= 6 ? "high" : null,
+      });
+    }
+
+    return finish(result, true, credited);
+  };
+
+  if (ruleFrom !== null && `${monthPrefix}-01` >= ruleFrom) return classifyQuotaMonth();
+
+  // Before the rule month: days grouped by week, each month's share of a week judged
+  // on its own (how those months were paid).
   const weeksMap = new Map<string, { weekStart: Date; allDaysInMonth: Date[]; elapsedDays: Date[] }>();
   for (let day = 1; day <= daysInMonth; day++) {
     // Days before `from` are left out of the week, which pro-rates the joining
@@ -661,274 +1022,9 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
   }
 
   let creditedWorkingDays = 0;
-  // From the rule's week on, a week is judged whole (see the header).
-  const ruleWeekStart = ruleFrom ? dateKey(weekStartOf(new Date(`${ruleFrom}T00:00:00.000Z`))) : null;
-  const monthPrefix = `${year}-${String(month).padStart(2, "0")}`;
-  const joinKey = lookups.dateOfJoining ? dateKey(lookups.dateOfJoining) : null;
-
-  /** One whole week of a part-timer, from the rule's week on. Every day of the week
-   *  counts toward the quota whichever month it falls in; only this month's days
-   *  are counted and listed here, and the week's shortfall belongs to the month the
-   *  week ends in. Returns the week's share of creditedWorkingDays for this month.
-   *
-   *  Holidays (owner rule, 2026-11-01): a part-timer chooses their days, so a holiday
-   *  is not one of them — it neither counts toward the quota nor is paid (credit 0),
-   *  and a day worked on a holiday is an ordinary worked day. One or two holidays
-   *  leave the quota as it is (they can come another day); only when the holidays
-   *  leave fewer workable days than the quota (a Diwali week) does the week owe less:
-   *  quota = min(quota, days that are not holidays). A week closed throughout owes
-   *  nothing, so such a month owes three weeks' days, not four.
-   *
-   *  The quota is IN-OFFICE days (owner, 2026-11-01; it is how the WFH-hours plan
-   *  already models a part-timer: N office days a week + a WFH-hours target). A day
-   *  worked only from home goes to the WFH hours and is not a quota day: shown as
-   *  worked, worth 0, never an extra day or a balance day. And what a week pays
-   *  stops at the quota: whole days beyond it are extra days (made up / banked),
-   *  half days beyond it are simply not paid. */
-  const classifyWholeWeek = (weekStart: Date): number => {
-    const wKey = dateKey(weekStart);
-    const weekEndKey = dateKey(addDays(weekStart, 6));
-    const ownsWeek = weekEndKey.startsWith(monthPrefix);
-    const keys = Array.from({ length: 7 }, (_, n) => dateKey(addDays(weekStart, n)));
-    const owedKeys = keys.filter((k) => !joinKey || k >= joinKey);
-    const owed = owedKeys.length;
-    const workable = owedKeys.filter((k) => !lookups.holidayDates.has(k)).length;
-    const target = Math.min(
-      owed >= 7 ? required : Math.max(1, Math.round((owed / 7) * required)),
-      workable,
-    );
-
-    type Entry = {
-      key: string;
-      here: boolean;
-      attendance: DayAttendance | undefined;
-      kind: "present" | "half" | "wfh" | "paid" | "unpaid" | "holiday" | "flagged" | "none" | "live";
-      worked: number;
-      paid: number;
-      unpaid: number;
-      bal: number;
-    };
-    const entries: Entry[] = [];
-    for (const key of keys) {
-      if (key > todayKey) continue; // still to come
-      const attendance = lookups.attendanceByDate.get(key);
-      if (joinKey && key < joinKey && !attendance?.hasClockIn) continue; // not owed yet
-      const base = { key, here: key.startsWith(monthPrefix), attendance, worked: 0, paid: 0, unpaid: 0, bal: 0 };
-      if (isLiveDay(key, attendance)) {
-        entries.push({ ...base, kind: "live" });
-        continue;
-      }
-      if (attendance?.isCompensation) {
-        entries.push({ ...base, kind: "flagged" });
-        continue;
-      }
-      // A holiday nobody worked is just a closed day; one worked is a worked day.
-      if (lookups.holidayDates.has(key) && workedCredit(attendance) === 0) {
-        entries.push({ ...base, kind: "holiday" });
-        continue;
-      }
-      const worked = workedCredit(attendance);
-      const { paid, unpaid, balance: bal } = applyLeave(worked, leaveFor(key), balanceDates.has(key));
-      const kind =
-        worked > 0 && attendance?.location === "wfh"
-          ? "wfh"
-          : worked === 1
-            ? "present"
-            : worked === 0.5
-              ? "half"
-              : paid + bal > 0
-                ? "paid"
-                : unpaid > 0
-                  ? "unpaid"
-                  : "none";
-      entries.push({ ...base, kind, worked, paid: paid + bal, unpaid, bal });
-    }
-
-    const sum = (f: (e: Entry) => number) => entries.reduce((a, e) => a + f(e), 0);
-    const weekPresent = entries.filter((e) => e.kind === "present").length;
-    // Holidays are not part of a part-timer's quota (see above).
-    const creditedDays = weekPresent + entries.filter((e) => e.kind === "half").length * 0.5 + sum((e) => e.paid);
-    const weekUnpaid = sum((e) => e.unpaid);
-
-    // Over quota: the latest whole days worked are the extra ones (the overflow has
-    // no single "extra" day). Leave and half-days never make an extra day.
-    const extraKeys = new Set<string>();
-    let toRelabel = creditedDays > target ? Math.min(Math.floor(creditedDays - target), weekPresent) : 0;
-    for (let i = entries.length - 1; i >= 0 && toRelabel > 0; i--) {
-      if (entries[i]!.kind === "present") {
-        extraKeys.add(entries[i]!.key);
-        toRelabel -= 1;
-      }
-    }
-    // What is still over after that is half days: the latest ones go unpaid.
-    const overQuotaKeys = new Set<string>();
-    let overflow = creditedDays - target - extraKeys.size;
-    for (let i = entries.length - 1; i >= 0 && overflow >= 0.5 - 1e-9; i--) {
-      if (entries[i]!.kind === "half") {
-        overQuotaKeys.add(entries[i]!.key);
-        overflow -= 0.5;
-      }
-    }
-
-    const pushedFrom = result.days.length;
-    for (const e of entries) {
-      if (!e.here) continue;
-      const { key, attendance, paid, unpaid, bal } = e;
-      const leaveFields = {
-        ...(paid > 0 ? { leavePaid: paid } : {}),
-        ...(unpaid > 0 ? { leaveUnpaid: unpaid } : {}),
-      };
-      result.paidLeaveDays += paid;
-      result.balanceDays += bal;
-      result.unpaidLeaveDays += unpaid;
-      switch (e.kind) {
-        case "live":
-          result.days.push({ date: key, status: "live", credit: 0 });
-          break;
-        case "flagged":
-          result.days.push(extraEntry(key, attendance, "present"));
-          break;
-        case "holiday":
-          // Shown, but neither owed nor paid for a part-timer — not in holidayDays.
-          result.days.push({ date: key, status: "holiday", credit: 0 });
-          break;
-        case "present":
-          if (extraKeys.has(key)) {
-            result.days.push(extraEntry(key, attendance, "compensation"));
-          } else {
-            result.presentDays += 1;
-            result.days.push({ date: key, status: "present", credit: 1 + paid, ...leaveFields });
-          }
-          break;
-        case "half":
-          result.halfDays += 1;
-          if (overQuotaKeys.has(key)) {
-            result.overQuotaHalfDays += 1;
-            result.unpaidWorkDays += 0.5;
-            result.days.push({ date: key, status: "half_day", note: "over_quota", credit: paid, ...leaveFields });
-          } else {
-            result.days.push({ date: key, status: "half_day", credit: 0.5 + paid, ...leaveFields });
-          }
-          break;
-        case "wfh":
-          if (e.worked === 1) result.presentDays += 1;
-          else result.halfDays += 1;
-          result.wfhOnlyDays += 1;
-          result.unpaidWorkDays += e.worked;
-          result.days.push({
-            date: key,
-            status: e.worked === 1 ? "present" : "half_day",
-            note: "wfh_hours",
-            credit: paid,
-            ...leaveFields,
-          });
-          break;
-        case "paid": {
-          const earned = bal > 0 ? lookups.balanceEarnedFor?.get(key) : undefined;
-          result.days.push({
-            date: key,
-            status: "paid_leave",
-            credit: paid,
-            ...leaveFields,
-            ...(bal > 0 ? { note: "balance" as const } : {}),
-            ...(earned ? { balanceEarned: earned } : {}),
-          });
-          break;
-        }
-        case "unpaid": {
-          const on =
-            unpaid === 1
-              ? addMissed({ id: key, date: key, kind: "unpaid_leave", location: placeOwed(key) })
-              : undefined;
-          result.days.push({ date: key, status: "unpaid_leave", credit: 0, ...leaveFields, ...(on ? { madeUpOn: on } : {}) });
-          break;
-        }
-        case "none":
-          result.days.push({ date: key, status: key === todayKey ? "today" : "no_record", credit: 0 });
-          break;
-      }
-    }
-
-    // Quota days landing in this month: the credit of this week's days just listed,
-    // less any extra day's (compensation is not a quota day).
-    const countedHere = result.days
-      .slice(pushedFrom)
-      .reduce((a, d) => a + (d.status === "compensation" ? 0 : d.credit), 0);
-    const summary: WeekSummary = {
-      countedHere,
-      countedElsewhere: Math.max(0, Math.min(creditedDays, target) - countedHere),
-      weekStart: wKey,
-      weekEnd: weekEndKey,
-      target,
-      officeFull: weekPresent,
-      officeHalf: entries.filter((e) => e.kind === "half").length,
-      wfhOnly: entries.filter((e) => e.kind === "wfh").length,
-      extraDays: [...extraKeys, ...entries.filter((e) => e.kind === "flagged").map((e) => e.key)].sort(),
-      short: null,
-      owned: ownsWeek,
-    };
-    result.weeks.push(summary);
-    if (!ownsWeek) return 0;
-
-    // The week's shortfall, once, in the month the week ends in. A shortfall an
-    // unpaid leave already explains is not also an absence.
-    const absentShortfall = (shortfall: number) => shortfall - Math.min(shortfall, weekUnpaid);
-    if (creditedDays > target) {
-      result.workingDaysElapsed += target;
-      if (weekEndKey < todayKey) summary.short = 0;
-    } else if (weekEndKey < todayKey) {
-      const absent = absentShortfall(Math.max(0, target - creditedDays));
-      result.absentDays += absent;
-      result.workingDaysElapsed += target;
-      summary.short = absent;
-      // Each whole day short is a missed day: a later extra day can make it up, or an
-      // earlier banked day covers it automatically — put on one of the week's
-      // not-worked days in this month (latest first), so the pay is on a real day.
-      // Days a banked day already covered are paid now (balance) and no longer short,
-      // so their ids are skipped to keep the others' ids stable.
-      const covered = [...(lookups.coveredUnits ?? [])].filter((id) => id.startsWith(`${wKey}#`)).length;
-      const coverDays = entries
-        .filter((e) => e.here && e.kind === "none" && e.key < todayKey)
-        .map((e) => e.key)
-        .reverse();
-      let n = 0;
-      for (let i = 0; i < Math.floor(absent + 1e-9) + covered; i++) {
-        const id = `${wKey}#${i + 1}`;
-        if (lookups.coveredUnits?.has(id)) continue;
-        const coverDate = coverDays[n++];
-        addMissed({
-          id,
-          date: weekEndKey,
-          kind: "shortfall",
-          location: "office",
-          weekStart: wKey,
-          ...(coverDate ? { coverDate } : {}),
-        });
-      }
-    } else {
-      // The week is still running: only count a shortfall that can no longer be
-      // made up. Today still can be, if it hasn't been worked yet.
-      const todayOpen = entries.some((e) => e.key === todayKey && (e.kind === "live" || e.kind === "none"));
-      const daysLeftInWeek =
-        keys.filter((k) => k > todayKey && !lookups.holidayDates.has(k)).length + (todayOpen ? 1 : 0);
-      const maxPossible = creditedDays + daysLeftInWeek;
-      if (maxPossible < target) {
-        const unavoidable = target - maxPossible;
-        result.absentDays += absentShortfall(unavoidable);
-        result.workingDaysElapsed += creditedDays + unavoidable;
-      } else {
-        result.workingDaysElapsed += creditedDays;
-      }
-    }
-    return Math.min(creditedDays, target);
-  };
 
   for (const week of weeksMap.values()) {
     if (week.elapsedDays.length === 0) continue;
-    if (ruleWeekStart !== null && dateKey(week.weekStart) >= ruleWeekStart) {
-      creditedWorkingDays += classifyWholeWeek(week.weekStart);
-      continue;
-    }
 
     const daysInThisMonthChunk = week.allDaysInMonth.length;
     const targetForChunk =
@@ -940,6 +1036,7 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
     let weekUnpaidLeave = 0;
     let weekHoliday = 0;
     const weekDays: ClassifiedDay[] = [];
+    const wholeUnpaidDays: string[] = [];
 
     for (const date of week.elapsedDays) {
       const key = dateKey(date);
@@ -982,10 +1079,9 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
       } else if (paid > 0) {
         weekDays.push({ date: key, status: "paid_leave", credit: paid, ...leaveFields });
       } else if (unpaid > 0) {
-        // A whole unpaid day can be made up by a later extra day (under the rule).
-        const on =
-          unpaid === 1 ? addMissed({ id: key, date: key, kind: "unpaid_leave", location: placeOwed(key) }) : undefined;
-        weekDays.push({ date: key, status: "unpaid_leave", credit: 0, ...leaveFields, ...(on ? { madeUpOn: on } : {}) });
+        // A whole unpaid day is a missed day only if the week ends up short (below).
+        if (unpaid === 1) wholeUnpaidDays.push(key);
+        weekDays.push({ date: key, status: "unpaid_leave", credit: 0, ...leaveFields });
       } else {
         // Nothing worked, nothing covering it: a day that counts toward neither —
         // the week's quota shortfall picks it up below. (A zero-hour record lands
@@ -1043,6 +1139,13 @@ export function classifyMonth(month: number, year: number, lookups: MonthLookups
         const absent = absentShortfall(missing);
         result.absentDays += absent;
         result.workingDaysElapsed += targetForChunk;
+        // Unpaid days only cost what the week is short: that many (the earliest) are
+        // missed days a later extra day can make up — none in a week that met quota.
+        for (const key of wholeUnpaidDays.slice(0, Math.floor(Math.min(missing, weekUnpaidLeave) + 1e-9))) {
+          const on = addMissed({ id: key, date: key, kind: "unpaid_leave", location: placeOwed(key) });
+          const day = weekDays.find((d) => d.date === key);
+          if (on && day) day.madeUpOn = on;
+        }
         // Whole days short in a week before the rule can still be made up by an extra
         // day after it (within 60 days) — dated the chunk's last day in this month.
         const lastKey = dateKey(week.allDaysInMonth[week.allDaysInMonth.length - 1]!);
@@ -1425,17 +1528,23 @@ export function buildExtraDayLedger(lookups: MonthLookups, now: Date = new Date(
 export function withLedger(lookups: MonthLookups, ledger: ExtraDayLedger, now: Date): MonthLookups {
   const balanceDates = new Set(lookups.balanceDates ?? []);
   const balanceEarnedFor = new Map(lookups.balanceEarnedFor ?? []);
-  for (const { by, date } of ledger.coveredBy.values()) {
+  const coverAmountByDate = new Map<string, { amount: number; by: string }>();
+  for (const { by, date, amount } of ledger.coveredBy.values()) {
     balanceDates.add(date);
     balanceEarnedFor.set(date, by);
+    const c = coverAmountByDate.get(date);
+    if (c) c.amount += amount;
+    else coverAmountByDate.set(date, { amount, by });
   }
   return {
     ...lookups,
     balanceDates,
     balanceEarnedFor,
     coveredUnits: new Set(ledger.coveredBy.keys()),
+    coverAmountByDate,
     extraVerdicts: ledger.verdicts,
     madeUpOn: ledger.madeUpOn,
+    madeUpAmount: ledger.madeUpAmount,
     today: now,
   };
 }
@@ -1452,7 +1561,7 @@ function classifyWithLedger(
   return { breakdown, ledger };
 }
 
-const EMPTY_LEDGER: ExtraDayLedger = { verdicts: new Map(), madeUpOn: new Map(), coveredBy: new Map(), bank: [] };
+const EMPTY_LEDGER: ExtraDayLedger = { verdicts: new Map(), madeUpOn: new Map(), madeUpAmount: new Map(), coveredBy: new Map(), bank: [] };
 
 /** One employee's month plus the extra-day ledger (balance days, make-ups) behind it. */
 export async function getMonthlyAttendanceWithLedger(
@@ -1475,6 +1584,36 @@ export async function getMonthlyAttendanceWithLedger(
     return { breakdown, ledger: EMPTY_LEDGER };
   }
   return classifyWithLedger(month, year, loaded.lookups, now);
+}
+
+/**
+ * A part-timer's approved paid leave that the monthly quota didn't need, for each of
+ * `months` (2026-11-01): it is not paid, and lib/leave/balance.ts gives it back to the
+ * leave balance. 0 for a fixed schedule, before the rule month, and for a month not
+ * started. One load for all the months.
+ */
+export async function getUnusedPaidLeaveDays(
+  employeeId: string,
+  months: { month: number; year: number }[],
+  now: Date = new Date(),
+): Promise<number[]> {
+  const ruleMonth = EXTRA_DAY_RULE_FROM.slice(0, 7);
+  const wanted = months.filter((m) => `${m.year}-${String(m.month).padStart(2, "0")}` >= ruleMonth);
+  if (wanted.length === 0) return months.map(() => 0);
+  const keyOf = (m: { month: number; year: number }) => m.year * 12 + m.month - 1;
+  const sorted = [...wanted].sort((a, b) => keyOf(a) - keyOf(b));
+  const first = sorted[0]!;
+  const last = sorted[sorted.length - 1]!;
+  const [loaded] = await loadLookups(
+    { id: employeeId },
+    weekSpan(new Date(Date.UTC(first.year, first.month - 1, 1)), new Date(Date.UTC(last.year, last.month, 1))),
+  );
+  if (!loaded) return months.map(() => 0);
+  return months.map((m) =>
+    `${m.year}-${String(m.month).padStart(2, "0")}` >= ruleMonth
+      ? classifyMonth(m.month, m.year, { ...loaded.lookups, today: now }).paidLeaveUnused
+      : 0,
+  );
 }
 
 export async function getMonthlyAttendanceBreakdown(

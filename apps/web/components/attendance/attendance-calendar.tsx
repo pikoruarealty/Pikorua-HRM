@@ -46,7 +46,18 @@ export type CalendarDay = {
   isHalfDay: boolean;
   isCompensation: boolean;
   /** Why the day is what it is, where not obvious (automatic weekly off etc.). */
-  note?: "auto_off" | "provisional_off" | "declared_unpaid" | "advance" | "balance" | "wfh_hours" | "over_quota" | null;
+  note?:
+    | "auto_off"
+    | "provisional_off"
+    | "declared_unpaid"
+    | "advance"
+    | "balance"
+    | "wfh_hours"
+    | "over_quota"
+    | "not_needed"
+    | null;
+  /** What the day is worth toward pay, in days (the API always sends it). */
+  credit?: number;
   /** Leave covering part or all of the day, in days (half-day leave = 0.5). */
   leavePaid?: number;
   leaveUnpaid?: number;
@@ -54,11 +65,13 @@ export type CalendarDay = {
   absentPart?: number | null;
   /** Worked in advance and banked as a balance day — present, but not paid now. */
   banked?: boolean;
+  /** How much of the day was banked when not all of it (0.5). */
+  bankedAmount?: number | null;
   bankExpires?: string | null;
   bankUsedFor?: string | null;
   /** A compensation day: the missed day it made up (a part-timer's short week has
    *  `weekStart`; its date is the end of that week). */
-  madeUpFor?: { date: string; kind: "absence" | "unpaid_leave" | "shortfall"; weekStart?: string } | null;
+  madeUpFor?: { date: string; kind: "absence" | "unpaid_leave" | "shortfall"; weekStart?: string; month?: string } | null;
   /** An absent / unpaid day that a later extra day made up (paid on that day). */
   madeUpOn?: string | null;
   /** A balance-covered day: when its balance day was earned. */
@@ -72,13 +85,16 @@ function shortDay(date: string): string {
 
 /** What a compensation day made up, in words. */
 export function madeUpForLabel(m: NonNullable<CalendarDay["madeUpFor"]>): string {
+  if (m.kind === "shortfall" && m.month) {
+    return `a short ${new Date(`${m.month}-01T00:00:00Z`).toLocaleDateString("en-GB", { month: "long", timeZone: "UTC" })}`;
+  }
   if (m.kind === "shortfall" && m.weekStart) return `a day short in the week of ${shortDay(m.weekStart)}`;
   return `${m.kind === "unpaid_leave" ? "the unpaid day" : "the absence"} on ${shortDay(m.date)}`;
 }
 
-/** 0.5 -> "½", 1 -> "1". Leave is only ever whole or half days. */
+/** 0.5 -> ".5", 1 -> "1", 1.5 -> "1.5" — half days are written .5, never ½ (owner). */
 function fracDays(n: number): string {
-  return n === 0.5 ? "½" : String(n);
+  return n === 0.5 ? ".5" : String(n);
 }
 
 /** A leave that covers only part of the day (half-day leave). */
@@ -249,7 +265,7 @@ const TINY_LABEL: Record<Exclude<CalendarDayStatus, "present">, string> = {
 };
 
 /** `full` for ≥ sm, `tiny` for phones — the cell shows one or the other. A leave
- *  that covers only part of a day is marked (“+½ leave”, “Leave ½”) so a half-day
+ *  that covers only part of a day is marked (“+.5 leave”, “Leave .5”) so a half-day
  *  leave is visible on the cell itself, not only in the tooltip. */
 function cellLabel(day: CalendarDay): { full: string; tiny: string } {
   if (day.status === null) return { full: "", tiny: "" };
@@ -257,7 +273,7 @@ function cellLabel(day: CalendarDay): { full: string; tiny: string } {
   const leaveTotal = (day.leavePaid ?? 0) + (day.leaveUnpaid ?? 0);
   if (day.status === "present" || day.status === "half_day" || day.status === "compensation" || day.status === "pending") {
     if (day.hours != null) {
-      // Which kind of leave fills the rest of the day: "4h +½ leave" / "4h +½ unpaid".
+      // Which kind of leave fills the rest of the day: "4h +.5 leave" / "4h +.5 unpaid".
       // On a phone there is no room for the word — the tap-for-details panel says it.
       const leaveBits = [
         (day.leavePaid ?? 0) > 0 ? `${fracDays(day.leavePaid!)} leave` : null,
@@ -272,7 +288,12 @@ function cellLabel(day: CalendarDay): { full: string; tiny: string } {
     return { full: STATUS_STYLE[day.status].short, tiny: TINY_LABEL[day.status] };
   }
   // A day covered by a balance day used on purpose reads "Balance", not "Leave".
-  if (day.status === "paid_leave" && day.note === "balance") return { full: "Balance", tiny: "Bal" };
+  if (day.status === "paid_leave" && day.note === "balance") {
+    const c = day.credit ?? 1;
+    return c > 0 && c < 1 ? { full: "Balance .5", tiny: "Bal.5" } : { full: "Balance", tiny: "Bal" };
+  }
+  // A part-timer's leave the month didn't need (paid leave goes back to the balance).
+  if (day.note === "not_needed" && day.status === "paid_leave") return { full: "Leave (unused)", tiny: "Lv–" };
   // A missed day a later extra day made up: still unpaid here (paid on that day).
   if ((day.status === "absent" || day.status === "unpaid_leave") && day.madeUpOn) {
     // Only a tick on the cell; which day made it up is in the tooltip.
@@ -338,7 +359,7 @@ function DayTooltip({ day }: { day: CalendarDay }) {
           {day.note === "advance" &&
             (day.banked ? (
               <span>
-                Worked in advance — banked as a balance day
+                Worked in advance — {day.bankedAmount ? `${fracDays(day.bankedAmount)} of it ` : ""}banked as a balance day
                 {day.bankUsedFor
                   ? `, used on ${shortDay(day.bankUsedFor)}.`
                   : day.bankExpires
@@ -352,6 +373,7 @@ function DayTooltip({ day }: { day: CalendarDay }) {
             <span>Worked from home only — counts toward the weekly WFH hours, not the office-day quota.</span>
           )}
           {day.note === "over_quota" && <span>Beyond this week&apos;s quota.</span>}
+          {status !== "compensation" && day.madeUpFor && <span>Part of it made up {madeUpForLabel(day.madeUpFor)}.</span>}
           {status === "compensation" && day.madeUpFor && (
             <span className="font-medium text-foreground">Made up {madeUpForLabel(day.madeUpFor)} — paid here.</span>
           )}
@@ -364,7 +386,11 @@ function DayTooltip({ day }: { day: CalendarDay }) {
       ) : (
         <p className="text-muted-foreground">
           {day.note === "balance"
-            ? `Covered by a balance day${day.balanceEarned ? ` earned on ${shortDay(day.balanceEarned)}` : ""} (approved by Admin/HR).`
+            ? `Covered by ${(day.credit ?? 1) < 1 ? "half a" : "a"} balance day${day.balanceEarned ? ` earned on ${shortDay(day.balanceEarned)}` : ""}.`
+            : day.note === "not_needed"
+            ? status === "paid_leave"
+              ? "Paid leave not needed — the month's office days were enough, so it goes back to the leave balance."
+              : "Unpaid leave — costs nothing, the month's office days were enough."
             : day.madeUpOn
             ? `${status === "absent" ? "Absent" : "Unpaid"} — made up by the extra day worked on ${shortDay(day.madeUpOn)} (paid on that day).`
             : day.note === "declared_unpaid"

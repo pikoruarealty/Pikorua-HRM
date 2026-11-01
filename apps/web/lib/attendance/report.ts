@@ -3,7 +3,8 @@ import { getAttendanceSummary } from "@/lib/attendance/summary";
 import { getMonthlyAttendanceWithLedger, type MonthlyBreakdown, type WeekSummary } from "@/lib/attendance/monthly-breakdown";
 import { getWfhMonth, type WfhMonth, type WfhMonthWeek } from "@/lib/attendance/wfh-hours";
 import { madeUpEntries, type MadeUpEntry } from "@/lib/attendance/compensation-credits";
-import type { BankedDay } from "@/lib/attendance/extra-days";
+import type { ClassifiedDay } from "@/lib/attendance/monthly-breakdown";
+import { dayAmountLabel, type BankedDay } from "@/lib/attendance/extra-days";
 import {
   getEmployeeAttendanceCalendar,
   type AttendanceCalendar,
@@ -90,8 +91,10 @@ export type AttendanceReportEmployee = {
     /** Of `absent` / `unpaidLeave`, days a later extra day made up (paid there). */
     madeUpAbsent: number;
     madeUpUnpaid: number;
-    /** A part-timer's days owed this month (null for a fixed schedule). */
+    /** A part-timer's days owed this month — the monthly quota (null otherwise). */
     daysOwed: number | null;
+    /** A part-timer's paid leave the month didn't need (back to the leave balance). */
+    paidLeaveUnused: number;
     absent: number;
     paidLeave: number;
     unpaidLeave: number;
@@ -126,7 +129,7 @@ export type AttendanceReportEmployee = {
    *  possibly last month's; or a missed day this month made up later). */
   madeUp: MadeUpEntry[];
   /** Balance days usable as of the report (earned, still inside their 60 days). */
-  balanceAvailable: { earned: string; expires: string; location: string; usable: boolean }[];
+  balanceAvailable: { earned: string; expires: string; location: string; amount: number; usable: boolean }[];
   /** Make-ups / balance days that cross a month — which month pays them. */
   crossMonth: string[];
   /** Days paid from a balance day (automatically or through a request) this month. */
@@ -157,12 +160,12 @@ export function workedSplit(days: Pick<CalendarDay, "status" | "credit" | "leave
   return { workedOffice: office, workedWfh: wfh };
 }
 
-/** A part-timer's days owed this month: the days that count here (payable, less the
- *  make-ups of earlier missed days) plus the days missed. Each owed day lands in
- *  exactly one month — a week split across two months is not owed twice — and a
- *  holiday week owes nothing, so a Diwali month owes three weeks' days. */
-export function daysOwedOf(b: Pick<MonthlyBreakdown, "payableDays" | "compensationDays" | "absentDays">): number {
-  return Math.round((b.payableDays - b.compensationDays + b.absentDays) * 100) / 100;
+/** Days of missed time made up, by kind of missed day (halves count 0.5). */
+export function madeUpTotal(
+  madeUp: MonthlyBreakdown["madeUp"],
+  kind: (k: MonthlyBreakdown["madeUp"][number]["missed"]["kind"]) => boolean,
+): number {
+  return madeUp.filter((m) => kind(m.missed.kind)).reduce((a, m) => a + (m.amount ?? m.missed.size ?? 1), 0);
 }
 
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -174,12 +177,8 @@ function shortDay(key: string): string {
 
 const num = (n: number) => (Number.isInteger(n) ? String(n) : String(Math.round(n * 100) / 100));
 
-const frac = (n: number) => (Number.isInteger(n) ? String(n) : n === 0.5 ? "½" : String(n).replace(/\.5$/, "½"));
-
-/** "½ day", "1 day", "1½ days" — plural only above one. */
-function daysLabel(n: number): string {
-  return `${frac(n)} day${n > 1 ? "s" : ""}`;
-}
+/** "0.5 day", "1 day", "1.5 days" — half days are written .5, never ½ (owner). */
+const daysLabel = dayAmountLabel;
 
 /**
  * One calendar day -> the row printed for it. Pure.
@@ -234,18 +233,21 @@ export function toReportDay(day: CalendarDay, joinKey: string | null): ReportDay
     if (day.sessionCount > 1) notes.push(`${day.sessionCount} sessions`);
     if (day.note === "wfh_hours") notes.push("WFH only — counts as WFH hours, not a quota day");
     if (day.note === "over_quota") notes.push("Over the week's quota");
+    const madeUpText = (m: NonNullable<CalendarDay["madeUpFor"]>) =>
+      m.kind === "shortfall" && m.month
+        ? `Made up a short ${monthName(`${m.month}-01`)}`
+        : m.kind === "shortfall" && m.weekStart
+          ? `Made up a day short, week of ${shortDay(m.weekStart)}`
+          : `Made up ${m.kind === "unpaid_leave" ? "unpaid day" : "absence"} of ${shortDay(m.date)}`;
     if (day.note === "advance") {
       notes.push(
         day.banked
-          ? `In advance — banked${day.bankUsedFor ? `; used on ${shortDay(day.bankUsedFor)}` : day.bankExpires ? `; use by ${shortDay(day.bankExpires)}` : ""}`
+          ? `In advance — ${day.bankedAmount ? `${daysLabel(day.bankedAmount)} ` : ""}banked${day.bankUsedFor ? `; used on ${shortDay(day.bankUsedFor)}` : day.bankExpires ? `; use by ${shortDay(day.bankExpires)}` : ""}`
           : "Worked weekly off (paid)",
       );
+      if (day.madeUpFor) notes.push(madeUpText(day.madeUpFor));
     } else if (day.status === "compensation" && day.madeUpFor) {
-      notes.push(
-        day.madeUpFor.kind === "shortfall" && day.madeUpFor.weekStart
-          ? `Made up a day short, week of ${shortDay(day.madeUpFor.weekStart)}`
-          : `Made up ${day.madeUpFor.kind === "unpaid_leave" ? "unpaid day" : "absence"} of ${shortDay(day.madeUpFor.date)}`,
-      );
+      notes.push(madeUpText(day.madeUpFor));
     } else if (day.isCompensation && day.status !== "compensation") notes.push("Marked compensation");
     addLeaveNotes();
     if (longDay) notes.push(`Check: ${day.hours}h is unusually long`);
@@ -281,9 +283,19 @@ export function toReportDay(day: CalendarDay, joinKey: string | null): ReportDay
       if (day.note === "balance") {
         notes.push(day.balanceEarned ? `Balance day earned ${shortDay(day.balanceEarned)}` : "Covered by a balance day");
       }
+      if (day.note === "not_needed") notes.push("Not needed — the month's days were met; back to the leave balance");
       return {
         ...base,
-        statusLabel: day.note === "balance" ? "Balance day" : partialLeave ? "Paid leave ½" : "Paid leave",
+        statusLabel:
+          day.note === "balance"
+            ? day.credit < 1
+              ? "Balance day 0.5"
+              : "Balance day"
+            : day.note === "not_needed"
+              ? "Leave (not used)"
+              : partialLeave
+                ? "Paid leave 0.5"
+                : "Paid leave",
         tone: "paid_leave",
         credit: day.credit,
         note: notes.join(" · ") || null,
@@ -292,9 +304,10 @@ export function toReportDay(day: CalendarDay, joinKey: string | null): ReportDay
       addLeaveNotes();
       if (day.note === "declared_unpaid") notes.push("Switched from weekly off by employee");
       if (day.madeUpOn) notes.push(`Made up on ${shortDay(day.madeUpOn)} (paid there)`);
+      if (day.note === "not_needed") notes.push("Costs nothing — the month's days were met");
       return {
         ...base,
-        statusLabel: partialLeave ? "Unpaid leave ½" : "Unpaid leave",
+        statusLabel: partialLeave ? "Unpaid leave 0.5" : "Unpaid leave",
         tone: "unpaid_leave",
         credit: day.credit,
         note: notes.join(" · ") || null,
@@ -419,6 +432,8 @@ export function assembleReportEmployee(input: {
     | "balanceDays"
     | "madeUp"
     | "weeks"
+    | "owedDays"
+    | "paidLeaveUnused"
     | "halfDays"
     | "compensationDays"
     | "absentDays"
@@ -456,22 +471,44 @@ export function assembleReportEmployee(input: {
   const monthKey = calendar.days[0]?.date.slice(0, 7) ?? "";
   const madeUp = madeUpEntries({
     days: calendar.days.flatMap((d) =>
-      d.status === "compensation" && d.madeUpFor ? [{ date: d.date, status: "compensation" as const, credit: d.credit, madeUpFor: d.madeUpFor }] : [],
+      d.madeUpFor && d.status
+        ? [
+            {
+              date: d.date,
+              status: d.status as ClassifiedDay["status"],
+              credit: d.credit,
+              madeUpFor: d.madeUpFor,
+              ...(d.banked ? { banked: true as const } : {}),
+              ...(d.bankedAmount != null ? { bankedAmount: d.bankedAmount } : {}),
+            },
+          ]
+        : [],
     ),
     madeUp: breakdown.madeUp,
   });
+  // The weekly check (pay is monthly): weeks worth a look before paying.
+  const days3 = employee.requiredDaysPerWeek ?? 0;
+  for (const w of breakdown.weeks) {
+    if (w.flag === "low") {
+      flags.push(
+        `Week of ${shortDay(w.weekStart)}: ${num(w.office)} office day${w.office === 1 ? "" : "s"} — fewer than ${w.expected < days3 ? `the ${w.expected} that week allowed` : `${days3} a week`}.`,
+      );
+    } else if (w.flag === "high") {
+      flags.push(`Week of ${shortDay(w.weekStart)}: came in on ${w.officeFull + w.officeHalf} days that week.`);
+    }
+  }
   // A make-up or balance day across months is easy to miss when paying by hand: say
   // which month it is paid in.
   const kindWord = (m: MadeUpEntry) =>
-    m.missedKind === "shortfall" ? "short week" : m.missedKind === "unpaid_leave" ? "unpaid day" : "absence";
+    m.missedKind === "shortfall" ? (m.month ? "short month" : "short week") : m.missedKind === "unpaid_leave" ? "unpaid day" : "absence";
   const crossMonth: string[] = [];
   for (const m of madeUp) {
     if (m.on.startsWith(monthKey) && !m.missedDate.startsWith(monthKey)) {
       crossMonth.push(
-        `${shortDay(m.on)} made up the ${kindWord(m)} of ${shortDay(m.weekStart ?? m.missedDate)} (an earlier month) — paid in this month.`,
+        `${shortDay(m.on)} made up the ${kindWord(m)} of ${m.month ? monthName(`${m.month}-01`) : shortDay(m.weekStart ?? m.missedDate)} (an earlier month) — paid in this month.`,
       );
     } else if (!m.on.startsWith(monthKey) && m.missedDate.startsWith(monthKey)) {
-      crossMonth.push(`The ${kindWord(m)} of ${shortDay(m.weekStart ?? m.missedDate)} was made up on ${shortDay(m.on)} — paid in that month, not here.`);
+      crossMonth.push(`The ${kindWord(m)} of ${m.month ? monthName(`${m.month}-01`) : shortDay(m.weekStart ?? m.missedDate)} was made up on ${shortDay(m.on)} — paid in that month, not here.`);
     }
   }
   for (const d of calendar.days) {
@@ -507,10 +544,10 @@ export function assembleReportEmployee(input: {
       half: breakdown.halfDays,
       compensation: breakdown.compensationDays,
       balanceUsed: breakdown.balanceDays,
-      madeUpAbsent: breakdown.madeUp.filter((m) => m.missed.kind !== "unpaid_leave").length,
-      madeUpUnpaid: breakdown.madeUp.filter((m) => m.missed.kind === "unpaid_leave").length,
-      daysOwed:
-        employee.employmentType !== "fulltime" && employee.requiredDaysPerWeek ? daysOwedOf(breakdown) : null,
+      madeUpAbsent: madeUpTotal(breakdown.madeUp, (k) => k !== "unpaid_leave"),
+      madeUpUnpaid: madeUpTotal(breakdown.madeUp, (k) => k === "unpaid_leave"),
+      daysOwed: breakdown.owedDays,
+      paidLeaveUnused: breakdown.paidLeaveUnused,
       absent: breakdown.absentDays,
       paidLeave: breakdown.paidLeaveDays,
       unpaidLeave: breakdown.unpaidLeaveDays,
@@ -534,61 +571,41 @@ export function assembleReportEmployee(input: {
     madeUp,
     balanceAvailable: (input.bank ?? [])
       .filter((b) => b.status === "available")
-      .map((b) => ({ earned: b.date, expires: b.expires, location: b.location, usable: b.location === "office" })),
+      .map((b) => ({ earned: b.date, expires: b.expires, location: b.location, amount: b.amount, usable: b.location === "office" })),
     crossMonth,
     balanceCovers: calendar.days
       .filter((d) => d.status === "paid_leave" && d.note === "balance" && d.balanceEarned)
       .map((d) => ({ date: d.date, earned: d.balanceEarned! })),
-    weekLines: buildWeekLines(breakdown.weeks, calendar.days, madeUp, monthKey, input.wfh?.enabled ? input.wfh.weeks : []),
+    weekLines: buildWeekLines(breakdown.weeks, calendar.days, input.wfh?.enabled ? input.wfh.weeks : []),
     wfh: input.wfh ?? { enabled: false },
     flags,
   };
 }
 
-/** "Week of 5 Oct: 2 office days of 3 — 1 short, covered by the balance day of 4 Oct". */
+/** "Week of 5 Oct: 2 office days (+ 3 WFH-only) · below 3 a week · WFH 9h of 10h" —
+ *  the weekly check printed under each week (pay is monthly; nothing here moves it). */
 export function buildWeekLines(
   weeks: WeekSummary[],
-  days: Pick<CalendarDay, "date" | "status" | "note" | "balanceEarned">[],
-  madeUp: MadeUpEntry[],
-  monthKey: string,
+  days: Pick<CalendarDay, "date">[],
   wfhWeeks: WfhMonthWeek[] = [],
 ): { after: string; text: string }[] {
   const lastDay = days[days.length - 1]?.date ?? "";
   return weeks.map((w) => {
     const after = w.weekEnd <= lastDay ? w.weekEnd : lastDay;
-    const worked = `${num(w.officeFull)}${w.officeHalf > 0 ? ` + ${num(w.officeHalf)} half` : ""} office day${w.officeFull === 1 && w.officeHalf === 0 ? "" : "s"} of ${num(w.target)}`;
+    const worked = `${num(w.office)} office day${w.office === 1 ? "" : "s"}`;
     const wfh = w.wfhOnly > 0 ? ` (+ ${w.wfhOnly} WFH-only)` : "";
     const parts: string[] = [];
-    // A week split across two months: what of it counts here (each day pays in its own month).
-    const split = w.weekStart.slice(0, 7) !== w.weekEnd.slice(0, 7);
-    if (split && w.countedElsewhere > 0) {
-      const other = w.weekStart.startsWith(monthKey) ? monthName(w.weekEnd) : monthName(w.weekStart);
-      parts.push(`counts in ${monthName(`${monthKey}-01`)}: ${num(w.countedHere)} (${num(w.countedElsewhere)} in ${other})`);
-    }
-    if (w.extraDays.length > 0) parts.push(`extra: ${w.extraDays.map(shortDay).join(", ")}`);
-    if (!w.owned) {
-      parts.push(`settled in ${monthName(w.weekEnd)}`);
-    } else if (w.short === null) {
-      parts.push("week still running");
-    } else {
-      const inWeek = (d: string) => d >= w.weekStart && d <= w.weekEnd;
-      const covers = days.filter((d) => inWeek(d.date) && d.note === "balance" && d.balanceEarned);
-      const madeUps = madeUp.filter((m) => m.weekStart === w.weekStart);
-      const fixes = [
-        ...covers.map((d) => `covered by the balance day of ${shortDay(d.balanceEarned!)}`),
-        ...madeUps.map((m) => `made up on ${shortDay(m.on)}${m.on.startsWith(monthKey) ? "" : ` (${monthName(m.on)})`}`),
-      ];
-      const shortTotal = w.short + covers.length;
-      if (shortTotal === 0) parts.push("quota met");
-      else parts.push(`${num(shortTotal)} short${fixes.length > 0 ? ` — ${fixes.join(", ")}` : ""}`);
-    }
+    if (w.weekStart.slice(0, 7) !== w.weekEnd.slice(0, 7)) parts.push(`whole week, ${shortDay(w.weekStart)}–${shortDay(w.weekEnd)}`);
+    if (!w.done) parts.push("week still running");
+    else if (w.flag === "low") parts.push(`below ${num(w.expected)} a week`);
+    else if (w.flag === "high") parts.push(`came in on ${w.officeFull + w.officeHalf} days`);
     const h = wfhWeeks.find((x) => x.weekStart === w.weekStart);
     if (h && h.actualWeek > 0) {
       parts.push(
         `WFH ${hoursText(h.actualWeek)}${h.countedWeek < h.actualWeek ? ` (${hoursText(h.countedWeek)} counts)` : ""}${h.target > 0 ? ` of ${hoursText(h.target)}` : ""}`,
       );
     }
-    return { after, text: `Week of ${shortDay(w.weekStart)}: ${worked}${wfh} · ${parts.join(" · ")}` };
+    return { after, text: `Week of ${shortDay(w.weekStart)}: ${worked}${wfh}${parts.length > 0 ? ` · ${parts.join(" · ")}` : ""}` };
   });
 }
 

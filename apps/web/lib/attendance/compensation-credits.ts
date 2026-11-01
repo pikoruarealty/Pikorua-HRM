@@ -16,7 +16,7 @@ import { isFixedSchedule } from "@/lib/attendance/weekly-off";
 import { getWeekOff } from "@/lib/attendance/weekly-off";
 import { periodBounds } from "@/lib/requests/leave-math";
 import { splitHoursByLocation } from "@/lib/attendance/calendar";
-import { EXTRA_DAY_RULE_FROM, pickBankedDay, type MissedUnit, type Place } from "@/lib/attendance/extra-days";
+import { EXTRA_DAY_RULE_FROM, pickBankedDay, usableBalance, type MissedUnit, type Place } from "@/lib/attendance/extra-days";
 import { todayDateOnly } from "@/lib/attendance/time";
 
 // Compensation credit (comp-off) ledger, 2026-09-06 owner request: "if I come
@@ -444,13 +444,11 @@ export async function commitCompensationRedemptions(
 
 export type CompensationCreditSummary = { activeCount: number; nearestExpiry: Date | null };
 
-/** Balance days that can actually be used: unspent, unexpired, and earned in the
- *  office. A WFH-earned one only covers a day owed from home (an approved WFH
- *  request), and those can't be filed in the app, so it covers nothing today — it
- *  is listed, but not counted as available. */
-export function usableBalanceCount(bank: { status: string; location: string }[]): number {
-  return bank.filter((b) => b.status === "available" && b.location === "office").length;
-}
+/** Balance that can actually be used, in days (0.5 steps): unspent, unexpired, and
+ *  earned in the office. A WFH-earned one only covers a day owed from home (an
+ *  approved WFH request), and those can't be filed in the app, so it covers nothing
+ *  today — it is listed, but not counted as available. */
+export const usableBalanceCount = usableBalance;
 
 /** Usable balance-day count + nearest expiry for one employee — surfaced in the
  *  leave balance panel (GET /leave-config/balance) so an employee can see they've
@@ -462,7 +460,7 @@ export async function getCompensationCreditSummary(employeeId: string): Promise<
     .filter((b) => b.status === "available" && b.location === "office")
     .sort((a, b) => (a.expires < b.expires ? -1 : 1));
   return {
-    activeCount: open.length,
+    activeCount: usableBalance(open),
     nearestExpiry: open[0] ? new Date(`${open[0].expires}T00:00:00.000Z`) : null,
   };
 }
@@ -470,6 +468,8 @@ export async function getCompensationCreditSummary(employeeId: string): Promise<
 export type BalanceCredit = {
   id: string;
   earnedDate: string;
+  /** 1 or 0.5 of a day. */
+  amount: number;
   expiresAt: string;
   workLocation: WorkLocation;
   /** available: unspent and usable; used: spent on `coversDate` through an approved
@@ -500,8 +500,12 @@ export type MadeUpEntry = {
   /** The missed day (for a part-timer's quota shortfall, the end of its week). */
   missedDate: string;
   missedKind: MissedUnit["kind"];
-  /** Set for a part-timer's quota shortfall: the week it was in. */
+  /** Set for a part-timer's quota shortfall: the week it was in (before the monthly
+   *  quota) or the month ("YYYY-MM", monthly quota). */
   weekStart?: string;
+  month?: string;
+  /** How much was made up, in days, when not a whole day. */
+  amount?: number;
 };
 
 const dayKey = (d: Date) => d.toISOString().slice(0, 10);
@@ -529,19 +533,23 @@ export function eligibleBalanceDays(
     }
     return out;
   }
-  // Part-timer: one not-worked day per open shortfall day, in that week and month.
-  const openByWeek = new Map<string, number>();
+  // Part-timer: one not-worked Mon–Sat day per whole open shortfall day — of that week
+  // (weekly quota, before the rule month) or of the month (monthly quota). A request
+  // covers a whole day, so a 0.5 shortfall has none (it is covered automatically).
+  const open = new Map<string, number>();
   for (const u of breakdown.missedUnits) {
-    if (u.kind !== "shortfall" || !u.weekStart || madeUp.has(u.id)) continue;
-    openByWeek.set(u.weekStart, (openByWeek.get(u.weekStart) ?? 0) + 1);
+    if (u.kind !== "shortfall" || madeUp.has(u.id) || (u.size ?? 1) < 1) continue;
+    const k = u.month ?? u.weekStart;
+    if (k) open.set(k, (open.get(k) ?? 0) + 1);
   }
   const month = breakdown.days[0]?.date.slice(0, 7);
-  for (const d of breakdown.days) {
+  for (const d of [...breakdown.days].reverse()) {
     if (d.status !== "no_record" || d.date >= todayKey || d.date.slice(0, 7) !== month) continue;
-    const wk = dayKey(weekStartOf(new Date(`${d.date}T00:00:00.000Z`)));
-    const left = openByWeek.get(wk) ?? 0;
+    if (new Date(`${d.date}T00:00:00.000Z`).getUTCDay() === 0) continue;
+    const k = open.has(d.date.slice(0, 7)) ? d.date.slice(0, 7) : dayKey(weekStartOf(new Date(`${d.date}T00:00:00.000Z`)));
+    const left = open.get(k) ?? 0;
     if (left <= 0) continue;
-    openByWeek.set(wk, left - 1);
+    open.set(k, left - 1);
     out.push({ date: d.date, kind: "absence" });
   }
   for (const d of breakdown.days) {
@@ -557,13 +565,21 @@ export function madeUpEntries(breakdown: Pick<MonthlyBreakdown, "days" | "madeUp
   const out: MadeUpEntry[] = [];
   const seen = new Set<string>();
   for (const d of breakdown.days) {
-    if (d.status !== "compensation" || !d.madeUpFor) continue;
+    // A compensation day, or (halves) a worked day partly making something up.
+    if (!d.madeUpFor) continue;
+    const amount =
+      d.status === "compensation"
+        ? d.credit
+        : (d.status === "present" ? 1 : 0.5) - (d.bankedAmount ?? (d.banked ? (d.status === "present" ? 1 : 0.5) : 0));
+    if (amount <= 0) continue;
     seen.add(`${d.date}|${d.madeUpFor.date}`);
     out.push({
       on: d.date,
       missedDate: d.madeUpFor.date,
       missedKind: d.madeUpFor.kind,
       ...(d.madeUpFor.weekStart ? { weekStart: d.madeUpFor.weekStart } : {}),
+      ...(d.madeUpFor.month ? { month: d.madeUpFor.month } : {}),
+      ...(amount < 1 ? { amount } : {}),
     });
   }
   for (const m of breakdown.madeUp) {
@@ -573,6 +589,8 @@ export function madeUpEntries(breakdown: Pick<MonthlyBreakdown, "days" | "madeUp
       missedDate: m.missed.date,
       missedKind: m.missed.kind,
       ...(m.missed.weekStart ? { weekStart: m.missed.weekStart } : {}),
+      ...(m.missed.month ? { month: m.missed.month } : {}),
+      ...(m.amount !== undefined && m.amount < 1 ? { amount: m.amount } : {}),
     });
   }
   return out.sort((a, b) => (a.on < b.on ? -1 : a.on > b.on ? 1 : 0));
@@ -624,8 +642,9 @@ export async function getCompensationBalance(
     .filter((b) => b.status === "available" || b.date >= since)
     .reverse()
     .map((b) => ({
-      id: `bank-${b.date}`,
+      id: `bank-${b.date}-${b.status}`,
       earnedDate: b.date,
+      amount: b.amount,
       expiresAt: b.expires,
       workLocation: b.location as WorkLocation,
       status: b.status,
@@ -676,7 +695,9 @@ export async function getExpiredUnusedCreditCount(
   ]);
   const from = dayKey(start);
   const to = dayKey(end);
-  const derived = ledger.bank.filter((b) => b.status === "expired" && b.expires >= from && b.expires <= to).length;
+  const derived = ledger.bank
+    .filter((b) => b.status === "expired" && b.expires >= from && b.expires <= to)
+    .reduce((a, b) => a + b.amount, 0);
   return legacy + derived;
 }
 

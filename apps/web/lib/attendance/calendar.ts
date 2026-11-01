@@ -55,6 +55,8 @@ export type CalendarDay = {
    *  on; the missed day a compensation day made up; the day that made a missed day up;
    *  when a balance-covered day's balance day was earned. */
   banked: boolean;
+  /** How much of the day was banked when not all of it (0.5); null = the whole day. */
+  bankedAmount: number | null;
   bankExpires: string | null;
   bankUsedFor: string | null;
   madeUpFor: ClassifiedDay["madeUpFor"] | null;
@@ -283,6 +285,7 @@ export function buildAttendanceCalendar(args: {
       leaveUnpaid: walked?.leaveUnpaid ?? 0,
       absentPart: walked?.absentPart ?? null,
       banked: walked?.banked ?? false,
+      bankedAmount: walked?.bankedAmount ?? null,
       bankExpires: walked?.bankExpires ?? null,
       bankUsedFor: walked?.bankUsedFor ?? null,
       madeUpFor: walked?.madeUpFor ?? null,
