@@ -66,6 +66,26 @@ describe("matchExtraDays", () => {
     expect(r.verdicts.get("2026-10-04")?.kind).toBe("banked");
   });
 
+  test("a missed day before 1 Sep is never made up, even inside the 60 days (5 Aug -> 4 Oct)", () => {
+    const r = matchExtraDays({
+      missed: [absent("2026-08-05"), absent("2026-08-31")],
+      extras: [{ date: "2026-10-04", location: "office" }],
+      todayKey: "2026-11-01",
+    });
+    expect(r.verdicts.get("2026-10-04")).toMatchObject({ kind: "banked", status: "available" });
+    expect(r.madeUpOn.size).toBe(0);
+  });
+
+  test("1 Sep itself is still made up; an older miss does not block it", () => {
+    const r = matchExtraDays({
+      missed: [absent("2026-08-20"), absent("2026-09-01")],
+      extras: [{ date: "2026-10-04", location: "office" }],
+      todayKey: "2026-11-01",
+    });
+    expect(r.verdicts.get("2026-10-04")).toMatchObject({ kind: "compensation", missed: { date: "2026-09-01" } });
+    expect(r.madeUpOn.get("2026-08-20")).toBeUndefined();
+  });
+
   test("a WFH day cannot make up a missed office day", () => {
     const r = matchExtraDays({
       missed: [absent("2026-10-06", "office")],

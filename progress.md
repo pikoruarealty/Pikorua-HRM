@@ -5,6 +5,12 @@
 
 **Last updated:** 2026-11-01 — extra days are paid once (make-up rule), biometric balance days fixed, attendance PDF rebuilt with a summary page (see the first entry). Earlier: 2026-10-24 — attendance changes (7 h day, WFH cap/auto clock-out/midnight fix, balance days, mobile overflow; see the first entry). Earlier: 2026-10-07 — biometric sync stalled on prod since 2026-10-06 19:58 IST (diagnosis pending, see below). Earlier, 2026-10-04 — **HRM migrated from GCP to the Hostinger VPS and live at https://hrm.pikoruarealty.com. CRM sync is not working yet (CRM IP allowlist); only weekly VPS snapshots back it up.**
 
+### Make-up floor: nothing before 1 Sep is made up (2026-11-02, working tree — not committed)
+Owner spotted the PDF line "4 Oct made up the absence of 5 Aug — paid in October": the 60-day make-up window (exactly 60 days) reached into August, before HRM was properly enforced, so an untracked "absence" could turn an October extra day into pay.
+- `MAKE_UP_FROM = "2026-09-01"` in `lib/attendance/extra-days.ts`; `matchExtraDays` skips missed days before it when an extra day looks for something to make up (optional `makeUpFrom` input for tests). The extra day is banked (or pairs with a later real miss) instead.
+- Untouched on purpose: pre-rule extras still settle pre-rule misses (labels of earlier months), auto-cover (only reaches post-rule days), loaders/ledger span.
+- Tests: two new cases in `extra-days.test.ts` (5 Aug / 31 Aug never made up; 1 Sep still is). `bun test lib` 832 pass, `tsc --noEmit` clean. Lint/build not run. Not checked against prod data — October PDFs that showed such lines will change (that employee's Oct pay drops by the day).
+
 ### Extra days paid once: compensation vs balance days, PDF summary page (2026-11-01, working tree — not committed)
 Owner report: production showed none of the 10-24 changes — advance days still looked like compensation, there was no way to use a balance day, the PDF was the old layout. Asked for a summary page in the export, a check of last-month rollover, and a review.
 

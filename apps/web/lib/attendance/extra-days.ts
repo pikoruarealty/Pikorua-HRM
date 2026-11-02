@@ -35,7 +35,9 @@
 // The rule starts on EXTRA_DAY_RULE_FROM. Extra days before it keep the treatment
 // they were paid under (a full day each) and only settle missed days of that period
 // (it balanced itself); missed days up to 60 days before the rule that nothing settled
-// CAN be made up by an extra day after it ("last month's absence made up this month").
+// CAN be made up by an extra day after it ("last month's absence made up this month") —
+// but only from MAKE_UP_FROM (1 Sep 2026) on: HRM wasn't properly enforced before, so an
+// older "absence" is never made up.
 //
 // Everything here is pure: the attendance walk (monthly-breakdown.ts) lists the
 // missed units and extra days, this file pairs them, and the walk then labels and
@@ -44,6 +46,11 @@
 
 export const EXTRA_DAY_RULE_FROM = "2026-10-01";
 export const BALANCE_WINDOW_DAYS = 60;
+/** Missed days before this date are never made up by a later extra day (owner,
+ *  2026-11-02): HRM was only properly enforced from September, so an earlier "absence"
+ *  may be untracked rather than real — it must not turn an October extra day into pay.
+ *  The 60-day window alone reached 5 Aug from 4 Oct. */
+export const MAKE_UP_FROM = "2026-09-01";
 
 export type Place = "office" | "wfh";
 
@@ -187,8 +194,11 @@ export function matchExtraDays(input: {
   todayKey: string;
   /** Defaults to EXTRA_DAY_RULE_FROM. */
   ruleFrom?: string;
+  /** Earliest missed day an extra day may make up. Defaults to MAKE_UP_FROM. */
+  makeUpFrom?: string;
 }): ExtraDayLedger {
   const ruleFrom = input.ruleFrom ?? EXTRA_DAY_RULE_FROM;
+  const makeUpFrom = input.makeUpFrom ?? MAKE_UP_FROM;
   const used = input.usedBalance ?? new Map<string, string>();
   const order = (k: MissedUnit["kind"]) => (k === "unpaid_leave" ? 1 : 0);
 
@@ -278,6 +288,7 @@ export function matchExtraDays(input: {
       : pool.find(
           (p) =>
             !settled(p) &&
+            p.unit.date >= makeUpFrom &&
             p.unit.date < extra.date &&
             daysBetween(p.unit.date, extra.date) <= BALANCE_WINDOW_DAYS &&
             canCreditCover(extra.location, p.unit.location),
