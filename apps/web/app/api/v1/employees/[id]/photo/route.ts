@@ -10,8 +10,9 @@ import { audit, clientIp } from "@/lib/audit";
 // Track A (2026-07-15). Profile photos.
 // GET — any authenticated user: photos are shown wherever a person appears
 // (employee list, calendar birthdays, recognition), none of which is
-// golden-rule data. PATCH-like replacement via POST — Admin/HR only (also
-// used to backfill photos for employees created before the requirement).
+// golden-rule data. Replacement via POST — Admin/HR for anyone (also used to
+// backfill photos for employees created before the requirement), and the
+// employee themself for their OWN photo (self-service profile, 2026-11-17).
 
 const CONTENT_TYPES: Record<string, string> = {
   ".jpg": "image/jpeg",
@@ -52,7 +53,8 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   const session = await getSession();
   if (!session) return failFor(ErrorCode.UNAUTHENTICATED);
   if (!isUuid(params.id)) return failFor(ErrorCode.NOT_FOUND);
-  if (!FINANCE_ROLES.includes(session.role)) return failFor(ErrorCode.FORBIDDEN);
+  const isSelf = session.employeeId === params.id;
+  if (!isSelf && !FINANCE_ROLES.includes(session.role)) return failFor(ErrorCode.FORBIDDEN);
 
   const employee = await prisma.employee.findUnique({
     where: { id: params.id },
@@ -85,7 +87,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     actorRole: session.role,
     entityType: "employee",
     entityId: employee.id,
-    metadata: { replaced: employee.photoUrl != null, bytes: photo.file.size },
+    metadata: { replaced: employee.photoUrl != null, bytes: photo.file.size, self: isSelf },
     ip: clientIp(req),
   });
 

@@ -755,3 +755,10 @@ See PRD §7. Tracked in memory (`open-questions`):
 
 ### 2026-09-24 (later) — push popups not showing
 In-app notifications worked but no OS popup. Server can silently no-op when `FIREBASE_ADMIN_*` is missing, and the Settings toggle read "On" from localStorage only. Added `GET /notifications/push-status` + `POST /notifications/push-test` (real synchronous send, reports FCM's per-device answer) and a "Send test notification" button on the Push card that names the failure (server key missing / device not registered / FCM rejected / OS-level block). Fixed: the foreground `onMessage` listener was only attached during the Enable click, so after a reload pushes arriving with the tab open were dropped — now attached on every app load; also `syncPushRegistration()` re-registers a device the server lost. **Unverified on prod:** whether the VM's `.env` has the three `FIREBASE_ADMIN_*` vars — run the test button after deploy.
+
+### 2026-11-17 — employee self-service profile (name, phone, DOB, photo)
+- **API:** new `GET`/`PATCH /api/v1/me/profile` (`app/api/v1/me/profile/route.ts`) — target is always the session's employee; strict body `{ full_name?, phone?, date_of_birth? }`; validation + tests in `lib/employees/self-profile.ts(.test.ts)`. Audited as `employee.self_update` (before/after). `POST /employees/:id/photo` now also admits the owner (audit metadata `self`).
+- **UI:** `components/employees/self-profile-card.tsx` shown on an employee's own profile when they are not Admin/HR; "Change photo" now shown for self too. Admin/HR keep the existing full Edit form. `EmployeeDetail.load(silent)` added so saving doesn't blank the page.
+- **Deliberately not self-editable:** email (it's the login — Admin/HR), role, salary, department/team, joining date, WFH.
+- **Verified:** typecheck, lint, `bun run test` (842 pass), `bun run build` all green. **Not verified:** the new route and card were not exercised against a live DB/browser in this session — click through as a non-Admin employee before relying on it. No schema change, so no migration/seed/CI-drift impact.
+

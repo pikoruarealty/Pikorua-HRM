@@ -23,6 +23,9 @@ const Role = {
   sales_employee: "sales_employee",
   bde: "bde",
 } as const;
+// Roles are DB-backed (custom ones exist), so the type is just a string key —
+// same as `Role` in apps/web/lib/rbac.
+type Role = string;
 import bcrypt from "bcryptjs";
 
 const prisma = new PrismaClient();

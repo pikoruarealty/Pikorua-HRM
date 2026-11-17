@@ -17,6 +17,7 @@ import { EmployeeWorkPanel } from "@/components/employees/employee-work-panel";
 import { EmployeeTaskActivityPanel } from "@/components/employees/employee-task-activity-panel";
 import { EmployeePerformanceReviewPanel } from "@/components/employees/employee-performance-review-panel";
 import { EmployeeAvatar } from "@/components/employees/employee-avatar";
+import { SelfProfileCard } from "@/components/employees/self-profile-card";
 import { EmployeeEventsPanel } from "@/components/employees/employee-events-panel";
 import { EmployeeLeaveBalancePanel } from "@/components/employees/employee-leave-balance-panel";
 import { formatDate } from "@/lib/format-date";
@@ -161,8 +162,10 @@ export function EmployeeDetail({
 
   const router = useRouter();
 
-  async function load() {
-    setLoading(true);
+  // `silent` refreshes in place without swapping the page for "Loading…" — used
+  // by the self-service card so its "Profile updated." message survives.
+  async function load(silent = false) {
+    if (!silent) setLoading(true);
     setLoadError(null);
     try {
       // Departments/teams are fetched for every viewer so the profile can
@@ -448,7 +451,7 @@ export function EmployeeDetail({
           <div className="min-w-0">
             <h1 className="break-words text-xl font-bold tracking-tight sm:text-2xl">{employee.fullName}</h1>
             <p className="break-all text-sm text-muted-foreground">{employee.email}</p>
-            {canManage && <PhotoReplaceControl employeeId={employee.id} onUploaded={load} />}
+            {(canManage || isSelf) && <PhotoReplaceControl employeeId={employee.id} onUploaded={load} />}
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -598,6 +601,17 @@ export function EmployeeDetail({
             </CardContent>
           </Card>
         )}
+
+      {/* Admin/HR get the full Edit form below (which covers these fields); an
+          ordinary employee on their own profile gets just name/phone/DOB. */}
+      {isSelf && !canManage && (
+        <SelfProfileCard
+          fullName={employee.fullName}
+          phone={employee.phone ?? null}
+          dateOfBirth={employee.dateOfBirth ?? null}
+          onSaved={() => load(true)}
+        />
+      )}
 
       {canManage && (
         <Card>
@@ -930,7 +944,7 @@ export function EmployeeDetail({
   );
 }
 
-/** Admin/HR: upload or replace the profile photo (POST /employees/:id/photo). */
+/** Admin/HR, or the employee themself: upload or replace the profile photo (POST /employees/:id/photo). */
 function PhotoReplaceControl({
   employeeId,
   onUploaded,
