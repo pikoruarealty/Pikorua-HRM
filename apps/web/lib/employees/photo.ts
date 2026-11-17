@@ -30,9 +30,18 @@ export function validatePhotoFile(value: FormDataEntryValue | null): PhotoValida
   return { ok: true, file: value, extension };
 }
 
-/** Map the stored key to the authenticated serving route (or null). */
+/**
+ * Map the stored key to the authenticated serving route (or null). The route's
+ * response is cached for a few minutes, and a replacement is served from the
+ * same URL — so the (per-upload, random) file name goes on as `?v=` and a new
+ * photo is a new URL: it shows up at once instead of after the cache expires.
+ * The GET route ignores the query.
+ */
 export function photoApiPath(employee: { id: string; photoUrl: string | null }): string | null {
-  return employee.photoUrl ? `/api/v1/employees/${employee.id}/photo` : null;
+  if (!employee.photoUrl) return null;
+  const file = employee.photoUrl.slice(employee.photoUrl.lastIndexOf("/") + 1);
+  const version = encodeURIComponent(file.replace(/\.[^.]*$/, ""));
+  return `/api/v1/employees/${employee.id}/photo?v=${version}`;
 }
 
 /** Replace the raw storage key with the servable API path on a response object. */

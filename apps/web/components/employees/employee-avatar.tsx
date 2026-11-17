@@ -8,6 +8,7 @@ import { useState } from "react";
 
 const SIZES = {
   sm: "h-8 w-8 text-xs",
+  nav: "h-9 w-9 text-sm", // sidebar user chip
   md: "h-12 w-12 text-sm",
   lg: "h-24 w-24 text-2xl",
 } as const;
@@ -16,16 +17,19 @@ export function EmployeeAvatar({
   fullName,
   photoUrl,
   size = "md",
+  firstInitialOnly = false,
 }: {
   fullName: string;
   photoUrl: string | null;
   size?: keyof typeof SIZES;
+  /** Fallback shows just the first name's first letter (sidebar chip) instead of first + last initials. */
+  firstInitialOnly?: boolean;
 }) {
   const [failed, setFailed] = useState(false);
   const initials = fullName
     .split(/\s+/)
     .filter(Boolean)
-    .slice(0, 2)
+    .slice(0, firstInitialOnly ? 1 : 2)
     .map((part) => part[0]!.toUpperCase())
     .join("");
 

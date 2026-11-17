@@ -3,6 +3,7 @@ import { getSession } from "@/lib/auth";
 import { isFinanceRole } from "@/lib/rbac";
 import { ok, failFor, ErrorCode } from "@/lib/api/response";
 import { WorkItemStatus } from "@prisma/client";
+import { photoApiPath } from "@/lib/employees/photo";
 
 // GET /api/v1/work-items/review-queue — everything sitting in `in_review` that
 // the caller is allowed to act on (Pillar 2, 2026-08-08). Admin/HR see the
@@ -47,7 +48,7 @@ export async function GET() {
       assignee: {
         id: wi.assignee.id,
         fullName: wi.assignee.fullName,
-        photoUrl: wi.assignee.photoUrl ? `/api/v1/employees/${wi.assignee.id}/photo` : null,
+        photoUrl: photoApiPath(wi.assignee),
       },
       subUnitId: wi.subUnit.id,
       subUnitName: wi.subUnit.name,

@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db/prisma";
 import { WorkItemStatus } from "@prisma/client";
 import type { EodItem } from "@/lib/eod/summary";
 import { isMetricDepartment } from "@/lib/departments/type";
+import { photoApiPath } from "@/lib/employees/photo";
 
 // Batched (3-query, not N+1) equivalent of buildEodSummary for many employees
 // at once — backs GET /attendance/task-progress, the Lead/Admin "what is
@@ -183,7 +184,7 @@ export async function buildTeamTodaySummary(
     return {
       employeeId: e.id,
       fullName: e.fullName,
-      photoUrl: e.photoUrl ? `/api/v1/employees/${e.id}/photo` : null,
+      photoUrl: photoApiPath(e),
       clockIn: record?.clockInRaw ?? null,
       clockOut: record?.clockOutRaw ?? null,
       // Selected-at-clock-in tasks plus today's self-logged ones — see the

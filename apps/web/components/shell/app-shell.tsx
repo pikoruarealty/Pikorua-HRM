@@ -13,6 +13,7 @@ import { useBodyScrollLock } from "@/lib/hooks/use-body-scroll-lock";
 import { EnablePushBanner } from "@/components/notifications/enable-push-banner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { syncPushRegistration } from "@/lib/firebase/messaging-client";
+import { EmployeeAvatar } from "@/components/employees/employee-avatar";
 
 const ROLE_LABELS: Record<string, string> = {
   admin: "Admin",
@@ -128,6 +129,8 @@ function SidebarInner({
   email,
   role,
   employeeId,
+  fullName,
+  photoUrl,
   onNavigate,
   onLogout,
 }: {
@@ -136,6 +139,8 @@ function SidebarInner({
   email: string;
   role: string;
   employeeId: string | null;
+  fullName: string | null;
+  photoUrl: string | null;
   onNavigate?: () => void;
   onLogout: () => void;
 }) {
@@ -228,9 +233,15 @@ function SidebarInner({
           onClick={() => setMenuOpen((v) => !v)}
           className="group flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors active:scale-[0.98] hover:bg-sidebar-accent/60"
         >
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-sidebar-accent text-sm font-semibold uppercase text-white transition-transform group-hover:scale-105">
-            {email.slice(0, 1)}
-          </span>
+          {fullName ? (
+            <span className="shrink-0 transition-transform group-hover:scale-105">
+              <EmployeeAvatar fullName={fullName} photoUrl={photoUrl} size="nav" firstInitialOnly />
+            </span>
+          ) : (
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-sidebar-accent text-sm font-semibold uppercase text-white transition-transform group-hover:scale-105">
+              {email.slice(0, 1)}
+            </span>
+          )}
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-medium text-white">{email}</p>
             <p className="text-xs text-sidebar-muted">{ROLE_LABELS[role] ?? role}</p>
@@ -263,12 +274,16 @@ export function AppShell({
   email,
   role,
   employeeId,
+  fullName,
+  photoUrl,
   children,
 }: {
   ctx: NavCtx;
   email: string;
   role: string;
   employeeId: string | null;
+  fullName: string | null;
+  photoUrl: string | null;
   children: React.ReactNode;
 }) {
   const router = useRouter();
@@ -333,7 +348,7 @@ export function AppShell({
     <div className="min-h-[100dvh]">
       {/* Desktop sidebar */}
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 overflow-hidden border-r border-sidebar-border md:block">
-        <SidebarInner ctx={ctx} unread={unread} email={email} role={role} employeeId={employeeId} onLogout={logout} />
+        <SidebarInner ctx={ctx} unread={unread} email={email} role={role} employeeId={employeeId} fullName={fullName} photoUrl={photoUrl} onLogout={logout} />
       </aside>
 
       {/* Mobile drawer */}
@@ -357,6 +372,8 @@ export function AppShell({
               email={email}
               role={role}
               employeeId={employeeId}
+              fullName={fullName}
+              photoUrl={photoUrl}
               onNavigate={() => setOpen(false)}
               onLogout={logout}
             />

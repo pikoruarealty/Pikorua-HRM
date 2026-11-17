@@ -8,6 +8,7 @@ import { EmployeeStatus, RequestStatus, RequestType } from "@prisma/client";
 import { isOffDay, weekStartOf, buildMovedOffDateByWeek, resolveDefaultOffDay } from "@/lib/attendance/week";
 import { loadWeekOffs } from "@/lib/attendance/weekly-off";
 import { addLeaveToDay, isPaidLeaveType, type LeaveDayEntry } from "@/lib/requests/leave-math";
+import { photoApiPath } from "@/lib/employees/photo";
 
 // Track A (2026-07-15). GET /api/v1/attendance/overview?date=YYYY-MM-DD —
 // Admin/HR only. The "glance" view of a single day: present / half-day /
@@ -150,7 +151,7 @@ export async function GET(req: Request) {
     return {
       employeeId: e.id,
       fullName: e.fullName,
-      photoUrl: e.photoUrl ? `/api/v1/employees/${e.id}/photo` : null,
+      photoUrl: photoApiPath(e),
       team: e.team ? { id: e.team.id, name: e.team.name } : null,
       department: e.department,
       status,

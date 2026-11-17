@@ -451,7 +451,7 @@ export function EmployeeDetail({
           <div className="min-w-0">
             <h1 className="break-words text-xl font-bold tracking-tight sm:text-2xl">{employee.fullName}</h1>
             <p className="break-all text-sm text-muted-foreground">{employee.email}</p>
-            {(canManage || isSelf) && <PhotoReplaceControl employeeId={employee.id} onUploaded={load} />}
+            {(canManage || isSelf) && <PhotoReplaceControl employeeId={employee.id} onUploaded={() => { load(); if (isSelf) router.refresh(); }} />}
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -609,7 +609,7 @@ export function EmployeeDetail({
           fullName={employee.fullName}
           phone={employee.phone ?? null}
           dateOfBirth={employee.dateOfBirth ?? null}
-          onSaved={() => load(true)}
+          onSaved={() => { load(true); router.refresh(); }}
         />
       )}
 

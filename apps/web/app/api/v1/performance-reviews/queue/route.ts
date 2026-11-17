@@ -9,6 +9,7 @@ import {
   isFuturePeriod,
   periodLabel,
 } from "@/lib/performance/review";
+import { photoApiPath } from "@/lib/employees/photo";
 
 // GET /api/v1/performance-reviews/queue?year=&month= — the Lead's monthly
 // review worklist (Pillar 3, 2026-08-08): every employee they may review for
@@ -72,7 +73,7 @@ export async function GET(req: Request) {
       fullName: e.fullName,
       role: e.role,
       teamName: e.team?.name ?? null,
-      photoUrl: e.photoUrl ? `/api/v1/employees/${e.id}/photo` : null,
+      photoUrl: photoApiPath(e),
       // A hire who joined after this month can't be rated for it — surfaced as
       // a flag so the UI can explain the disabled row instead of 422-ing on save.
       joinedAfterPeriod: isBeforeJoining(period, e.dateOfJoining),
